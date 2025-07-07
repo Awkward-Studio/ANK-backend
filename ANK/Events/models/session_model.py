@@ -12,6 +12,15 @@ class Session(models.Model):
     description = models.TextField(blank=True)
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
+    pax = models.PositiveIntegerField(
+        default=0, help_text="Expected number of attendees in this session"
+    )
+    date = models.DateField(db_index=True)
+    location = models.CharField(max_length=200)
+    entertainment = models.TextField(
+        blank=True, help_text="Describe the entertainment planned"
+    )
+    # allow querying session.custom_field_values
     custom_field_values = GenericRelation(
         CustomFieldValue,
         content_type_field="content_type",

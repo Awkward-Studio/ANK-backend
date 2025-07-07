@@ -10,7 +10,18 @@ class SessionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Session
-        fields = ["id", "event", "title", "description", "start_time", "end_time"]
+        fields = [
+            "id",
+            "event",
+            "title",
+            "description",
+            "start_time",
+            "end_time",
+            "pax",
+            "date",
+            "location",
+            "entertainment",
+        ]
 
 
 class SessionRegistrationSerializer(serializers.ModelSerializer):

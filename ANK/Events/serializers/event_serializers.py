@@ -7,7 +7,17 @@ from Guest.models import Guest
 class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
-        fields = ["id", "name", "location", "venue", "start_date", "end_date"]
+        fields = [
+            "id",
+            "name",
+            "location",
+            "venue",
+            "start_date",
+            "end_date",
+            "pax",
+            "bride_name",
+            "groom_name",
+        ]
 
 
 class EventRegistrationSerializer(serializers.ModelSerializer):
@@ -16,5 +26,20 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventRegistration
-        fields = ["id", "guest", "event", "rsvp_status", "initiated_on", "responded_on"]
+        fields = [
+            "id",
+            "guest",
+            "event",
+            "rsvp_status",
+            "initiated_on",
+            "responded_on",
+            "guest_group",
+            "sub_guest_group",
+            "name_on_message",
+            "family_salutation",
+            "title",
+            "estimated_pax",
+            "visa_oci",
+            "hamper_count",
+        ]
         read_only_fields = ["initiated_on"]

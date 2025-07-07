@@ -8,6 +8,13 @@ class Guest(models.Model):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True)
     address = models.TextField(blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    nationality = models.CharField(max_length=100, blank=True)
+    photo_id = models.ImageField(
+        upload_to="guest_photo_ids/",
+        blank=True,
+        help_text="Scan or photo of guest ID (Visa/OCI etc.)",
+    )
 
     # “Through” tables handle RSVPs & registrations...
     events = models.ManyToManyField(

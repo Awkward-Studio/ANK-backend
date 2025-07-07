@@ -11,6 +11,11 @@ class Event(models.Model):
     venue = models.CharField(max_length=200)
     start_date = models.DateField(db_index=True)
     end_date = models.DateField(db_index=True)
+    pax = models.PositiveIntegerField(
+        default=0, help_text="Expected number of attendees"
+    )
+    bride_name = models.CharField(max_length=200, blank=True)
+    groom_name = models.CharField(max_length=200, blank=True)
     # allow querying event.custom_field_values
     custom_field_values = GenericRelation(
         CustomFieldValue,

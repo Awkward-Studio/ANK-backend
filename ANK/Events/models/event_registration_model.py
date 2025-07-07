@@ -5,17 +5,46 @@ from Events.models.event_model import Event
 
 
 class EventRegistration(models.Model):
+    FAMILY_GROUPS = [
+        ("family", "Family"),
+        ("friends", "Friends"),
+    ]
+    SUB_GROUPS = [
+        ("family", "Family"),
+        ("school_friends", "School friends"),
+        ("college_friends", "College friends"),
+    ]
+    TITLE_CHOICES = [
+        ("mr", "Mr."),
+        ("ms", "Ms."),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guest = models.ForeignKey(Guest, on_delete=models.CASCADE)
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="registrations"
+    )
+    guest_group = models.CharField(
+        max_length=20, choices=FAMILY_GROUPS, default="friends"
+    )
+    sub_guest_group = models.CharField(
+        max_length=20, choices=SUB_GROUPS, default="family"
+    )
+
+    name_on_message = models.CharField(max_length=200, blank=True)
+    family_salutation = models.CharField(max_length=100, blank=True)
+    title = models.CharField(max_length=5, choices=TITLE_CHOICES, blank=True)
+    estimated_pax = models.PositiveIntegerField(default=1)
+    visa_oci = models.FileField(
+        upload_to="guest_visas/", blank=True, help_text="Upload visa/OCI document"
+    )
+    hamper_count = models.PositiveIntegerField(default=0)
     RSVP_CHOICES = [
         ("yes", "Yes"),
         ("no", "No"),
         ("maybe", "Maybe"),
         ("pending", "No Response"),
     ]
-    guest = models.ForeignKey(Guest, on_delete=models.CASCADE)
-    event = models.ForeignKey(
-        Event, on_delete=models.CASCADE, related_name="registrations"
-    )
     rsvp_status = models.CharField(
         max_length=10, choices=RSVP_CHOICES, default="pending"
     )
