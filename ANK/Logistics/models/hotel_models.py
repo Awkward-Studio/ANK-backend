@@ -1,6 +1,6 @@
 from django.db import models
 import uuid
-from django.contrib.postgres.fields import JSONField
+from django.db.models import JSONField
 
 
 class Hotel(models.Model):

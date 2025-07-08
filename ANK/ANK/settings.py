@@ -22,12 +22,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-ddkszuou!6vdozt5u2d(w+4hjf3qi+^+&5lm%0^l7&dutj)&26"
+# SECRET_KEY = "django-insecure-ddkszuou!6vdozt5u2d(w+4hjf3qi+^+&5lm%0^l7&dutj)&26"
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "Guest",
     "Staff",
     "CustomField",
+    "Logistics",
 ]
 
 MIDDLEWARE = [
@@ -173,10 +175,10 @@ CORS_ALLOW_METHODS = [
 ]
 
 # allow only your local origins
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:3000",
-#     "http://127.0.0.1:3000",
-# ]
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",

@@ -16,7 +16,7 @@ class Session(models.Model):
         default=0, help_text="Expected number of attendees in this session"
     )
     date = models.DateField(db_index=True)
-    location = models.CharField(max_length=200)
+    location = models.CharField(max_length=200, null=True, blank=True)
     entertainment = models.TextField(
         blank=True, help_text="Describe the entertainment planned"
     )
