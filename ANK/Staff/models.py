@@ -1,15 +1,43 @@
 import uuid
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import (
+    AbstractBaseUser,
+    BaseUserManager,
+    PermissionsMixin,
+)
 from Guest.models import GuestField
 from Events.models.event_model import Event
 from Events.models.session_model import Session
+from Events.models.staff_assignment_models import EventStaffAssignment
+from Events.models.staff_assignment_models import SessionStaffAssignment
 
 
-class User(AbstractUser):
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["username"]
-    # username, email, password, etc. all come from AbstractUser
+class UserManager(BaseUserManager):
+    use_in_migrations = True
+
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError("Email is required")
+
+        email = self.normalize_email(email)
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("is_superuser", True)
+
+        if extra_fields.get("is_staff") is not True:
+            raise ValueError("Superuser must have is_staff=True")
+        if extra_fields.get("is_superuser") is not True:
+            raise ValueError("Superuser must have is_superuser=True")
+
+        return self.create_user(email, password, **extra_fields)
+
+
+class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200, blank=True)
     email = models.EmailField(unique=True, blank=True)
@@ -23,12 +51,11 @@ class User(AbstractUser):
 
     # grant access to some subset of Events / Sessions
     assigned_events = models.ManyToManyField(
-        Event, blank=True, related_name="staff_users"
+        Event, through=EventStaffAssignment, related_name="staff_users"
     )
     assigned_sessions = models.ManyToManyField(
-        Session, blank=True, related_name="staff_users"
+        Session, through=SessionStaffAssignment, related_name="staff_users"
     )
-
     # guest-related fields that staff can manage
     allowed_guest_fields = models.ManyToManyField(
         GuestField,
@@ -36,6 +63,12 @@ class User(AbstractUser):
         help_text="Which Guest fields this user may view",
         related_name="allowed_fields_staff",
     )
+
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = []
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)  # Required by Django admin
+    objects = UserManager()
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"

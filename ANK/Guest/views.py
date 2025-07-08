@@ -6,8 +6,32 @@ from django.core.exceptions import ValidationError
 
 from Guest.models import Guest, GuestField
 from Guest.serializers import GuestSerializer, GuestFieldSerializer
+from utils.swagger import (
+    doc_create,
+    doc_list,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    document_api_view,
+    query_param,
+)
 
 
+@document_api_view(
+    {
+        "get": doc_list(
+            response=GuestFieldSerializer(many=True),
+            description="List all guest fields",
+            tags=["Guest Fields"],
+        ),
+        "post": doc_create(
+            request=GuestFieldSerializer,
+            response=GuestFieldSerializer,
+            description="Create a new guest field",
+            tags=["Guest Fields"],
+        ),
+    }
+)
 class GuestFieldList(APIView):
     def get(self, request):
         try:
@@ -34,6 +58,24 @@ class GuestFieldList(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=GuestFieldSerializer,
+            description="Retrieve a guest field by ID",
+            tags=["Guest Fields"],
+        ),
+        "put": doc_update(
+            request=GuestFieldSerializer,
+            response=GuestFieldSerializer,
+            description="Update a guest field by ID",
+            tags=["Guest Fields"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a guest field by ID", tags=["Guest Fields"]
+        ),
+    }
+)
 class GuestFieldDetail(APIView):
     def get(self, request, pk):
         try:
@@ -73,6 +115,26 @@ class GuestFieldDetail(APIView):
 
 
 #  Guest CRUD
+@document_api_view(
+    {
+        "get": doc_list(
+            response=GuestSerializer(many=True),
+            parameters=[
+                query_param("name", "str", False, "Filter by guest name"),
+                query_param("city", "str", False, "Filter by city"),
+                query_param("nationality", "str", False, "Filter by nationality"),
+            ],
+            description="List all guests",
+            tags=["Guests"],
+        ),
+        "post": doc_create(
+            request=GuestSerializer,
+            response=GuestSerializer,
+            description="Create a new guest",
+            tags=["Guests"],
+        ),
+    }
+)
 class GuestList(APIView):
     def get(self, request):
         try:
@@ -99,6 +161,22 @@ class GuestList(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=GuestSerializer,
+            description="Retrieve a guest by ID",
+            tags=["Guests"],
+        ),
+        "put": doc_update(
+            request=GuestSerializer,
+            response=GuestSerializer,
+            description="Update a guest by ID",
+            tags=["Guests"],
+        ),
+        "delete": doc_destroy(description="Delete a guest by ID", tags=["Guests"]),
+    }
+)
 class GuestDetail(APIView):
     def get(self, request, pk):
         try:

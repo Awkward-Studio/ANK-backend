@@ -6,8 +6,50 @@ from rest_framework.exceptions import ValidationError
 
 from Logistics.models.travel_details_models import TravelDetail
 from Logistics.serializers.travel_details_serializers import TravelDetailSerializer
+from utils.swagger import (
+    document_api_view,
+    doc_list,
+    doc_create,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    query_param,
+)
 
 
+@document_api_view(
+    {
+        "get": doc_list(
+            response=TravelDetailSerializer(many=True),
+            parameters=[
+                query_param(
+                    "event_registration",
+                    "uuid",
+                    False,
+                    "Filter by event registration ID",
+                ),
+                query_param(
+                    "session_registration",
+                    "uuid",
+                    False,
+                    "Filter by session registration ID",
+                ),
+                query_param("arrival", "str", False, "Filter by arrival method"),
+                query_param(
+                    "return_travel", "bool", False, "Filter by return travel flag"
+                ),
+            ],
+            description="List all travel details",
+            tags=["Travel Details"],
+        ),
+        "post": doc_create(
+            request=TravelDetailSerializer,
+            response=TravelDetailSerializer,
+            description="Create a new travel detail",
+            tags=["Travel Details"],
+        ),
+    }
+)
 class TravelDetailList(APIView):
     def get(self, request):
         try:
@@ -36,6 +78,24 @@ class TravelDetailList(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=TravelDetailSerializer,
+            description="Retrieve a travel detail by ID",
+            tags=["Travel Details"],
+        ),
+        "put": doc_update(
+            request=TravelDetailSerializer,
+            response=TravelDetailSerializer,
+            description="Update a travel detail by ID",
+            tags=["Travel Details"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a travel detail by ID", tags=["Travel Details"]
+        ),
+    }
+)
 class TravelDetailDetail(APIView):
     def get(self, request, pk):
         try:

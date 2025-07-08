@@ -1,4 +1,3 @@
-# views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -12,10 +11,37 @@ from Events.serializers.session_serializers import (
     SessionRegistrationSerializer,
 )
 
+from utils.swagger import (
+    doc_create,
+    doc_list,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    document_api_view,
+    query_param,
+)
 
-#
+
 # Session CRUD
-#
+@document_api_view(
+    {
+        "get": doc_list(
+            response=SessionSerializer(many=True),
+            parameters=[
+                query_param("event", "uuid", False, "Filter by event ID"),
+                query_param("date", "date", False, "Filter by session date"),
+            ],
+            description="List all sessions",
+            tags=["Sessions"],
+        ),
+        "post": doc_create(
+            request=SessionSerializer,
+            response=SessionSerializer,
+            description="Create a new session",
+            tags=["Sessions"],
+        ),
+    }
+)
 class SessionListCreateView(APIView):
     def get(self, request):
         try:
@@ -44,6 +70,22 @@ class SessionListCreateView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=SessionSerializer,
+            description="Retrieve a session by ID",
+            tags=["Sessions"],
+        ),
+        "put": doc_update(
+            request=SessionSerializer,
+            response=SessionSerializer,
+            description="Update a session by ID",
+            tags=["Sessions"],
+        ),
+        "delete": doc_destroy(description="Delete a session by ID", tags=["Sessions"]),
+    }
+)
 class SessionDetailView(APIView):
     def get(self, request, pk):
         try:
@@ -82,9 +124,26 @@ class SessionDetailView(APIView):
             )
 
 
-#
 # SessionRegistration CRUD
-#
+@document_api_view(
+    {
+        "get": doc_list(
+            response=SessionRegistrationSerializer(many=True),
+            parameters=[
+                query_param("session", "uuid", False, "Filter by session ID"),
+                query_param("guest", "uuid", False, "Filter by guest ID"),
+            ],
+            description="List all session registrations",
+            tags=["Session Registrations"],
+        ),
+        "post": doc_create(
+            request=SessionRegistrationSerializer,
+            response=SessionRegistrationSerializer,
+            description="Register a guest to a session",
+            tags=["Session Registrations"],
+        ),
+    }
+)
 class SessionRegistrationListCreateView(APIView):
     def get(self, request):
         try:
@@ -113,6 +172,25 @@ class SessionRegistrationListCreateView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=SessionRegistrationSerializer,
+            description="Retrieve a session registration by ID",
+            tags=["Session Registrations"],
+        ),
+        "put": doc_update(
+            request=SessionRegistrationSerializer,
+            response=SessionRegistrationSerializer,
+            description="Update a session registration by ID",
+            tags=["Session Registrations"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a session registration by ID",
+            tags=["Session Registrations"],
+        ),
+    }
+)
 class SessionRegistrationDetailView(APIView):
     def get(self, request, pk):
         try:

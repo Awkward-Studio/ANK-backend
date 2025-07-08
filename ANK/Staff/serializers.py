@@ -5,14 +5,52 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 
 class UserSerializer(serializers.ModelSerializer):
-    # show and accept GuestField PKs
+    password = serializers.CharField(write_only=True, required=False, min_length=8)
     allowed_guest_fields = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=GuestField.objects.all()
+        many=True, queryset=GuestField.objects.all(), required=False
     )
 
     class Meta:
         model = User
-        fields = "__all__"
+        fields = [
+            "id",
+            "email",
+            "password",
+            "name",
+            "contact_phone",
+            "role",
+            "allowed_guest_fields",
+        ]
+        read_only_fields = ["id"]
+
+    def create(self, validated_data):
+        agf = validated_data.pop("allowed_guest_fields", [])
+        pwd = validated_data.pop("password", None)
+
+        user = User(**validated_data, role=validated_data.get("role", "staff"))
+        if pwd:
+            user.set_password(pwd)
+        else:
+            user.set_unusable_password()
+        user.save()
+
+        if agf:
+            user.allowed_guest_fields.set(agf)
+        return user
+
+    def update(self, instance, validated_data):
+        agf = validated_data.pop("allowed_guest_fields", None)
+        pwd = validated_data.pop("password", None)
+
+        for attr, val in validated_data.items():
+            setattr(instance, attr, val)
+        if pwd:
+            instance.set_password(pwd)
+        instance.save()
+
+        if agf is not None:
+            instance.allowed_guest_fields.set(agf)
+        return instance
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -40,20 +78,18 @@ class RegisterSerializer(serializers.ModelSerializer):
         ]
 
     def create(self, validated_data):
-        # create with email as username
+        pwd = validated_data.pop("password")
         user = User(
             email=validated_data["email"],
-            username=validated_data["email"],
             name=validated_data.get("name", ""),
             contact_phone=validated_data.get("contact_phone", ""),
-            role="staff",  # default role for new users
+            role="staff",
         )
-        user.set_password(validated_data["password"])
+        user.set_password(pwd)
         user.save()
         return user
 
     def to_representation(self, instance):
-        """After create, also return tokens."""
         ret = super().to_representation(instance)
         refresh = RefreshToken.for_user(instance)
         ret.update(

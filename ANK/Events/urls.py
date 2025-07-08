@@ -11,110 +11,62 @@ from Events.views.session_views import (
     SessionRegistrationListCreateView,
     SessionRegistrationDetailView,
 )
+from Events.views.staff_assignment_views import (
+    EventStaffAssignmentList,
+    EventStaffAssignmentDetail,
+    SessionStaffAssignmentList,
+    SessionStaffAssignmentDetail,
+)
 
 urlpatterns = [
-    # ─── Event CRUD ───────────────────────────────────────────────────────
-    path(
-        "events/",
-        EventListCreateView.as_view(),
-        name="event-list",  # GET list, POST create
-    ),
-    path(
-        "events/create/",
-        EventListCreateView.as_view(),
-        name="event-create",  # alias for POST create
-    ),
-    path(
-        "events/<uuid:pk>/",
-        EventDetailView.as_view(),
-        name="event-detail",  # GET retrieve
-    ),
-    path(
-        "events/<uuid:pk>/update/",
-        EventDetailView.as_view(),
-        name="event-update",  # PUT update
-    ),
-    path(
-        "events/<uuid:pk>/delete/",
-        EventDetailView.as_view(),
-        name="event-delete",  # DELETE delete
-    ),
-    # ─── EventRegistration CRUD ───────────────────────────────────────────
+    # ─── Events ────────────────────────────────────────────────────────────
+    path("events/", EventListCreateView.as_view(), name="event-list"),
+    path("events/<uuid:pk>/", EventDetailView.as_view(), name="event-detail"),
+    # ─── Event Registrations ───────────────────────────────────────────────
     path(
         "event-registrations/",
         EventRegistrationListCreateView.as_view(),
-        name="eventregistration-list",  # GET list, POST create
-    ),
-    path(
-        "event-registrations/create/",
-        EventRegistrationListCreateView.as_view(),
-        name="eventregistration-create",  # alias for POST create
+        name="eventregistration-list",
     ),
     path(
         "event-registrations/<uuid:pk>/",
         EventRegistrationDetailView.as_view(),
-        name="eventregistration-detail",  # GET retrieve
+        name="eventregistration-detail",
     ),
-    path(
-        "event-registrations/<uuid:pk>/update/",
-        EventRegistrationDetailView.as_view(),
-        name="eventregistration-update",  # PUT update
-    ),
-    path(
-        "event-registrations/<uuid:pk>/delete/",
-        EventRegistrationDetailView.as_view(),
-        name="eventregistration-delete",  # DELETE delete
-    ),
-    # ─── Session CRUD ────────────────────────────────────────────────────
-    path(
-        "sessions/",
-        SessionListCreateView.as_view(),
-        name="session-list",  # GET list, POST create
-    ),
-    path(
-        "sessions/create/",
-        SessionListCreateView.as_view(),
-        name="session-create",  # alias for POST create
-    ),
-    path(
-        "sessions/<uuid:pk>/",
-        SessionDetailView.as_view(),
-        name="session-detail",  # GET retrieve
-    ),
-    path(
-        "sessions/<uuid:pk>/update/",
-        SessionDetailView.as_view(),
-        name="session-update",  # PUT update
-    ),
-    path(
-        "sessions/<uuid:pk>/delete/",
-        SessionDetailView.as_view(),
-        name="session-delete",  # DELETE delete
-    ),
-    # ─── SessionRegistration CRUD ────────────────────────────────────────
+    # ─── Sessions ─────────────────────────────────────────────────────────
+    path("sessions/", SessionListCreateView.as_view(), name="session-list"),
+    path("sessions/<uuid:pk>/", SessionDetailView.as_view(), name="session-detail"),
+    # ─── Session Registrations ────────────────────────────────────────────
     path(
         "session-registrations/",
         SessionRegistrationListCreateView.as_view(),
-        name="sessionregistration-list",  # GET list, POST create
-    ),
-    path(
-        "session-registrations/create/",
-        SessionRegistrationListCreateView.as_view(),
-        name="sessionregistration-create",  # alias for POST create
+        name="sessionregistration-list",
     ),
     path(
         "session-registrations/<uuid:pk>/",
         SessionRegistrationDetailView.as_view(),
-        name="sessionregistration-detail",  # GET retrieve
+        name="sessionregistration-detail",
+    ),
+    # ─── Event Staff Assignments ──────────────────────────────────────────
+    path(
+        "assignments/event-staff/",
+        EventStaffAssignmentList.as_view(),
+        name="eventstaffassignment-list",
     ),
     path(
-        "session-registrations/<uuid:pk>/update/",
-        SessionRegistrationDetailView.as_view(),
-        name="sessionregistration-update",  # PUT update
+        "assignments/event-staff/<uuid:pk>/",
+        EventStaffAssignmentDetail.as_view(),
+        name="eventstaffassignment-detail",
+    ),
+    # ─── Session Staff Assignments ────────────────────────────────────────
+    path(
+        "assignments/session-staff/",
+        SessionStaffAssignmentList.as_view(),
+        name="sessionstaffassignment-list",
     ),
     path(
-        "session-registrations/<uuid:pk>/delete/",
-        SessionRegistrationDetailView.as_view(),
-        name="sessionregistration-delete",  # DELETE delete
+        "assignments/session-staff/<uuid:pk>/",
+        SessionStaffAssignmentDetail.as_view(),
+        name="sessionstaffassignment-detail",
     ),
 ]

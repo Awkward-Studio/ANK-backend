@@ -12,7 +12,42 @@ from Events.serializers.event_serializers import (
     EventRegistrationSerializer,
 )
 
+from utils.swagger import (
+    doc_create,
+    doc_list,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    document_api_view,
+    query_param,
+    OpenApiTypes,
+)
 
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventSerializer(many=True),
+            parameters=[
+                query_param("name", "str", False, "Filter by event name (contains)"),
+                query_param(
+                    "start_date", "date", False, "Filter events starting on or after"
+                ),
+                query_param(
+                    "end_date", "date", False, "Filter events ending on or before"
+                ),
+            ],
+            description="List all events, optionally filtered",
+            tags=["Events"],
+        ),
+        "post": doc_create(
+            request=EventSerializer,
+            response=EventSerializer,
+            description="Create a new event",
+            tags=["Events"],
+        ),
+    }
+)
 class EventListCreateView(APIView):
     def get(self, request):
         try:
@@ -39,6 +74,22 @@ class EventListCreateView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=EventSerializer,
+            description="Retrieve an event by ID",
+            tags=["Events"],
+        ),
+        "put": doc_update(
+            request=EventSerializer,
+            response=EventSerializer,
+            description="Update an event by ID",
+            tags=["Events"],
+        ),
+        "delete": doc_destroy(description="Delete an event by ID", tags=["Events"]),
+    }
+)
 class EventDetailView(APIView):
     def get(self, request, pk):
         try:
@@ -77,6 +128,26 @@ class EventDetailView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventRegistrationSerializer(many=True),
+            parameters=[
+                query_param("event", "uuid", False, "Filter by event ID"),
+                query_param("guest", "uuid", False, "Filter by guest ID"),
+                query_param("rsvp_status", "str", False, "Filter by RSVP status"),
+            ],
+            description="List all event registrations",
+            tags=["Event Registrations"],
+        ),
+        "post": doc_create(
+            request=EventRegistrationSerializer,
+            response=EventRegistrationSerializer,
+            description="Register a guest to an event",
+            tags=["Event Registrations"],
+        ),
+    }
+)
 class EventRegistrationListCreateView(APIView):
     def get(self, request):
         try:
@@ -105,6 +176,22 @@ class EventRegistrationListCreateView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=EventRegistrationSerializer,
+            description="Retrieve a registration by ID",
+            tags=["Event Registrations"],
+        ),
+        "put": doc_update(
+            request=EventRegistrationSerializer,
+            response=EventRegistrationSerializer,
+            description="Update a registration by ID",
+            tags=["Event Registrations"],
+        ),
+        "delete": doc_destroy(description="Delete a registration by ID"),
+    }
+)
 class EventRegistrationDetailView(APIView):
     def get(self, request, pk):
         try:

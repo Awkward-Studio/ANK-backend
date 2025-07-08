@@ -5,7 +5,7 @@ from Events.models.event_model import Event
 
 
 class EventRegistration(models.Model):
-    FAMILY_GROUPS = [
+    GROUPS = [
         ("family", "Family"),
         ("friends", "Friends"),
     ]
@@ -24,19 +24,20 @@ class EventRegistration(models.Model):
     event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="registrations"
     )
-    guest_group = models.CharField(
-        max_length=20, choices=FAMILY_GROUPS, default="friends"
-    )
+    guest_group = models.CharField(max_length=20, choices=GROUPS, blank=True, null=True)
     sub_guest_group = models.CharField(
-        max_length=20, choices=SUB_GROUPS, default="family"
+        max_length=20, choices=SUB_GROUPS, blank=True, null=True
     )
 
-    name_on_message = models.CharField(max_length=200, blank=True)
-    family_salutation = models.CharField(max_length=100, blank=True)
-    title = models.CharField(max_length=5, choices=TITLE_CHOICES, blank=True)
+    name_on_message = models.CharField(max_length=200, blank=True, null=True)
+    family_salutation = models.CharField(max_length=100, blank=True, null=True)
+    title = models.CharField(max_length=5, choices=TITLE_CHOICES, blank=True, null=True)
     estimated_pax = models.PositiveIntegerField(default=1)
     visa_oci = models.FileField(
-        upload_to="guest_visas/", blank=True, help_text="Upload visa/OCI document"
+        upload_to="guest_visas/",
+        blank=True,
+        null=True,
+        help_text="Upload visa/OCI document",
     )
     hamper_count = models.PositiveIntegerField(default=0)
     RSVP_CHOICES = [

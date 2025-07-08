@@ -5,8 +5,44 @@ from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from Logistics.models.accomodation_models import Accommodation
 from Logistics.serializers.accomodation_serializers import AccommodationSerializer
+from utils.swagger import (
+    doc_create,
+    doc_list,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    document_api_view,
+    query_param,
+)
 
 
+@document_api_view(
+    {
+        "get": doc_list(
+            response=AccommodationSerializer(many=True),
+            parameters=[
+                query_param(
+                    "event_registration", "uuid", False, "Filter by event registration"
+                ),
+                query_param(
+                    "session_registration",
+                    "uuid",
+                    False,
+                    "Filter by session registration",
+                ),
+                query_param("hotel", "uuid", False, "Filter by hotel ID"),
+            ],
+            description="List all accommodations",
+            tags=["Accommodations"],
+        ),
+        "post": doc_create(
+            request=AccommodationSerializer,
+            response=AccommodationSerializer,
+            description="Create a new accommodation",
+            tags=["Accommodations"],
+        ),
+    }
+)
 class AccommodationList(APIView):
     def get(self, request):
         try:
@@ -35,6 +71,25 @@ class AccommodationList(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=AccommodationSerializer,
+            description="Retrieve an accommodation by ID",
+            tags=["Accommodations"],
+        ),
+        "put": doc_update(
+            request=AccommodationSerializer,
+            response=AccommodationSerializer,
+            description="Update an accommodation by ID",
+            tags=["Accommodations"],
+        ),
+        "delete": doc_destroy(
+            description="Delete an accommodation by ID",
+            tags=["Accommodations"],
+        ),
+    }
+)
 class AccommodationDetail(APIView):
     def get(self, request, pk):
         try:

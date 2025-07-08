@@ -7,7 +7,35 @@ from rest_framework.exceptions import ValidationError
 from Logistics.models.accomodation_models import Hotel
 from Logistics.serializers.hotel_serializers import HotelSerializer
 
+from utils.swagger import (
+    document_api_view,
+    doc_list,
+    doc_create,
+    doc_retrieve,
+    doc_update,
+    doc_destroy,
+    query_param,
+)
 
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=HotelSerializer(many=True),
+            parameters=[
+                query_param("name", "str", False, "Filter by hotel name"),
+            ],
+            description="List all hotels",
+            tags=["Hotels"],
+        ),
+        "post": doc_create(
+            request=HotelSerializer,
+            response=HotelSerializer,
+            description="Create a new hotel",
+            tags=["Hotels"],
+        ),
+    }
+)
 class HotelList(APIView):
     def get(self, request):
         try:
@@ -34,6 +62,22 @@ class HotelList(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=HotelSerializer,
+            description="Retrieve a hotel by ID",
+            tags=["Hotels"],
+        ),
+        "put": doc_update(
+            request=HotelSerializer,
+            response=HotelSerializer,
+            description="Update a hotel by ID",
+            tags=["Hotels"],
+        ),
+        "delete": doc_destroy(description="Delete a hotel by ID", tags=["Hotels"]),
+    }
+)
 class HotelDetail(APIView):
     def get(self, request, pk):
         try:

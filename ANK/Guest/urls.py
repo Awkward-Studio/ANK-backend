@@ -7,34 +7,16 @@ from Guest.views import (
 )
 
 urlpatterns = [
-    # ─── GuestField endpoints ────────────────────────────────────────────
-    path("guestfields/", GuestFieldList.as_view(), name="guestfield-list"),  # GET list
+    # ─── GuestField ─────────────────────────────────────────────────
+    # GET  list,  POST create
+    path("guestfields/", GuestFieldList.as_view(), name="guestfield-list"),
+    # GET retrieve, PUT update, DELETE destroy
     path(
-        "guestfields/create/", GuestFieldList.as_view(), name="guestfield-create"
-    ),  # POST create
-    path(
-        "guestfields/<int:pk>/", GuestFieldDetail.as_view(), name="guestfield-detail"
-    ),  # GET retrieve
-    path(
-        "guestfields/<int:pk>/update/",
-        GuestFieldDetail.as_view(),
-        name="guestfield-update",
-    ),  # PUT update
-    path(
-        "guestfields/<int:pk>/delete/",
-        GuestFieldDetail.as_view(),
-        name="guestfield-delete",
-    ),  # DELETE delete
-    # ─── Guest endpoints ─────────────────────────────────────────────────
-    path("guests/", GuestList.as_view(), name="guest-list"),  # GET list
-    path("guests/create/", GuestList.as_view(), name="guest-create"),  # POST create
-    path(
-        "guests/<uuid:pk>/", GuestDetail.as_view(), name="guest-detail"
-    ),  # GET retrieve
-    path(
-        "guests/<uuid:pk>/update/", GuestDetail.as_view(), name="guest-update"
-    ),  # PUT update
-    path(
-        "guests/<uuid:pk>/delete/", GuestDetail.as_view(), name="guest-delete"
-    ),  # DELETE delete
+        "guestfields/<uuid:pk>/", GuestFieldDetail.as_view(), name="guestfield-detail"
+    ),
+    # ─── Guest ───────────────────────────────────────────────────────
+    # GET  list,  POST create
+    path("guests/", GuestList.as_view(), name="guest-list"),
+    # GET retrieve, PUT update, DELETE destroy
+    path("guests/<uuid:pk>/", GuestDetail.as_view(), name="guest-detail"),
 ]

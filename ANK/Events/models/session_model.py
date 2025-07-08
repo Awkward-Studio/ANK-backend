@@ -9,13 +9,14 @@ class Session(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(Event, related_name="sessions", on_delete=models.CASCADE)
     title = models.CharField(max_length=200)
-    description = models.TextField(blank=True)
-    start_time = models.DateTimeField(db_index=True)
-    end_time = models.DateTimeField(db_index=True)
+    description = models.TextField(max_length=1000, blank=True, null=True)
+    start_time = models.DateTimeField(db_index=True, blank=True, null=True)
+    end_time = models.DateTimeField(db_index=True, blank=True, null=True)
     pax = models.PositiveIntegerField(
         default=0, help_text="Expected number of attendees in this session"
     )
-    date = models.DateField(db_index=True)
+    date = models.DateField(db_index=True, blank=True, null=True)
+    venue = models.CharField(max_length=200, blank=True, null=True)
     location = models.CharField(max_length=200, null=True, blank=True)
     entertainment = models.TextField(
         blank=True, help_text="Describe the entertainment planned"
