@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from Events.models.event_model import Event
-from Events.models.event_registration_model import EventRegistration
+from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 from Guest.models import Guest
 
 
@@ -41,5 +41,12 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "estimated_pax",
             "visa_oci",
             "hamper_count",
+            "additional_guest_count",
         ]
         read_only_fields = ["initiated_on"]
+
+
+class ExtraAttendeeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExtraAttendee
+        fields = ["id", "registration", "name", "phone", "photo_id"]

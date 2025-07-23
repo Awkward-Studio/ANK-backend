@@ -4,6 +4,8 @@ from Events.views.event_views import (
     EventDetailView,
     EventRegistrationListCreateView,
     EventRegistrationDetailView,
+    ExtraAttendeeListCreateView,
+    ExtraAttendeeDetailView,
 )
 from Events.views.session_views import (
     SessionListCreateView,
@@ -68,5 +70,16 @@ urlpatterns = [
         "assignments/session-staff/<uuid:pk>/",
         SessionStaffAssignmentDetail.as_view(),
         name="sessionstaffassignment-detail",
+    ),
+    # ─── Extra Attendees ──────────────────────────────────────────────────
+    path(
+        "extra-attendees/",
+        ExtraAttendeeListCreateView.as_view(),
+        name="extraattendee-list",
+    ),
+    path(
+        "extra-attendees/<uuid:pk>/",
+        ExtraAttendeeDetailView.as_view(),
+        name="extraattendee-detail",
     ),
 ]

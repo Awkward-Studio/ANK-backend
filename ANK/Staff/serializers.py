@@ -2,6 +2,9 @@ from rest_framework import serializers
 from Staff.models import User, GuestField
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_spectacular.utils import (
+    extend_schema_serializer,
+)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -53,9 +56,8 @@ class UserSerializer(serializers.ModelSerializer):
         return instance
 
 
+@extend_schema_serializer(component_name="TokenObtainPair")
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
-    # if you've set USERNAME_FIELD="email", you don't need to override much
-    # but you can customize the response here if desired
 
     @classmethod
     def get_token(cls, user):

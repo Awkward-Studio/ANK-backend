@@ -1,15 +1,22 @@
 from rest_framework.views import APIView
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 
+from docs.serializers import (
+    TokenRefreshRequestSerializer,
+    TokenRefreshResponseSerializer,
+    LogoutRequestSerializer,
+)
 from Staff.models import User, GuestField
 from Staff.serializers import (
     UserSerializer,
     EmailTokenObtainPairSerializer,
     RegisterSerializer,
 )
+
 from Guest.serializers import GuestFieldSerializer
 
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -27,22 +34,24 @@ from utils.swagger import (
     query_param,
 )
 
+from drf_spectacular.utils import (
+    extend_schema,
+    OpenApiResponse,
+)
+
 
 # ─── Register ────────────────────────────────────────────────────────────────
 
 
-@document_api_view(
-    {
-        "post": doc_create(
-            request=RegisterSerializer,
-            response=RegisterSerializer,
-            description="Register a new user; returns JWT tokens",
-            tags=["Authentication"],
-        )
-    }
+@extend_schema(
+    request=RegisterSerializer,
+    responses={201: RegisterSerializer},
+    description="Register a new user; returns JWT tokens",
+    tags=["Authentication"],
 )
-class RegisterView(APIView):
+class RegisterView(GenericAPIView):
     permission_classes = (AllowAny,)
+    serializer_class = RegisterSerializer
 
     def post(self, request):
         try:
@@ -59,6 +68,12 @@ class RegisterView(APIView):
             )
 
 
+@extend_schema(
+    request=EmailTokenObtainPairSerializer,
+    responses={200: EmailTokenObtainPairSerializer},
+    description="Obtain JWT access & refresh tokens",
+    tags=["Authentication"],
+)
 class LoginView(TokenObtainPairView):
     """
     POST /auth/login/  { "email": "...", "password": "..." }
@@ -69,6 +84,12 @@ class LoginView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
 
 
+@extend_schema(
+    request=TokenRefreshRequestSerializer,
+    responses={200: TokenRefreshResponseSerializer},
+    description="Refresh access token",
+    tags=["Authentication"],
+)
 class RefreshView(TokenRefreshView):
     """
     POST /auth/refresh/ { "refresh": "..." }
@@ -78,37 +99,20 @@ class RefreshView(TokenRefreshView):
     permission_classes = (AllowAny,)
 
 
-# For login/refresh, annotate the POST method directly
-TokenObtainPairView.post = doc_create(
-    request=EmailTokenObtainPairSerializer,
-    response=EmailTokenObtainPairSerializer,
-    description="Obtain JWT access & refresh tokens",
+@extend_schema(
+    request=LogoutRequestSerializer,
+    responses={205: OpenApiResponse(description="Refresh token blacklisted")},
+    description="Logout and blacklist the provided refresh token",
     tags=["Authentication"],
-)(TokenObtainPairView.post)
-
-TokenRefreshView.post = doc_create(
-    request=serializers.Serializer,  # expects {"refresh": "..."}
-    response=serializers.Serializer,  # returns {"access": "..."}
-    description="Refresh access token",
-    tags=["Authentication"],
-)(TokenRefreshView.post)
-
-
-@document_api_view(
-    {
-        "post": doc_destroy(
-            description="Logout and blacklist the provided refresh token",
-            tags=["Authentication"],
-        )
-    }
 )
-class LogoutView(APIView):
+class LogoutView(GenericAPIView):
     """
     POST /auth/logout/ { "refresh": "..." }
     → 204 No Content (blacklists the refresh token)
     """
 
     permission_classes = (IsAuthenticated,)
+    serializer_class = LogoutRequestSerializer
 
     def post(self, request):
         try:

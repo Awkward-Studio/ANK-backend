@@ -22,7 +22,6 @@ from utils.swagger import (
 )
 
 
-# Session CRUD
 @document_api_view(
     {
         "get": doc_list(

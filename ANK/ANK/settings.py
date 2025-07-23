@@ -94,6 +94,12 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "All the endpoints for the ANK project.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "ENUM_NAME_OVERRIDES": {
+        # full import path to the choice tuple → desired enum name
+        "Logistics.models.TravelDetail.ARRIVAL_CHOICES": "ArrivalMethodEnum",
+        "Logistics.models.TravelDetail.DEPARTURE_CHOICES": "DepartureMethodEnum",
+        "Logistics.models.TravelDetail.ARRIVAL_CHOICES": "TravelModeEnum",
+    },
 }
 
 TEMPLATES = [

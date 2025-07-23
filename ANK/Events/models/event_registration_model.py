@@ -52,9 +52,25 @@ class EventRegistration(models.Model):
     initiated_on = models.DateTimeField(auto_now_add=True)
     responded_on = models.DateTimeField(null=True, blank=True)
 
+    # Field to track how many extra attendees
+    additional_guest_count = models.PositiveIntegerField(default=0)
+
     class Meta:
         unique_together = ("guest", "event")
         # ↑ ensures a given guest has exactly one RSVP row per Event
 
     def __str__(self):
         return f"{self.guest} → {self.event}: {self.rsvp_status}"
+
+
+class ExtraAttendee(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    registration = models.ForeignKey(
+        EventRegistration, related_name="extra_attendees", on_delete=models.CASCADE
+    )
+    name = models.CharField(max_length=200)
+    phone = models.CharField(max_length=20, blank=True)
+    photo_id = models.FileField(upload_to="extra_attendee_ids/", blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.name} (extra for {self.registration.guest})"

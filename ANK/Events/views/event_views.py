@@ -1,4 +1,3 @@
-# views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -6,10 +5,11 @@ from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 
 from Events.models.event_model import Event
-from Events.models.event_registration_model import EventRegistration
+from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 from Events.serializers.event_serializers import (
     EventSerializer,
     EventRegistrationSerializer,
+    ExtraAttendeeSerializer,
 )
 
 from utils.swagger import (
@@ -20,7 +20,6 @@ from utils.swagger import (
     doc_destroy,
     document_api_view,
     query_param,
-    OpenApiTypes,
 )
 
 
@@ -226,5 +225,110 @@ class EventRegistrationDetailView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error deleting registration", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=ExtraAttendeeSerializer(many=True),
+            parameters=[
+                query_param("registration", "uuid", False, "Filter by registration ID"),
+                query_param("name", "str", False, "Filter by attendee name"),
+            ],
+            description="List all extra attendees",
+            tags=["Extra Attendees"],
+        ),
+        "post": doc_create(
+            request=ExtraAttendeeSerializer,
+            response=ExtraAttendeeSerializer,
+            description="Create a new extra attendee",
+            tags=["Extra Attendees"],
+        ),
+    }
+)
+class ExtraAttendeeListCreateView(APIView):
+    def get(self, request):
+        try:
+            qs = ExtraAttendee.objects.all()
+            return Response(ExtraAttendeeSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching extra attendees", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            ser = ExtraAttendeeSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            extra = ser.save()
+            return Response(
+                ExtraAttendeeSerializer(extra).data,
+                status=status.HTTP_201_CREATED,
+            )
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating extra attendee", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=ExtraAttendeeSerializer,
+            description="Retrieve an extra attendee by ID",
+            tags=["Extra Attendees"],
+        ),
+        "put": doc_update(
+            request=ExtraAttendeeSerializer,
+            response=ExtraAttendeeSerializer,
+            description="Update an extra attendee by ID",
+            tags=["Extra Attendees"],
+        ),
+        "delete": doc_destroy(
+            description="Delete an extra attendee by ID",
+            tags=["Extra Attendees"],
+        ),
+    }
+)
+class ExtraAttendeeDetailView(APIView):
+    def get(self, request, pk):
+        try:
+            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            return Response(ExtraAttendeeSerializer(extra).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching extra attendee", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, pk):
+        try:
+            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            ser = ExtraAttendeeSerializer(extra, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            updated = ser.save()
+            return Response(ExtraAttendeeSerializer(updated).data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating extra attendee", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        try:
+            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            extra.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error deleting extra attendee", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
