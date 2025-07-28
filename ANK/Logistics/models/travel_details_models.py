@@ -1,14 +1,16 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 import uuid
-from Logistics.models.hotel_models import Hotel
-from Guest.models import Guest
+from Events.models.event_model import Event
 from Events.models.session_registration import SessionRegistration
 from Events.models.event_registration_model import EventRegistration
 
 
 class TravelDetail(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event_id = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="travel_details"
+    )
     event_registration = models.ForeignKey(
         EventRegistration,
         null=True,
@@ -28,8 +30,15 @@ class TravelDetail(models.Model):
         ("local_pickup", "Local Pickup"),
         ("self", "Self"),
     ]
+    TRAVEL_TYPE_CHOICES = [
+        ("Air", "Air"),
+        ("Train", "Train"),
+        ("Car", "Car"),
+    ]
     DEPARTURE_CHOICES = ARRIVAL_CHOICES
-
+    travel_type = models.CharField(
+        max_length=20, choices=TRAVEL_TYPE_CHOICES, blank=True
+    )
     arrival = models.CharField(max_length=20, choices=ARRIVAL_CHOICES)
     arrival_date = models.DateField()
     arrival_details = models.TextField(blank=True)

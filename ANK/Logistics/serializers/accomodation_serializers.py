@@ -1,11 +1,12 @@
 from rest_framework import serializers
 from Logistics.models.accomodation_models import Hotel
 from Logistics.models.accomodation_models import Accommodation
+from Logistics.serializers.hotel_serializers import HotelSerializer
 from Events.models.event_registration_model import ExtraAttendee
 
 
 class AccommodationSerializer(serializers.ModelSerializer):
-    hotel = serializers.PrimaryKeyRelatedField(queryset=Hotel.objects.all())
+    hotel = HotelSerializer(read_only=True)
     extra_attendee = serializers.PrimaryKeyRelatedField(
         queryset=ExtraAttendee.objects.all(), required=False, allow_null=True
     )
@@ -14,6 +15,7 @@ class AccommodationSerializer(serializers.ModelSerializer):
         model = Accommodation
         fields = [
             "id",
+            "event_id",
             "event_registration",
             "session_registration",
             "hotel",
@@ -25,6 +27,8 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "check_out",
             "rooming_remarks",
             "extra_attendee",
+            "created_at",
+            "updated_at",
         ]
 
     def validate(self, data):

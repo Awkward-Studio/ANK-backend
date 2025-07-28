@@ -7,6 +7,7 @@ class TravelDetailSerializer(serializers.ModelSerializer):
         model = TravelDetail
         fields = [
             "id",
+            "event_id",
             "event_registration",
             "session_registration",
             "arrival",

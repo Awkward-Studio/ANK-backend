@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from Guest.serializers import GuestSerializer
 from Events.models.event_model import Event
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 from Guest.models import Guest
@@ -21,7 +22,7 @@ class EventSerializer(serializers.ModelSerializer):
 
 
 class EventRegistrationSerializer(serializers.ModelSerializer):
-    guest = serializers.PrimaryKeyRelatedField(queryset=Guest.objects.all())
+    guest = GuestSerializer(read_only=True)
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
 
     class Meta:

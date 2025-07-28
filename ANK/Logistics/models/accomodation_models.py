@@ -3,12 +3,16 @@ from django.core.exceptions import ValidationError
 import uuid
 from Logistics.models.hotel_models import Hotel
 from Guest.models import Guest
+from Events.models.event_model import Event
 from Events.models.session_registration import SessionRegistration
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class Accommodation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event_id = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="accommodations"
+    )
     event_registration = models.ForeignKey(
         EventRegistration,
         null=True,
@@ -46,6 +50,8 @@ class Accommodation(models.Model):
     check_in = models.DateTimeField()
     check_out = models.DateTimeField()
     rooming_remarks = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
