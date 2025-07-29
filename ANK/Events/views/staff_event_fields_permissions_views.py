@@ -1,5 +1,3 @@
-# views.py
-
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
@@ -392,5 +390,85 @@ class UserEventSessionFieldPermAddRemoveAPIView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error removing session‐field permission", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "post": doc_create(
+            request=None,  # customize as needed
+            response=None,  # customize as needed
+            description="Bulk assign all field permissions (event/guest/session) for a user on an event. Wipes previous.",
+            tags=["Field Permissions"],
+        )
+    }
+)
+class UserEventAllFieldPermsAPIView(APIView):
+    """
+    POST /events/{event_pk}/users/{user_pk}/set-all-field-perms/
+    {
+      "eventfield_ids": [ ... ],
+      "guestfield_ids": [ ... ],
+      "sessionfield_ids": [ ... ]
+    }
+    """
+
+    def post(self, request, event_pk, user_pk):
+        try:
+            event = get_object_or_404(Event, pk=event_pk)
+            user = get_object_or_404(User, pk=user_pk)
+
+            eventfield_ids = request.data.get("eventfield_ids", [])
+            guestfield_ids = request.data.get("guestfield_ids", [])
+            sessionfield_ids = request.data.get("sessionfield_ids", [])
+
+            # Validate all are lists
+            if not all(
+                isinstance(ids, list)
+                for ids in [eventfield_ids, guestfield_ids, sessionfield_ids]
+            ):
+                return Response(
+                    {"detail": "All fields must be lists of UUIDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Clear all previous perms for this user+event
+            UserEventFieldPermission.objects.filter(user=user, event=event).delete()
+            UserEventGuestFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            UserEventSessionFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+
+            # Bulk create EventField perms
+            for eid in eventfield_ids:
+                ef = get_object_or_404(EventField, pk=eid)
+                UserEventFieldPermission.objects.get_or_create(
+                    user=user, event=event, event_field=ef
+                )
+
+            # Bulk create GuestField perms
+            for gid in guestfield_ids:
+                gf = get_object_or_404(GuestField, pk=gid)
+                UserEventGuestFieldPermission.objects.get_or_create(
+                    user=user, event=event, guest_field=gf
+                )
+
+            # Bulk create SessionField perms
+            for sid in sessionfield_ids:
+                sf = get_object_or_404(SessionField, pk=sid)
+                UserEventSessionFieldPermission.objects.get_or_create(
+                    user=user, event=event, session_field=sf
+                )
+
+            return Response(
+                {"detail": "All field permissions updated."}, status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            return Response(
+                {"detail": "Error setting all field permissions", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
