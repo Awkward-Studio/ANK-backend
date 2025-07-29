@@ -6,8 +6,8 @@ from django.contrib.auth.models import (
     PermissionsMixin,
 )
 from Guest.models import GuestField
-from Events.models.event_model import Event
-from Events.models.session_model import Session
+from Events.models.event_model import Event, EventField
+from Events.models.session_model import Session, SessionField
 from Events.models.staff_assignment_models import EventStaffAssignment
 from Events.models.staff_assignment_models import SessionStaffAssignment
 
@@ -55,13 +55,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
     assigned_sessions = models.ManyToManyField(
         Session, through=SessionStaffAssignment, related_name="staff_users"
-    )
-    # guest-related fields that staff can manage
-    allowed_guest_fields = models.ManyToManyField(
-        GuestField,
-        blank=True,
-        help_text="Which Guest fields this user may view",
-        related_name="allowed_fields_staff",
     )
 
     USERNAME_FIELD = "email"

@@ -1,8 +1,7 @@
 from rest_framework import serializers
 from Guest.serializers import GuestSerializer
-from Events.models.event_model import Event
+from Events.models.event_model import Event, EventField
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
-from Guest.models import Guest
 
 
 class EventSerializer(serializers.ModelSerializer):
@@ -19,6 +18,12 @@ class EventSerializer(serializers.ModelSerializer):
             "bride_name",
             "groom_name",
         ]
+
+
+class EventFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventField
+        fields = ["id", "name", "label"]
 
 
 class EventRegistrationSerializer(serializers.ModelSerializer):

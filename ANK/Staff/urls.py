@@ -1,10 +1,9 @@
 from django.urls import path
 from Staff.views import (
+    UserAssignedEventsAPIView,
+    UserAssignedSessionsAPIView,
     UserList,
     UserDetail,
-    UserGuestFieldAPIView,
-    UserGuestFieldAddAPIView,
-    UserGuestFieldRemoveAPIView,
     RegisterView,
     LoginView,
     RefreshView,
@@ -22,23 +21,15 @@ urlpatterns = [
     path("users/", UserList.as_view(), name="user-list"),
     # GET retrieve, PUT update, DELETE destroy
     path("users/<uuid:pk>/", UserDetail.as_view(), name="user-detail"),
-    # ─── User ↔ GuestField assignment ──────────────────────────────────
-    # GET list, PUT replace entire list
+    # Fetch event and sessions for a user
     path(
-        "users/<uuid:pk>/guestfields/",
-        UserGuestFieldAPIView.as_view(),
-        name="user-guestfields",
+        "users/<uuid:pk>/assigned-events/",
+        UserAssignedEventsAPIView.as_view(),
+        name="user-assigned-events",
     ),
-    # POST add a single guestfield
     path(
-        "users/<uuid:pk>/guestfields/add/",
-        UserGuestFieldAddAPIView.as_view(),
-        name="user-guestfields-add",
-    ),
-    # DELETE remove a single guestfield
-    path(
-        "users/<uuid:pk>/guestfields/<uuid:field_pk>/",
-        UserGuestFieldRemoveAPIView.as_view(),
-        name="user-guestfields-remove",
+        "users/<uuid:pk>/assigned-sessions/",
+        UserAssignedSessionsAPIView.as_view(),
+        name="user-assigned-sessions",
     ),
 ]

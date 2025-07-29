@@ -7,26 +7,38 @@ class GuestSerializer(serializers.ModelSerializer):
         model = Guest
         fields = "__all__"
 
-    def get_fields(self):
-        fields = super().get_fields()
-        request = self.context.get("request", None)
-        user = getattr(request, "user", None)
-
-        # if no user or user has no allowed_guest_fields,
-        # default to only id & name
-        if not hasattr(user, "allowed_guest_fields"):
-            allowed = {"id", "name"}
-        else:
-            # logged-in staff → id, name, plus whatever they're allowed
-            allowed = {"id", "name"} | {
-                gf.name for gf in user.allowed_guest_fields.all()
-            }
-
-        # prune out disallowed fields
-        return {fname: f for fname, f in fields.items() if fname in allowed}
+    # def get_fields(self):
+    #     fields = super().get_fields()
+    #     # Require event to be passed in context!
+    #     event = self.context.get("event", None)
+    #     user = self.context.get("user", None)
+    #     # Default: only id/name if not enough info
+    #     allowed = {"id", "name"}
+    #     if user and event:
+    #         from Events.models.field_permissions import UserEventGuestFieldPermission
+    #         field_perms = UserEventGuestFieldPermission.objects.filter(user=user, event=event)
+    #         allowed = allowed | {perm.guest_field.name for perm in field_perms.select_related("guest_field")}
+    #     # Only include allowed fields
+    #     return {fname: f for fname, f in fields.items() if fname in allowed}
 
 
 class GuestFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = GuestField
         fields = ["id", "name", "label"]
+
+
+class RestrictedGuestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Guest
+        # Explicitly list all fields except the M2M ones:
+        fields = [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "nationality",
+            "photo_id",
+        ]

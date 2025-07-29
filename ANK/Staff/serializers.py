@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from Staff.models import User, GuestField
+from Events.models.event_model import EventField
+from Events.models.session_model import SessionField
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import (
@@ -9,9 +11,6 @@ from drf_spectacular.utils import (
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, min_length=8)
-    allowed_guest_fields = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=GuestField.objects.all(), required=False
-    )
 
     class Meta:
         model = User
@@ -22,12 +21,10 @@ class UserSerializer(serializers.ModelSerializer):
             "name",
             "contact_phone",
             "role",
-            "allowed_guest_fields",
         ]
         read_only_fields = ["id"]
 
     def create(self, validated_data):
-        agf = validated_data.pop("allowed_guest_fields", [])
         pwd = validated_data.pop("password", None)
 
         user = User(**validated_data, role=validated_data.get("role", "staff"))
@@ -37,22 +34,13 @@ class UserSerializer(serializers.ModelSerializer):
             user.set_unusable_password()
         user.save()
 
-        if agf:
-            user.allowed_guest_fields.set(agf)
         return user
 
     def update(self, instance, validated_data):
-        agf = validated_data.pop("allowed_guest_fields", None)
-        pwd = validated_data.pop("password", None)
 
         for attr, val in validated_data.items():
             setattr(instance, attr, val)
-        if pwd:
-            instance.set_password(pwd)
-        instance.save()
 
-        if agf is not None:
-            instance.allowed_guest_fields.set(agf)
         return instance
 
 

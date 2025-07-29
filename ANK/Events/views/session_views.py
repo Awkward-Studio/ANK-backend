@@ -4,7 +4,9 @@ from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 
-from Events.models.session_model import Session
+from Guest.serializers import RestrictedGuestSerializer
+from Events.models.session_model import Session, SessionField
+from Events.serializers.session_serializers import SessionFieldSerializer
 from Events.models.session_registration import SessionRegistration
 from Events.serializers.session_serializers import (
     SessionSerializer,
@@ -123,6 +125,103 @@ class SessionDetailView(APIView):
             )
 
 
+@document_api_view(
+    {
+        "get": doc_list(
+            response=SessionFieldSerializer(many=True),
+            description="List all session fields",
+            tags=["Session Fields"],
+        ),
+        "post": doc_create(
+            request=SessionFieldSerializer,
+            response=SessionFieldSerializer,
+            description="Create a new session field",
+            tags=["Session Fields"],
+        ),
+    }
+)
+class SessionFieldList(APIView):
+    def get(self, request):
+        try:
+            qs = SessionField.objects.all()
+            return Response(SessionFieldSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching session fields", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            ser = SessionFieldSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data, status=status.HTTP_201_CREATED)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating session field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=SessionFieldSerializer,
+            description="Retrieve a session field by ID",
+            tags=["Session Fields"],
+        ),
+        "put": doc_update(
+            request=SessionFieldSerializer,
+            response=SessionFieldSerializer,
+            description="Update a session field by ID",
+            tags=["Session Fields"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a session field by ID", tags=["Session Fields"]
+        ),
+    }
+)
+class SessionFieldDetail(APIView):
+    def get(self, request, pk):
+        try:
+            obj = get_object_or_404(SessionField, pk=pk)
+            return Response(SessionFieldSerializer(obj).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching session field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, pk):
+        try:
+            obj = get_object_or_404(SessionField, pk=pk)
+            ser = SessionFieldSerializer(obj, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating session field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        try:
+            obj = get_object_or_404(SessionField, pk=pk)
+            obj.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error deleting session field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
 # SessionRegistration CRUD
 @document_api_view(
     {
@@ -224,5 +323,93 @@ class SessionRegistrationDetailView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error deleting session registration", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=SessionRegistrationSerializer(many=True),
+            description="List all registrations for a given session",
+            tags=["Session Registrations"],
+        )
+    }
+)
+class SessionRegistrationsAPIView(APIView):
+    def get(self, request, pk):
+        try:
+            regs = SessionRegistration.objects.filter(session_id=pk)
+            return Response(SessionRegistrationSerializer(regs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error listing session registrations", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            description="List all session registrations and their guests (with extra_attendees if any)",
+            tags=["Session Attendees"],
+        )
+    }
+)
+class SessionAllAttendeesAPIView(APIView):
+    """
+    GET /sessions/{session_pk}/all-attendees/
+    Returns a list of all SessionRegistrations (with guest data).
+    (If you add extra_attendees to session regs in future, you can expand here.)
+    """
+
+    def get(self, request, session_pk):
+        try:
+            registrations = SessionRegistration.objects.filter(
+                session_id=session_pk
+            ).select_related("guest")
+            results = []
+            for reg in registrations:
+                guest_data = RestrictedGuestSerializer(reg.guest).data
+                results.append(
+                    {
+                        "session_registration_id": str(reg.id),
+                        "guest": guest_data,
+                    }
+                )
+            return Response(results)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching attendees", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            description="Get guest for a session registration",
+            tags=["Session Registration Attendees"],
+        )
+    }
+)
+class SessionRegistrationAttendeesAPIView(APIView):
+    """
+    GET /session-registrations/{registration_pk}/attendees/
+    Returns guest info for this session registration.
+    """
+
+    def get(self, request, registration_pk):
+        try:
+            reg = get_object_or_404(SessionRegistration, pk=registration_pk)
+            guest_data = RestrictedGuestSerializer(reg.guest).data
+            result = {
+                "session_registration_id": str(reg.id),
+                "guest": guest_data,
+            }
+            return Response(result)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching attendees", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

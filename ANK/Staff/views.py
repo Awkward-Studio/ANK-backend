@@ -10,14 +10,16 @@ from docs.serializers import (
     TokenRefreshResponseSerializer,
     LogoutRequestSerializer,
 )
-from Staff.models import User, GuestField
+from Staff.models import User
 from Staff.serializers import (
     UserSerializer,
     EmailTokenObtainPairSerializer,
     RegisterSerializer,
 )
-
-from Guest.serializers import GuestFieldSerializer
+from Events.models.event_model import Event
+from Events.serializers.event_serializers import EventSerializer
+from Events.models.session_model import Session
+from Events.serializers.session_serializers import SessionSerializer
 
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -238,136 +240,42 @@ class UserDetail(APIView):
 @document_api_view(
     {
         "get": doc_list(
-            response=GuestFieldSerializer(many=True),
-            parameters=[
-                query_param("pk", "uuid", True, "User ID in URL"),
-            ],
-            description="List allowed guest fields for a user",
-            tags=["Guest Fields allowed for User"],
-        ),
-        "put": doc_update(
-            response=GuestFieldSerializer(many=True),
-            description="Replace a user’s allowed_guest_fields with provided list",
-            tags=["Guest Fields allowed for User"],
-        ),
+            response=EventSerializer(many=True),
+            description="List all events assigned to a given user",
+            tags=["User Assigned Events"],
+        )
     }
 )
-class UserGuestFieldAPIView(APIView):
-    """
-    GET  /users/{pk}/guestfields/     → list this user’s assigned GuestFields
-    POST /users/{pk}/guestfields/     → replace that list with the posted IDs
-      payload: { "guestfield_ids": [1,2,3] }
-    """
-
+class UserAssignedEventsAPIView(APIView):
     def get(self, request, pk):
+        user = get_object_or_404(User, pk=pk)
         try:
-            user = get_object_or_404(User, pk=pk)
-            fields = user.allowed_guest_fields.all()
-            return Response(GuestFieldSerializer(fields, many=True).data)
+            events = Event.objects.filter(staff_assignments__user=user).distinct()
+            return Response(EventSerializer(events, many=True).data)
         except Exception as e:
             return Response(
-                {
-                    "detail": "Error fetching user’s guest‐field permissions",
-                    "error": str(e),
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-    def put(self, request, pk):
-        try:
-            user = get_object_or_404(User, pk=pk)
-            ids = request.data.get("guestfield_ids")
-            if not isinstance(ids, list):
-                return Response(
-                    {"detail": "guestfield_ids must be a list of IDs"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            fields = GuestField.objects.filter(id__in=ids)
-            user.allowed_guest_fields.set(fields)
-            user.save()
-            return Response(
-                GuestFieldSerializer(user.allowed_guest_fields.all(), many=True).data,
-                status=status.HTTP_200_OK,
-            )
-        except Exception as e:
-            return Response(
-                {
-                    "detail": "Error updating user’s guest‐field permissions",
-                    "error": str(e),
-                },
+                {"detail": "Error listing assigned events", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
 @document_api_view(
     {
-        "post": doc_create(
-            request=serializers.Serializer,  # expects {"guestfield_id": "<uuid>"}
-            response=GuestFieldSerializer(many=True),
-            description="Add a guest-field to a user’s allowed_guest_fields",
-            tags=["Guest Fields allowed for User"],
+        "get": doc_list(
+            response=SessionSerializer(many=True),
+            description="List all sessions assigned to a given user",
+            tags=["User Assigned Sessions"],
         )
     }
 )
-class UserGuestFieldAddAPIView(APIView):
-    """
-    POST /users/{pk}/guestfields/add/
-    Body: { "guestfield_id": "<uuid>" }
-    → returns updated list of allowed_guest_fields
-    """
-
-    def post(self, request, pk):
+class UserAssignedSessionsAPIView(APIView):
+    def get(self, request, pk):
+        user = get_object_or_404(User, pk=pk)
         try:
-            user = get_object_or_404(User, pk=pk)
-            gid = request.data.get("guestfield_id")
-            if not gid:
-                return Response(
-                    {"detail": "guestfield_id is required"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            field = get_object_or_404(GuestField, pk=gid)
-            user.allowed_guest_fields.add(field)
-            return Response(
-                GuestFieldSerializer(user.allowed_guest_fields.all(), many=True).data,
-                status=status.HTTP_200_OK,
-            )
-        except serializers.ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            sessions = Session.objects.filter(staff_assignments__user=user).distinct()
+            return Response(SessionSerializer(sessions, many=True).data)
         except Exception as e:
             return Response(
-                {"detail": "Error adding guest-field", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-
-@document_api_view(
-    {
-        "delete": doc_destroy(
-            response=GuestFieldSerializer(many=True),
-            description="Remove a guest-field from a user’s allowed_guest_fields",
-            tags=["Guest Fields allowed for User"],
-        )
-    }
-)
-class UserGuestFieldRemoveAPIView(APIView):
-    """
-    DELETE /users/{pk}/guestfields/{field_pk}/
-    → returns updated list of allowed_guest_fields
-    """
-
-    def delete(self, request, pk, field_pk):
-        try:
-            user = get_object_or_404(User, pk=pk)
-            field = get_object_or_404(GuestField, pk=field_pk)
-            user.allowed_guest_fields.remove(field)
-            return Response(
-                GuestFieldSerializer(user.allowed_guest_fields.all(), many=True).data,
-                status=status.HTTP_200_OK,
-            )
-        except serializers.ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error removing guest-field", "error": str(e)},
+                {"detail": "Error listing assigned sessions", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

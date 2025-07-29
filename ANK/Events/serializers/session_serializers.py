@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from Events.models.session_model import Session
+from Events.models.session_model import Session, SessionField
 from Events.models.session_registration import SessionRegistration
 from Guest.models import Guest
 from Events.models.event_model import Event
@@ -22,6 +22,12 @@ class SessionSerializer(serializers.ModelSerializer):
             "location",
             "entertainment",
         ]
+
+
+class SessionFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SessionField
+        fields = ["id", "name", "label"]
 
 
 class SessionRegistrationSerializer(serializers.ModelSerializer):

@@ -25,3 +25,18 @@ class Event(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.start_date:%Y-%m-%d}–{self.end_date:%Y-%m-%d})"
+
+
+class EventField(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Exact field name on Event (e.g. 'location', 'venue')",
+    )
+    label = models.CharField(
+        max_length=100, help_text="Human-readable label (e.g. 'Venue')"
+    )
+
+    def __str__(self):
+        return self.label

@@ -241,3 +241,12 @@ class SessionStaffAssignmentDetail(APIView):
                 {"detail": "Error deleting assignment", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+# View to get all guest data based on event/session/extra_attendee
+# endpoint to get all extra attendees on an event registration.
+# endpoint to get all events/sessions assigned to a user.
+# endpoint to fetch, all sessions for an event, all event/session registrations for an event/session, all accommodations/traveldetails for an event and all accommodations/traveldetails for an event_registration/extra_attendee.
+# endpoint to get allowed session/event/guest fields for an event
+
+# endpoint to get guestdata of an event registration(with extra_attendees) and for session registration,session.
