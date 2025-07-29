@@ -10,7 +10,7 @@ from Events.models.event_registration_model import EventRegistration, ExtraAtten
 
 class Accommodation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    event_id = models.ForeignKey(
+    event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="accommodations"
     )
     event_registrations = models.ManyToManyField(
