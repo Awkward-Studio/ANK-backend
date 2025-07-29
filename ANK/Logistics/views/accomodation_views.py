@@ -22,23 +22,23 @@ from utils.swagger import (
             response=AccommodationSerializer(many=True),
             parameters=[
                 query_param(
-                    "event_registration", "uuid", False, "Filter by event registration"
-                ),
-                query_param(
-                    "session_registration",
+                    "event_registration",
                     "uuid",
                     False,
-                    "Filter by session registration",
+                    "Filter by EventRegistration ID",
+                ),
+                query_param(
+                    "extra_attendee", "uuid", False, "Filter by ExtraAttendee ID"
                 ),
                 query_param("hotel", "uuid", False, "Filter by hotel ID"),
             ],
-            description="List all accommodations",
+            description="List all accommodations. Filter by event_registration, extra_attendee, or hotel.",
             tags=["Accommodations"],
         ),
         "post": doc_create(
             request=AccommodationSerializer,
             response=AccommodationSerializer,
-            description="Create a new accommodation",
+            description="Create a new accommodation (assigning multiple participants is supported).",
             tags=["Accommodations"],
         ),
     }
@@ -47,6 +47,17 @@ class AccommodationList(APIView):
     def get(self, request):
         try:
             qs = Accommodation.objects.all()
+            event_registration_id = request.GET.get("event_registration")
+            extra_attendee_id = request.GET.get("extra_attendee")
+            hotel_id = request.GET.get("hotel")
+
+            if event_registration_id:
+                qs = qs.filter(event_registrations__id=event_registration_id)
+            if extra_attendee_id:
+                qs = qs.filter(extra_attendees__id=extra_attendee_id)
+            if hotel_id:
+                qs = qs.filter(hotel__id=hotel_id)
+
             return Response(AccommodationSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -81,7 +92,7 @@ class AccommodationList(APIView):
         "put": doc_update(
             request=AccommodationSerializer,
             response=AccommodationSerializer,
-            description="Update an accommodation by ID",
+            description="Update an accommodation by ID (re-assign participants as needed).",
             tags=["Accommodations"],
         ),
         "delete": doc_destroy(

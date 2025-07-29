@@ -2,22 +2,25 @@ from rest_framework import serializers
 from Logistics.models.accomodation_models import Hotel
 from Logistics.models.accomodation_models import Accommodation
 from Logistics.serializers.hotel_serializers import HotelSerializer
-from Events.models.event_registration_model import ExtraAttendee
+from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class AccommodationSerializer(serializers.ModelSerializer):
     hotel = HotelSerializer(read_only=True)
-    extra_attendee = serializers.PrimaryKeyRelatedField(
-        queryset=ExtraAttendee.objects.all(), required=False, allow_null=True
+    event_registrations = serializers.PrimaryKeyRelatedField(
+        queryset=EventRegistration.objects.all(), many=True, required=False
+    )
+    extra_attendees = serializers.PrimaryKeyRelatedField(
+        queryset=ExtraAttendee.objects.all(), many=True, required=False
     )
 
     class Meta:
         model = Accommodation
         fields = [
             "id",
-            "event_id",
-            "event_registration",
-            "session_registration",
+            "event",
+            "event_registrations",
+            "extra_attendees",
             "hotel",
             "sharing_with",
             "room_count",
@@ -26,26 +29,87 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "check_in",
             "check_out",
             "rooming_remarks",
-            "extra_attendee",
             "created_at",
             "updated_at",
         ]
 
     def validate(self, data):
-        extra_attendee = data.get("extra_attendee")
-        er = data.get("event_registration")
-        sr = data.get("session_registration")
-
-        if extra_attendee:
-            # ensure they didn’t also pass registration FKs
-            if er or sr:
-                raise serializers.ValidationError(
-                    "When specifying attendee, do NOT set event_registration or session_registration."
-                )
-            return data
-        # enforce exactly one FK is provided
-        if not bool(er) ^ bool(sr):
+        ers = data.get("event_registrations", [])
+        eas = data.get("extra_attendees", [])
+        if not ers and not eas:
             raise serializers.ValidationError(
-                "Provide exactly one of event_registration or session_registration when no attendee is given."
+                "At least one event registration or extra attendee must be assigned."
             )
+        # Optional: Prevent any duplicate assignment logic here, if needed
         return data
+
+    def create(self, validated_data):
+        ers = validated_data.pop("event_registrations", [])
+        eas = validated_data.pop("extra_attendees", [])
+        acc = Accommodation.objects.create(**validated_data)
+        if ers:
+            acc.event_registrations.set(ers)
+        if eas:
+            acc.extra_attendees.set(eas)
+        return acc
+
+    def update(self, instance, validated_data):
+        ers = validated_data.pop("event_registrations", None)
+        eas = validated_data.pop("extra_attendees", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if ers is not None:
+            instance.event_registrations.set(ers)
+        if eas is not None:
+            instance.extra_attendees.set(eas)
+        return instance
+
+
+# class AccommodationSerializer(serializers.ModelSerializer):
+#     hotel = HotelSerializer(read_only=True)
+#     event_registrations = serializers.PrimaryKeyRelatedField(
+#         queryset=EventRegistration.objects.all(), many=True, required=False
+#     )
+#     extra_attendees = serializers.PrimaryKeyRelatedField(
+#         queryset=ExtraAttendee.objects.all(), many=True, required=False
+#     )
+
+#     class Meta:
+#         model = Accommodation
+#         fields = [
+#             "id",
+#             "event_id",
+#             "event_registration",
+#             "session_registration",
+#             "hotel",
+#             "sharing_with",
+#             "room_count",
+#             "room_type",
+#             "bed_type",
+#             "check_in",
+#             "check_out",
+#             "rooming_remarks",
+#             "extra_attendee",
+#             "created_at",
+#             "updated_at",
+#         ]
+
+#     def validate(self, data):
+#         extra_attendee = data.get("extra_attendee")
+#         er = data.get("event_registration")
+#         sr = data.get("session_registration")
+
+#         if extra_attendee:
+#             # ensure they didn’t also pass registration FKs
+#             if er or sr:
+#                 raise serializers.ValidationError(
+#                     "When specifying attendee, do NOT set event_registration or session_registration."
+#                 )
+#             return data
+#         # enforce exactly one FK is provided
+#         if not bool(er) ^ bool(sr):
+#             raise serializers.ValidationError(
+#                 "Provide exactly one of event_registration or session_registration when no attendee is given."
+#             )
+#         return data

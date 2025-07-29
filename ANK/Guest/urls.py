@@ -4,6 +4,7 @@ from Guest.views import (
     GuestFieldDetail,
     GuestList,
     GuestDetail,
+    BulkGuestUploadAPIView,
 )
 
 urlpatterns = [
@@ -19,4 +20,9 @@ urlpatterns = [
     path("guests/", GuestList.as_view(), name="guest-list"),
     # GET retrieve, PUT update, DELETE destroy
     path("guests/<uuid:pk>/", GuestDetail.as_view(), name="guest-detail"),
+    path(
+        "guest-list/<uuid:event_id>/upload-guests-csv/",
+        BulkGuestUploadAPIView.as_view(),
+        name="event-upload-guests-csv",
+    ),
 ]

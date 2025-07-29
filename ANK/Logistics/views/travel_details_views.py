@@ -26,26 +26,23 @@ from utils.swagger import (
                     "event_registration",
                     "uuid",
                     False,
-                    "Filter by event registration ID",
+                    "Filter by EventRegistration ID",
                 ),
                 query_param(
-                    "session_registration",
-                    "uuid",
-                    False,
-                    "Filter by session registration ID",
+                    "extra_attendee", "uuid", False, "Filter by ExtraAttendee ID"
                 ),
                 query_param("arrival", "str", False, "Filter by arrival method"),
                 query_param(
                     "return_travel", "bool", False, "Filter by return travel flag"
                 ),
             ],
-            description="List all travel details",
+            description="List all travel details. Filter by event_registration, extra_attendee, arrival, or return_travel.",
             tags=["Travel Details"],
         ),
         "post": doc_create(
             request=TravelDetailSerializer,
             response=TravelDetailSerializer,
-            description="Create a new travel detail",
+            description="Create a new travel detail (assigning multiple participants is supported).",
             tags=["Travel Details"],
         ),
     }
@@ -54,6 +51,23 @@ class TravelDetailList(APIView):
     def get(self, request):
         try:
             qs = TravelDetail.objects.all()
+            event_registration_id = request.GET.get("event_registration")
+            extra_attendee_id = request.GET.get("extra_attendee")
+            arrival = request.GET.get("arrival")
+            return_travel = request.GET.get("return_travel")
+
+            if event_registration_id:
+                qs = qs.filter(event_registrations__id=event_registration_id)
+            if extra_attendee_id:
+                qs = qs.filter(extra_attendees__id=extra_attendee_id)
+            if arrival:
+                qs = qs.filter(arrival=arrival)
+            if return_travel is not None:
+                if return_travel.lower() in ("true", "1"):
+                    qs = qs.filter(return_travel=True)
+                elif return_travel.lower() in ("false", "0"):
+                    qs = qs.filter(return_travel=False)
+
             return Response(TravelDetailSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -88,7 +102,7 @@ class TravelDetailList(APIView):
         "put": doc_update(
             request=TravelDetailSerializer,
             response=TravelDetailSerializer,
-            description="Update a travel detail by ID",
+            description="Update a travel detail by ID (re-assign participants as needed).",
             tags=["Travel Details"],
         ),
         "delete": doc_destroy(

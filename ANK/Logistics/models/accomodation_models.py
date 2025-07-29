@@ -13,22 +13,14 @@ class Accommodation(models.Model):
     event_id = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="accommodations"
     )
-    event_registration = models.ForeignKey(
-        EventRegistration,
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="accommodations",
+    event_registrations = models.ManyToManyField(
+        EventRegistration, blank=True, related_name="accommodation_assignments"
+    )
+    extra_attendees = models.ManyToManyField(
+        ExtraAttendee, blank=True, related_name="accommodation_assignments"
     )
     session_registration = models.ForeignKey(
         SessionRegistration,
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="accommodations",
-    )
-    extra_attendee = models.ForeignKey(
-        ExtraAttendee,
         null=True,
         blank=True,
         on_delete=models.CASCADE,
@@ -53,46 +45,61 @@ class Accommodation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        constraints = [
-            # ensure either:
-            # attendee is set (and we ignore the old registration fields), or
-            # exactly one of the registration FKs is set
-            models.CheckConstraint(
-                check=(
-                    models.Q(extra_attendee__isnull=False)
-                    | (
-                        models.Q(extra_attendee__isnull=True)
-                        & (
-                            models.Q(event_registration__isnull=False)
-                            & models.Q(session_registration__isnull=True)
-                        )
-                        | (
-                            models.Q(event_registration__isnull=True)
-                            & models.Q(session_registration__isnull=False)
-                        )
-                    )
-                ),
-                name="accommodation_extraattendee_or_one_registration",
-            )
-        ]
-
     def clean(self):
         super().clean()
-        # count how many of the three are truthy
-        choices = [
-            bool(self.event_registration),
-            bool(self.session_registration),
-            bool(self.extra_attendee),
-        ]
-        if sum(choices) != 1:
+        # Enforce at least one participant
+        if not self.event_registrations.exists() and not self.extra_attendees.exists():
             raise ValidationError(
-                "Exactly one of event_registration, session_registration or extra_attendee must be set."
+                "Accommodation must have at least one EventRegistration or ExtraAttendee assigned."
             )
 
     def __str__(self):
-        # pick whichever is set
-        target = (
-            self.extra_attendee or self.event_registration or self.session_registration
+        assigned = list(self.event_registrations.all()) + list(
+            self.extra_attendees.all()
         )
-        return f"Accommodation for {target}"
+        names = ", ".join(str(obj) for obj in assigned)
+        return f"Accommodation for: {names or 'No one'}"
+
+    # class Meta:
+    #     constraints = [
+    #         # ensure either:
+    #         # attendee is set (and we ignore the old registration fields), or
+    #         # exactly one of the registration FKs is set
+    #         models.CheckConstraint(
+    #             check=(
+    #                 models.Q(extra_attendee__isnull=False)
+    #                 | (
+    #                     models.Q(extra_attendee__isnull=True)
+    #                     & (
+    #                         models.Q(event_registration__isnull=False)
+    #                         & models.Q(session_registration__isnull=True)
+    #                     )
+    #                     | (
+    #                         models.Q(event_registration__isnull=True)
+    #                         & models.Q(session_registration__isnull=False)
+    #                     )
+    #                 )
+    #             ),
+    #             name="accommodation_extraattendee_or_one_registration",
+    #         )
+    #     ]
+
+    # def clean(self):
+    #     super().clean()
+    #     # count how many of the three are truthy
+    #     choices = [
+    #         bool(self.event_registration),
+    #         bool(self.session_registration),
+    #         bool(self.extra_attendee),
+    #     ]
+    #     if sum(choices) != 1:
+    #         raise ValidationError(
+    #             "Exactly one of event_registration, session_registration or extra_attendee must be set."
+    #         )
+
+    # def __str__(self):
+    #     # pick whichever is set
+    #     target = (
+    #         self.extra_attendee or self.event_registration or self.session_registration
+    #     )
+    #     return f"Accommodation for {target}"

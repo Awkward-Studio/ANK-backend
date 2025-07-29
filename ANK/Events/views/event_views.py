@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from django.db import models
 
 from Guest.serializers import RestrictedGuestSerializer
 from Logistics.models.accomodation_models import Accommodation
@@ -505,6 +506,7 @@ class EventRegistrationsAPIView(APIView):
 
 
 ## ------- Views for accommodations and Travel details of ------- ##
+# Event-level: list all accommodations for a given event
 @document_api_view(
     {
         "get": doc_list(
@@ -517,10 +519,25 @@ class EventRegistrationsAPIView(APIView):
 class EventAccommodationsAPIView(APIView):
     def get(self, request, pk):
         try:
-            reg_ids = EventRegistration.objects.filter(event_id=pk).values_list(
-                "id", flat=True
+            # Find all registrations and extras for this event
+            reg_ids = list(
+                EventRegistration.objects.filter(event_id=pk).values_list(
+                    "id", flat=True
+                )
             )
-            accos = Accommodation.objects.filter(event_registration_id__in=reg_ids)
+            extra_ids = list(
+                ExtraAttendee.objects.filter(registration__event_id=pk).values_list(
+                    "id", flat=True
+                )
+            )
+            # Find accommodations where any are assigned to these participants
+            accos = Accommodation.objects.filter(
+                models.Q(event__id=pk)
+                & (
+                    models.Q(event_registrations__id__in=reg_ids)
+                    | models.Q(extra_attendees__id__in=extra_ids)
+                )
+            ).distinct()
             return Response(AccommodationSerializer(accos, many=True).data)
         except Exception as e:
             return Response(
@@ -529,6 +546,7 @@ class EventAccommodationsAPIView(APIView):
             )
 
 
+# Event-level: list all travel details for a given event
 @document_api_view(
     {
         "get": doc_list(
@@ -541,10 +559,23 @@ class EventAccommodationsAPIView(APIView):
 class EventTravelDetailsAPIView(APIView):
     def get(self, request, pk):
         try:
-            reg_ids = EventRegistration.objects.filter(event_id=pk).values_list(
-                "id", flat=True
+            reg_ids = list(
+                EventRegistration.objects.filter(event_id=pk).values_list(
+                    "id", flat=True
+                )
             )
-            travels = TravelDetail.objects.filter(event_registration_id__in=reg_ids)
+            extra_ids = list(
+                ExtraAttendee.objects.filter(registration__event_id=pk).values_list(
+                    "id", flat=True
+                )
+            )
+            travels = TravelDetail.objects.filter(
+                models.Q(event__id=pk)
+                & (
+                    models.Q(event_registrations__id__in=reg_ids)
+                    | models.Q(extra_attendees__id__in=extra_ids)
+                )
+            ).distinct()
             return Response(TravelDetailSerializer(travels, many=True).data)
         except Exception as e:
             return Response(
@@ -553,6 +584,7 @@ class EventTravelDetailsAPIView(APIView):
             )
 
 
+# Registration-level: list all accommodations for an event registration
 @document_api_view(
     {
         "get": doc_list(
@@ -565,7 +597,7 @@ class EventTravelDetailsAPIView(APIView):
 class EventRegistrationAccommodationsAPIView(APIView):
     def get(self, request, pk):
         try:
-            accos = Accommodation.objects.filter(event_registration_id=pk)
+            accos = Accommodation.objects.filter(event_registrations__id=pk)
             return Response(AccommodationSerializer(accos, many=True).data)
         except Exception as e:
             return Response(
@@ -577,6 +609,7 @@ class EventRegistrationAccommodationsAPIView(APIView):
             )
 
 
+# Registration-level: list all travel details for an event registration
 @document_api_view(
     {
         "get": doc_list(
@@ -589,7 +622,7 @@ class EventRegistrationAccommodationsAPIView(APIView):
 class EventRegistrationTravelDetailsAPIView(APIView):
     def get(self, request, pk):
         try:
-            travels = TravelDetail.objects.filter(event_registration_id=pk)
+            travels = TravelDetail.objects.filter(event_registrations__id=pk)
             return Response(TravelDetailSerializer(travels, many=True).data)
         except Exception as e:
             return Response(
@@ -601,6 +634,7 @@ class EventRegistrationTravelDetailsAPIView(APIView):
             )
 
 
+# Attendee-level: list all accommodations for an extra attendee
 @document_api_view(
     {
         "get": doc_list(
@@ -613,7 +647,7 @@ class EventRegistrationTravelDetailsAPIView(APIView):
 class ExtraAttendeeAccommodationsAPIView(APIView):
     def get(self, request, pk):
         try:
-            accos = Accommodation.objects.filter(attendee_id=pk)
+            accos = Accommodation.objects.filter(extra_attendees__id=pk)
             return Response(AccommodationSerializer(accos, many=True).data)
         except Exception as e:
             return Response(
@@ -625,6 +659,7 @@ class ExtraAttendeeAccommodationsAPIView(APIView):
             )
 
 
+# Attendee-level: list all travel details for an extra attendee
 @document_api_view(
     {
         "get": doc_list(
@@ -637,7 +672,7 @@ class ExtraAttendeeAccommodationsAPIView(APIView):
 class ExtraAttendeeTravelDetailsAPIView(APIView):
     def get(self, request, pk):
         try:
-            travels = TravelDetail.objects.filter(attendee_id=pk)
+            travels = TravelDetail.objects.filter(extra_attendees__id=pk)
             return Response(TravelDetailSerializer(travels, many=True).data)
         except Exception as e:
             return Response(
