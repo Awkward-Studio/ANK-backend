@@ -26,8 +26,9 @@ class UserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         pwd = validated_data.pop("password", None)
+        role = validated_data.pop("role", "staff")
 
-        user = User(**validated_data, role=validated_data.get("role", "staff"))
+        user = User(**validated_data, role=role)
         if pwd:
             user.set_password(pwd)
         else:
