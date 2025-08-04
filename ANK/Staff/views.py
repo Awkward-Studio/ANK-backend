@@ -40,15 +40,147 @@ from drf_spectacular.utils import (
     extend_schema,
     OpenApiResponse,
 )
+from django.contrib.auth import login, logout
+
+# # ─── Register ────────────────────────────────────────────────────────────────
 
 
-# ─── Register ────────────────────────────────────────────────────────────────
+# @extend_schema(
+#     request=RegisterSerializer,
+#     responses={201: RegisterSerializer},
+#     description="Register a new user; returns JWT tokens",
+#     tags=["Authentication"],
+# )
+# class RegisterView(GenericAPIView):
+#     permission_classes = (AllowAny,)
+#     serializer_class = RegisterSerializer
+
+#     def post(self, request):
+#         try:
+#             ser = RegisterSerializer(data=request.data)
+#             ser.is_valid(raise_exception=True)
+#             user = ser.save()
+
+#             # Generate JWT tokens for the new user
+#             refresh = RefreshToken.for_user(user)
+#             tokens = {
+#                 "refresh": str(refresh),
+#                 "access": str(refresh.access_token),
+#             }
+
+#             # Serialize user data
+#             user_data = UserSerializer(user).data
+
+#             return Response(
+#                 {
+#                     "user": user_data,
+#                     "tokens": tokens,
+#                 },
+#                 status=status.HTTP_201_CREATED,
+#             )
+#         except serializers.ValidationError as ve:
+#             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+#         except Exception as e:
+#             return Response(
+#                 {"detail": "Registration failed", "error": str(e)},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
 
 
+# @extend_schema(
+#     request=EmailTokenObtainPairSerializer,
+#     responses={200: EmailTokenObtainPairSerializer},
+#     description="Obtain JWT access & refresh tokens",
+#     tags=["Authentication"],
+# )
+# class LoginView(TokenObtainPairView):
+#     """
+#     POST /auth/login/  { "email": "...", "password": "..." }
+#     →  { "refresh": "...", "access": "..." }
+#     """
+
+#     permission_classes = (AllowAny,)
+#     serializer_class = EmailTokenObtainPairSerializer
+
+#     def post(self, request, *args, **kwargs):
+#         serializer = self.get_serializer(data=request.data)
+#         try:
+#             serializer.is_valid(raise_exception=True)
+#         except Exception as e:
+#             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+#         # Get user and tokens
+#         user = serializer.user
+#         tokens = serializer.validated_data
+
+#         # Serialize user data
+#         user_data = UserSerializer(user).data
+
+#         return Response(
+#             {
+#                 "user": user_data,
+#                 "tokens": tokens,
+#             },
+#             status=status.HTTP_200_OK,
+#         )
+
+
+# @extend_schema(
+#     request=TokenRefreshRequestSerializer,
+#     responses={200: TokenRefreshResponseSerializer},
+#     description="Refresh access token",
+#     tags=["Authentication"],
+# )
+# class RefreshView(TokenRefreshView):
+#     """
+#     POST /auth/refresh/ { "refresh": "..." }
+#     → { "access": "..." }
+#     """
+
+#     permission_classes = (AllowAny,)
+
+
+# @extend_schema(
+#     request=LogoutRequestSerializer,
+#     responses={205: OpenApiResponse(description="Refresh token blacklisted")},
+#     description="Logout and blacklist the provided refresh token",
+#     tags=["Authentication"],
+# )
+# class LogoutView(GenericAPIView):
+#     """
+#     POST /auth/logout/ { "refresh": "..." }
+#     → 204 No Content (blacklists the refresh token)
+#     """
+
+#     permission_classes = (IsAuthenticated,)
+#     serializer_class = LogoutRequestSerializer
+
+
+#     def post(self, request):
+#         try:
+#             refresh_token = request.data["refresh"]
+#             token = RefreshToken(refresh_token)
+#             token.blacklist()
+#             return Response(status=status.HTTP_205_RESET_CONTENT)
+#         except KeyError:
+#             return Response(
+#                 {"detail": "`refresh` field is required"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+#         except (TokenError, InvalidToken) as e:
+#             return Response(
+#                 {"detail": "Invalid token", "error": str(e)},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+#         except Exception as e:
+#             return Response(
+#                 {"detail": "Logout failed", "error": str(e)},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
 @extend_schema(
     request=RegisterSerializer,
     responses={201: RegisterSerializer},
-    description="Register a new user; returns JWT tokens",
+    description="Register a new user; returns JWT tokens and sets session cookie",
     tags=["Authentication"],
 )
 class RegisterView(GenericAPIView):
@@ -67,6 +199,9 @@ class RegisterView(GenericAPIView):
                 "refresh": str(refresh),
                 "access": str(refresh.access_token),
             }
+
+            # Log in user (creates session)
+            login(request, user)
 
             # Serialize user data
             user_data = UserSerializer(user).data
@@ -87,18 +222,16 @@ class RegisterView(GenericAPIView):
             )
 
 
+# ─── Login ───────────────────────────────────────────────────────────────────
+
+
 @extend_schema(
     request=EmailTokenObtainPairSerializer,
     responses={200: EmailTokenObtainPairSerializer},
-    description="Obtain JWT access & refresh tokens",
+    description="Obtain JWT access & refresh tokens and set session cookie",
     tags=["Authentication"],
 )
 class LoginView(TokenObtainPairView):
-    """
-    POST /auth/login/  { "email": "...", "password": "..." }
-    →  { "refresh": "...", "access": "..." }
-    """
-
     permission_classes = (AllowAny,)
     serializer_class = EmailTokenObtainPairSerializer
 
@@ -106,23 +239,32 @@ class LoginView(TokenObtainPairView):
         serializer = self.get_serializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
+            user = serializer.user
+            tokens = serializer.validated_data
+
+            # Log in user (creates session)
+            login(request, user)
+
+            # Serialize user data
+            user_data = UserSerializer(user).data
+
+            return Response(
+                {
+                    "user": user_data,
+                    "tokens": tokens,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Login failed", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-        # Get user and tokens
-        user = serializer.user
-        tokens = serializer.validated_data
 
-        # Serialize user data
-        user_data = UserSerializer(user).data
-
-        return Response(
-            {
-                "user": user_data,
-                "tokens": tokens,
-            },
-            status=status.HTTP_200_OK,
-        )
+# ─── Token Refresh ──────────────────────────────────────────────────────────
 
 
 @extend_schema(
@@ -132,43 +274,52 @@ class LoginView(TokenObtainPairView):
     tags=["Authentication"],
 )
 class RefreshView(TokenRefreshView):
-    """
-    POST /auth/refresh/ { "refresh": "..." }
-    → { "access": "..." }
-    """
-
     permission_classes = (AllowAny,)
+
+
+# ─── Logout ─────────────────────────────────────────────────────────────────
 
 
 @extend_schema(
     request=LogoutRequestSerializer,
-    responses={205: OpenApiResponse(description="Refresh token blacklisted")},
-    description="Logout and blacklist the provided refresh token",
+    responses={
+        205: OpenApiResponse(description="Refresh token blacklisted, session cleared")
+    },
+    description="Logout and blacklist the provided refresh token and clear session",
     tags=["Authentication"],
 )
 class LogoutView(GenericAPIView):
-    """
-    POST /auth/logout/ { "refresh": "..." }
-    → 204 No Content (blacklists the refresh token)
-    """
-
     permission_classes = (IsAuthenticated,)
     serializer_class = LogoutRequestSerializer
 
     def post(self, request):
         try:
-            refresh_token = request.data["refresh"]
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-            return Response(status=status.HTTP_205_RESET_CONTENT)
+            # Blacklist JWT refresh token if present
+            refresh_token = request.data.get("refresh")
+            if refresh_token:
+                try:
+                    token = RefreshToken(refresh_token)
+                    token.blacklist()
+                except (TokenError, InvalidToken) as jwt_error:
+                    return Response(
+                        {"detail": "Invalid token", "error": str(jwt_error)},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Log out user from session
+            try:
+                logout(request)
+            except Exception as e:
+                # If session is already logged out, just pass
+                pass
+
+            return Response(
+                {"detail": "Logged out and token blacklisted (if provided)"},
+                status=status.HTTP_205_RESET_CONTENT,
+            )
         except KeyError:
             return Response(
                 {"detail": "`refresh` field is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except (TokenError, InvalidToken) as e:
-            return Response(
-                {"detail": "Invalid token", "error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
