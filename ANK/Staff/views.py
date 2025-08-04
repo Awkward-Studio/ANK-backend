@@ -59,8 +59,25 @@ class RegisterView(GenericAPIView):
         try:
             ser = RegisterSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            user_data = ser.save()
-            return Response(ser.data, status=status.HTTP_201_CREATED)
+            user = ser.save()
+
+            # Generate JWT tokens for the new user
+            refresh = RefreshToken.for_user(user)
+            tokens = {
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            }
+
+            # Serialize user data
+            user_data = UserSerializer(user).data
+
+            return Response(
+                {
+                    "user": user_data,
+                    "tokens": tokens,
+                },
+                status=status.HTTP_201_CREATED,
+            )
         except serializers.ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -84,6 +101,28 @@ class LoginView(TokenObtainPairView):
 
     permission_classes = (AllowAny,)
     serializer_class = EmailTokenObtainPairSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception as e:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get user and tokens
+        user = serializer.user
+        tokens = serializer.validated_data
+
+        # Serialize user data
+        user_data = UserSerializer(user).data
+
+        return Response(
+            {
+                "user": user_data,
+                "tokens": tokens,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(

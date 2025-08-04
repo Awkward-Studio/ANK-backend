@@ -31,6 +31,9 @@ class TravelDetailSerializer(serializers.ModelSerializer):
             "departure",
             "departure_date",
             "departure_details",
+            "flight_number",
+            "airline",
+            "pnr",
         ]
 
     def validate(self, data):
