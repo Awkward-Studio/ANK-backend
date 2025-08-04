@@ -1,21 +1,23 @@
-from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
-import os
+from django.conf import settings
+from django.contrib.auth import get_user_model
 
 
 class Command(BaseCommand):
-    help = "Creates a superuser if none exist"
+    help = "Ensures a superuser exists for the project."
 
     def handle(self, *args, **options):
         User = get_user_model()
-        username = os.environ.get("DJANGO_SUPERUSER_USERNAME", "admin")
-        email = os.environ.get("DJANGO_SUPERUSER_EMAIL", "admin@example.com")
-        password = os.environ.get("DJANGO_SUPERUSER_PASSWORD", "adminpass")
+        email = getattr(settings, "DJANGO_SUPERUSER_EMAIL", "admin@example.com")
+        password = getattr(settings, "DJANGO_SUPERUSER_PASSWORD", "changeme")
 
-        if not User.objects.filter(is_superuser=True).exists():
+        # If you want to set role explicitly:
+        extra_fields = {"role": "admin"}
+
+        if not User.objects.filter(email=email).exists():
             User.objects.create_superuser(
-                username=username, email=email, password=password
+                email=email, password=password, **extra_fields
             )
-            self.stdout.write(self.style.SUCCESS(f"Superuser {username} created."))
+            self.stdout.write(self.style.SUCCESS(f"Superuser created: {email}"))
         else:
-            self.stdout.write(self.style.SUCCESS("Superuser already exists."))
+            self.stdout.write(self.style.WARNING(f"Superuser already exists: {email}"))
