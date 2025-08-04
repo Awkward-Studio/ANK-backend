@@ -783,3 +783,48 @@ class EventRegistrationAttendeesAPIView(APIView):
                 {"detail": "Error fetching attendees", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+# @document_api_view(
+#     {
+#         "get": doc_list(
+#             response=SessionRegistrationSerializer(many=True),
+#             description=(
+#                 "List all session registrations for the guest referenced by the EventRegistration. "
+#                 "Returns all SessionRegistrations for sessions under the same event for this guest."
+#             ),
+#             tags=["Event Registrations"],
+#         ),
+#     }
+# )
+# class EventRegistrationSessionRegistrationsAPIView(APIView):
+#     """
+#     GET /api/event-registrations/{registration_id}/session-registrations/
+#     Returns all session registrations for the guest in this event registration.
+#     """
+
+#     def get(self, request, registration_id):
+#         try:
+#             event_reg = get_object_or_404(EventRegistration, pk=registration_id)
+#             sessions = Session.objects.filter(event=event_reg.event)
+#             session_regs = SessionRegistration.objects.filter(
+#                 guest=event_reg.guest,
+#                 session__in=sessions,
+#             ).select_related("session")
+#             serializer = SessionRegistrationSerializer(session_regs, many=True)
+#             return Response(serializer.data, status=status.HTTP_200_OK)
+#         except EventRegistration.DoesNotExist:
+#             return Response(
+#                 {"detail": "EventRegistration not found."},
+#                 status=status.HTTP_404_NOT_FOUND,
+#             )
+#         except Exception as e:
+#             return Response(
+#                 {"detail": "Error fetching session registrations", "error": str(e)},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             )
+# path(
+#     "event-registrations/<uuid:registration_id>/session-registrations/",
+#     EventRegistrationSessionRegistrationsAPIView.as_view(),
+#     name="eventregistration-sessionregistrations",
+# ),
