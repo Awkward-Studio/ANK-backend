@@ -10,10 +10,10 @@ from Guest.views import (
 urlpatterns = [
     # ─── GuestField ─────────────────────────────────────────────────
     # GET  list,  POST create
-    path("guestfields/", GuestFieldList.as_view(), name="guestfield-list"),
+    path("guest-fields/", GuestFieldList.as_view(), name="guestfield-list"),
     # GET retrieve, PUT update, DELETE destroy
     path(
-        "guestfields/<uuid:pk>/", GuestFieldDetail.as_view(), name="guestfield-detail"
+        "guest-fields/<uuid:pk>/", GuestFieldDetail.as_view(), name="guestfield-detail"
     ),
     # ─── Guest ───────────────────────────────────────────────────────
     # GET  list,  POST create
