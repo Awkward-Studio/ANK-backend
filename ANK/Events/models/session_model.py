@@ -21,6 +21,11 @@ class Session(models.Model):
     entertainment = models.TextField(
         blank=True, help_text="Describe the entertainment planned"
     )
+    unique_string = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+    )
     # allow querying session.custom_field_values
     custom_field_values = GenericRelation(
         CustomFieldValue,

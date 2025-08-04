@@ -21,6 +21,7 @@ class SessionSerializer(serializers.ModelSerializer):
             "date",
             "location",
             "entertainment",
+            "unique_string",
         ]
 
 

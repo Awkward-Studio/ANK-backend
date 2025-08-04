@@ -404,7 +404,7 @@ class UserEventSessionFieldPermAddRemoveAPIView(APIView):
         )
     }
 )
-class UserEventAllFieldPermsAPIView(APIView):
+class UserEventAssignAllFieldPermsAPIView(APIView):
     """
     POST /events/{event_pk}/users/{user_pk}/set-all-field-perms/
     {
@@ -470,5 +470,114 @@ class UserEventAllFieldPermsAPIView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error setting all field permissions", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response={
+                "type": "object",
+                "properties": {
+                    "event_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
+                    "guest_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
+                    "session_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+            description="List all allowed event, guest, and session fields for a user on a given event.",
+            tags=["Field Permissions"],
+        )
+    }
+)
+class UserEventAllAllowedFieldsAPIView(APIView):
+    """
+    GET /events/<event_pk>/users/<user_pk>/allowed-fields/
+    Returns all allowed event fields, guest fields, and session fields for this user on this event.
+    """
+
+    def get(self, request, event_pk, user_pk):
+        user = get_object_or_404(User, pk=user_pk)
+        event = get_object_or_404(Event, pk=event_pk)
+        try:
+            # Get all allowed event fields
+            event_perms = UserEventFieldPermission.objects.filter(
+                user=user, event=event
+            ).select_related("event_field")
+            event_fields = [
+                {
+                    "id": perm.event_field.id,
+                    "name": perm.event_field.name,
+                    "label": perm.event_field.label,
+                }
+                for perm in event_perms
+            ]
+
+            # Get all allowed guest fields
+            guest_perms = UserEventGuestFieldPermission.objects.filter(
+                user=user, event=event
+            ).select_related("guest_field")
+            guest_fields = [
+                {
+                    "id": perm.guest_field.id,
+                    "name": perm.guest_field.name,
+                    "label": perm.guest_field.label,
+                }
+                for perm in guest_perms
+            ]
+
+            # Get all allowed session fields
+            session_perms = UserEventSessionFieldPermission.objects.filter(
+                user=user, event=event
+            ).select_related("session_field")
+            session_fields = [
+                {
+                    "id": perm.session_field.id,
+                    "name": perm.session_field.name,
+                    "label": perm.session_field.label,
+                }
+                for perm in session_perms
+            ]
+
+            return Response(
+                {
+                    "event_fields": event_fields,
+                    "guest_fields": guest_fields,
+                    "session_fields": session_fields,
+                }
+            )
+        except Exception as e:
+            return Response(
+                {"detail": "Failed to fetch allowed fields", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

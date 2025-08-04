@@ -37,7 +37,8 @@ from Events.views.staff_assignment_views import (
     SessionStaffAssignmentDetail,
 )
 from Events.views.staff_event_fields_permissions_views import (
-    UserEventAllFieldPermsAPIView,
+    UserEventAllAllowedFieldsAPIView,
+    UserEventAssignAllFieldPermsAPIView,
     UserEventEventFieldPermsAPIView,
     UserEventEventFieldPermAddRemoveAPIView,
     UserEventGuestFieldPermsAPIView,
@@ -183,7 +184,13 @@ urlpatterns = [
     # Bulk assign all field permissions (event/guest/session) for a user on an event.
     path(
         "events/<uuid:event_pk>/users/<uuid:user_pk>/set-all-field-perms/",
-        UserEventAllFieldPermsAPIView.as_view(),
+        UserEventAssignAllFieldPermsAPIView.as_view(),
+    ),
+    # Bulk fetch all field permissions (event/guest/session) for a user on an event.
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/allowed-fields/",
+        UserEventAllAllowedFieldsAPIView.as_view(),
+        name="user-allowed-fields",
     ),
     # EventField perms for user on event
     path(

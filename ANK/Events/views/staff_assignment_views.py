@@ -49,6 +49,12 @@ class EventStaffAssignmentList(APIView):
     def get(self, request):
         try:
             qs = EventStaffAssignment.objects.all()
+            event_id = self.request.query_params.get("event")
+            user_id = self.request.query_params.get("user")
+            if event_id:
+                qs = qs.filter(event_id=event_id)
+            if user_id:
+                qs = qs.filter(user_id=user_id)
             return Response(EventStaffAssignmentSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
