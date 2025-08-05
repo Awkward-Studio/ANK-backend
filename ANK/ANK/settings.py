@@ -79,6 +79,7 @@ REST_FRAMEWORK = {
     # "DEFAULT_AUTHENTICATION_CLASSES": [
     #     "rest_framework.authentication.SessionAuthentication",
     # ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
@@ -214,7 +215,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 
 AUTH_USER_MODEL = "Staff.User"
-SESSION_COOKIE_SAMESITE = "None"
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = "None"
-CSRF_COOKIE_SECURE = True
+# SESSION_COOKIE_SAMESITE = "None"
+# SESSION_COOKIE_SECURE = True
+# CSRF_COOKIE_SAMESITE = "None"
+# CSRF_COOKIE_SECURE = True
