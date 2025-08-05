@@ -20,7 +20,7 @@ from Events.models.event_model import Event
 from Events.serializers.event_serializers import EventSerializer
 from Events.models.session_model import Session
 from Events.serializers.session_serializers import SessionSerializer
-
+from django.contrib.auth import authenticate, login, logout
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -222,45 +222,43 @@ class RegisterView(GenericAPIView):
             )
 
 
-# ─── Login ───────────────────────────────────────────────────────────────────
+class EmailSessionLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
+class SessionLoginResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
 
 
 @extend_schema(
-    request=EmailTokenObtainPairSerializer,
-    responses={200: EmailTokenObtainPairSerializer},
-    description="Obtain JWT access & refresh tokens and set session cookie",
+    request=EmailSessionLoginSerializer,
+    responses={
+        200: SessionLoginResponseSerializer,
+        400: OpenApiResponse(description="Invalid credentials or missing fields"),
+    },
+    description="Session-based login using email and password. Sets session cookie on success.",
     tags=["Authentication"],
 )
-class LoginView(TokenObtainPairView):
+class LoginView(APIView):
     permission_classes = (AllowAny,)
-    serializer_class = EmailTokenObtainPairSerializer
+    serializer_class = EmailSessionLoginSerializer
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        try:
-            serializer.is_valid(raise_exception=True)
-            user = serializer.user
-            tokens = serializer.validated_data
+        ser = self.serializer_class(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-            # Log in user (creates session)
+        email = ser.validated_data["email"]
+        password = ser.validated_data["password"]
+
+        user = authenticate(request, email=email, password=password)
+        if user is not None:
             login(request, user)
-
-            # Serialize user data
-            user_data = UserSerializer(user).data
-
+            return Response({"detail": "Login successful"}, status=status.HTTP_200_OK)
+        else:
             return Response(
-                {
-                    "user": user_data,
-                    "tokens": tokens,
-                },
-                status=status.HTTP_200_OK,
-            )
-        except serializers.ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Login failed", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
             )
 
 
