@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from Logistics.models.travel_details_models import TravelDetail
+from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 # serializers.py
@@ -70,7 +70,7 @@ class TravelDetailSerializer(serializers.ModelSerializer):
 
 class TravelDetailFieldSerializer(serializers.ModelSerializer):
     class Meta:
-        model = TravelDetail
+        model = TravelDetailField
         fields = ["id", "name", "label"]
 
 
