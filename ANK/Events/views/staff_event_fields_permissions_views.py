@@ -3,19 +3,28 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from django.shortcuts import get_object_or_404
 
+from Events.models.event_registration_model import EventRegistrationField
+from Logistics.models.accomodation_models import AccommodationField
+from Logistics.models.travel_details_models import TravelDetailField
 from Staff.models import User
 from Events.models.event_model import Event, EventField
 from Guest.models import GuestField
 from Events.models.session_model import SessionField
 from Events.models.staff_event_field_permissions import (
+    UserEventAccommodationFieldPermission,
+    UserEventEventRegistrationFieldPermission,
     UserEventFieldPermission,
     UserEventGuestFieldPermission,
     UserEventSessionFieldPermission,
+    UserEventTravelDetailFieldPermission,
 )
 from Events.serializers.staff_event_field_permission_serializers import (
+    AccommodationFieldPermissionSerializer,
     EventFieldPermissionSerializer,
+    EventRegistrationFieldPermissionSerializer,
     GuestFieldPermissionSerializer,
     SessionFieldPermissionSerializer,
+    TravelDetailFieldPermissionSerializer,
 )
 
 from utils.swagger import (
@@ -394,6 +403,437 @@ class UserEventSessionFieldPermAddRemoveAPIView(APIView):
             )
 
 
+# -- List/Replace all permissions for a user/event --
+@document_api_view(
+    {
+        "get": doc_list(
+            response=TravelDetailFieldPermissionSerializer(many=True),
+            parameters=[
+                query_param("event_pk", "uuid", True, "Event ID"),
+                query_param("user_pk", "uuid", True, "User ID"),
+            ],
+            description="List or filter a user’s allowed TravelDetailFields for a given event",
+            tags=["Travel Detail Field Permissions"],
+        ),
+        "put": doc_update(
+            request=TravelDetailFieldPermissionSerializer(many=True),
+            response=TravelDetailFieldPermissionSerializer(many=True),
+            description="Replace a user’s allowed TravelDetailFields for a given event",
+            tags=["Travel Detail Field Permissions"],
+        ),
+    }
+)
+class UserEventTravelDetailFieldPermsAPIView(APIView):
+    def get(self, request, event_pk, user_pk):
+        try:
+            perms = UserEventTravelDetailFieldPermission.objects.filter(
+                event__pk=event_pk, user__pk=user_pk
+            ).select_related("traveldetail_field")
+            return Response(
+                TravelDetailFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error listing travel detail field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, event_pk, user_pk):
+        try:
+            ids = request.data.get("traveldetailfield_ids", [])
+            if not isinstance(ids, list):
+                return Response(
+                    {"detail": "traveldetailfield_ids must be a list of UUIDs"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            for tid in ids:
+                tf = get_object_or_404(TravelDetailField, pk=tid)
+                UserEventTravelDetailFieldPermission.objects.get_or_create(
+                    user=user, event=event, traveldetail_field=tf
+                )
+            perms = UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                TravelDetailFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error replacing travel detail field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# -- Add/Remove a single permission --
+@document_api_view(
+    {
+        "post": doc_create(
+            request=TravelDetailFieldPermissionSerializer,
+            response=TravelDetailFieldPermissionSerializer(many=True),
+            description="Add a single TravelDetailField permission for a user on an event",
+            tags=["Travel Detail Field Permissions"],
+        ),
+        "delete": doc_destroy(
+            description="Remove a single TravelDetailField permission for a user on an event",
+            tags=["Travel Detail Field Permissions"],
+        ),
+    }
+)
+class UserEventTravelDetailFieldPermAddRemoveAPIView(APIView):
+    def post(self, request, event_pk, user_pk):
+        try:
+            tid = request.data.get("traveldetailfield_id")
+            if not tid:
+                return Response(
+                    {"detail": "traveldetailfield_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            tf = get_object_or_404(TravelDetailField, pk=tid)
+            UserEventTravelDetailFieldPermission.objects.get_or_create(
+                user=user, event=event, traveldetail_field=tf
+            )
+            perms = UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                TravelDetailFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error adding travel detail field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, event_pk, user_pk, field_pk):
+        try:
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            tf = get_object_or_404(TravelDetailField, pk=field_pk)
+            UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event, traveldetail_field=tf
+            ).delete()
+            perms = UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                TravelDetailFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error removing travel detail field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventRegistrationFieldPermissionSerializer(many=True),
+            parameters=[
+                query_param("event_pk", "uuid", True, "Event ID"),
+                query_param("user_pk", "uuid", True, "User ID"),
+            ],
+            description="List or filter a user’s allowed EventRegistrationFields for a given event",
+            tags=["Event Registration Field Permissions"],
+        ),
+        "put": doc_update(
+            request=EventRegistrationFieldPermissionSerializer(many=True),
+            response=EventRegistrationFieldPermissionSerializer(many=True),
+            description="Replace a user’s allowed EventRegistrationFields for a given event",
+            tags=["Event Registration Field Permissions"],
+        ),
+    }
+)
+class UserEventEventRegistrationFieldPermsAPIView(APIView):
+    def get(self, request, event_pk, user_pk):
+        try:
+            perms = UserEventEventRegistrationFieldPermission.objects.filter(
+                event__pk=event_pk, user__pk=user_pk
+            ).select_related("eventregistration_field")
+            return Response(
+                EventRegistrationFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error listing event registration field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, event_pk, user_pk):
+        try:
+            ids = request.data.get("eventregistrationfield_ids", [])
+            if not isinstance(ids, list):
+                return Response(
+                    {"detail": "eventregistrationfield_ids must be a list of UUIDs"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            UserEventEventRegistrationFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            for eid in ids:
+                ef = get_object_or_404(EventRegistrationField, pk=eid)
+                UserEventEventRegistrationFieldPermission.objects.get_or_create(
+                    user=user, event=event, eventregistration_field=ef
+                )
+            perms = UserEventEventRegistrationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                EventRegistrationFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error replacing event registration field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "post": doc_create(
+            request=EventRegistrationFieldPermissionSerializer,
+            response=EventRegistrationFieldPermissionSerializer(many=True),
+            description="Add a single EventRegistrationField permission for a user on an event",
+            tags=["Event Registration Field Permissions"],
+        ),
+        "delete": doc_destroy(
+            description="Remove a single EventRegistrationField permission for a user on an event",
+            tags=["Event Registration Field Permissions"],
+        ),
+    }
+)
+class UserEventEventRegistrationFieldPermAddRemoveAPIView(APIView):
+    def post(self, request, event_pk, user_pk):
+        try:
+            eid = request.data.get("eventregistrationfield_id")
+            if not eid:
+                return Response(
+                    {"detail": "eventregistrationfield_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            ef = get_object_or_404(EventRegistrationField, pk=eid)
+            UserEventEventRegistrationFieldPermission.objects.get_or_create(
+                user=user, event=event, eventregistration_field=ef
+            )
+            perms = UserEventEventRegistrationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                EventRegistrationFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error adding event registration field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, event_pk, user_pk, field_pk):
+        try:
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            ef = get_object_or_404(EventRegistrationField, pk=field_pk)
+            UserEventEventRegistrationFieldPermission.objects.filter(
+                user=user, event=event, eventregistration_field=ef
+            ).delete()
+            perms = UserEventEventRegistrationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                EventRegistrationFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error removing event registration field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=AccommodationFieldPermissionSerializer(many=True),
+            parameters=[
+                query_param("event_pk", "uuid", True, "Event ID"),
+                query_param("user_pk", "uuid", True, "User ID"),
+            ],
+            description="List or filter a user’s allowed AccommodationFields for a given event",
+            tags=["Accommodation Field Permissions"],
+        ),
+        "put": doc_update(
+            request=AccommodationFieldPermissionSerializer(many=True),
+            response=AccommodationFieldPermissionSerializer(many=True),
+            description="Replace a user’s allowed AccommodationFields for a given event",
+            tags=["Accommodation Field Permissions"],
+        ),
+    }
+)
+class UserEventAccommodationFieldPermsAPIView(APIView):
+    def get(self, request, event_pk, user_pk):
+        try:
+            perms = UserEventAccommodationFieldPermission.objects.filter(
+                event__pk=event_pk, user__pk=user_pk
+            ).select_related("accommodation_field")
+            return Response(
+                AccommodationFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error listing accommodation field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, event_pk, user_pk):
+        try:
+            ids = request.data.get("accommodationfield_ids", [])
+            if not isinstance(ids, list):
+                return Response(
+                    {"detail": "accommodationfield_ids must be a list of UUIDs"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            for aid in ids:
+                af = get_object_or_404(AccommodationField, pk=aid)
+                UserEventAccommodationFieldPermission.objects.get_or_create(
+                    user=user, event=event, accommodation_field=af
+                )
+            perms = UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                AccommodationFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error replacing accommodation field permissions",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "post": doc_create(
+            request=AccommodationFieldPermissionSerializer,
+            response=AccommodationFieldPermissionSerializer(many=True),
+            description="Add a single AccommodationField permission for a user on an event",
+            tags=["Accommodation Field Permissions"],
+        ),
+        "delete": doc_destroy(
+            description="Remove a single AccommodationField permission for a user on an event",
+            tags=["Accommodation Field Permissions"],
+        ),
+    }
+)
+class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
+    def post(self, request, event_pk, user_pk):
+        try:
+            aid = request.data.get("accommodationfield_id")
+            if not aid:
+                return Response(
+                    {"detail": "accommodationfield_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            af = get_object_or_404(AccommodationField, pk=aid)
+            UserEventAccommodationFieldPermission.objects.get_or_create(
+                user=user, event=event, accommodation_field=af
+            )
+            perms = UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                AccommodationFieldPermissionSerializer(perms, many=True).data
+            )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error adding accommodation field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, event_pk, user_pk, field_pk):
+        try:
+            user = get_object_or_404(User, pk=user_pk)
+            event = get_object_or_404(Event, pk=event_pk)
+            af = get_object_or_404(AccommodationField, pk=field_pk)
+            UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event, accommodation_field=af
+            ).delete()
+            perms = UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            )
+            return Response(
+                AccommodationFieldPermissionSerializer(perms, many=True).data
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error removing accommodation field permission",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
 @document_api_view(
     {
         "post": doc_create(
@@ -513,9 +953,42 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
                             },
                         },
                     },
+                    "traveldetail_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
+                    "accommodation_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
+                    "eventregistration_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "format": "uuid"},
+                                "name": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    },
                 },
             },
-            description="List all allowed event, guest, and session fields for a user on a given event.",
+            description="List all allowed event, guest, session, travel detail, accommodation, and event registration fields for a user on a given event.",
             tags=["Field Permissions"],
         )
     }
@@ -523,14 +996,15 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
 class UserEventAllAllowedFieldsAPIView(APIView):
     """
     GET /events/<event_pk>/users/<user_pk>/allowed-fields/
-    Returns all allowed event fields, guest fields, and session fields for this user on this event.
+    Returns all allowed event fields, guest fields, session fields, travel detail fields,
+    accommodation fields, and event registration fields for this user on this event.
     """
 
     def get(self, request, event_pk, user_pk):
         user = get_object_or_404(User, pk=user_pk)
         event = get_object_or_404(Event, pk=event_pk)
         try:
-            # Get all allowed event fields
+            # Event fields
             event_perms = UserEventFieldPermission.objects.filter(
                 user=user, event=event
             ).select_related("event_field")
@@ -543,7 +1017,7 @@ class UserEventAllAllowedFieldsAPIView(APIView):
                 for perm in event_perms
             ]
 
-            # Get all allowed guest fields
+            # Guest fields
             guest_perms = UserEventGuestFieldPermission.objects.filter(
                 user=user, event=event
             ).select_related("guest_field")
@@ -556,7 +1030,7 @@ class UserEventAllAllowedFieldsAPIView(APIView):
                 for perm in guest_perms
             ]
 
-            # Get all allowed session fields
+            # Session fields
             session_perms = UserEventSessionFieldPermission.objects.filter(
                 user=user, event=event
             ).select_related("session_field")
@@ -569,11 +1043,55 @@ class UserEventAllAllowedFieldsAPIView(APIView):
                 for perm in session_perms
             ]
 
+            # Travel Detail fields
+            travel_perms = UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            ).select_related("traveldetail_field")
+            traveldetail_fields = [
+                {
+                    "id": perm.traveldetail_field.id,
+                    "name": perm.traveldetail_field.name,
+                    "label": perm.traveldetail_field.label,
+                }
+                for perm in travel_perms
+            ]
+
+            # Accommodation fields
+            accommodation_perms = UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            ).select_related("accommodation_field")
+            accommodation_fields = [
+                {
+                    "id": perm.accommodation_field.id,
+                    "name": perm.accommodation_field.name,
+                    "label": perm.accommodation_field.label,
+                }
+                for perm in accommodation_perms
+            ]
+
+            # Event Registration fields
+            eventregistration_perms = (
+                UserEventEventRegistrationFieldPermission.objects.filter(
+                    user=user, event=event
+                ).select_related("eventregistration_field")
+            )
+            eventregistration_fields = [
+                {
+                    "id": perm.eventregistration_field.id,
+                    "name": perm.eventregistration_field.name,
+                    "label": perm.eventregistration_field.label,
+                }
+                for perm in eventregistration_perms
+            ]
+
             return Response(
                 {
                     "event_fields": event_fields,
                     "guest_fields": guest_fields,
                     "session_fields": session_fields,
+                    "traveldetail_fields": traveldetail_fields,
+                    "accommodation_fields": accommodation_fields,
+                    "eventregistration_fields": eventregistration_fields,
                 }
             )
         except Exception as e:

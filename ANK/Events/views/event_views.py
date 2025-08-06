@@ -5,16 +5,28 @@ from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from Events.models.session_model import Session
+from Events.models.session_registration import SessionRegistration
 from Guest.serializers import RestrictedGuestSerializer
 from Logistics.models.accomodation_models import Accommodation
 from Logistics.models.travel_details_models import TravelDetail
 from Logistics.serializers.accomodation_serializers import AccommodationSerializer
 from Logistics.serializers.travel_details_serializers import TravelDetailSerializer
-from Events.serializers.session_serializers import SessionSerializer
+from Events.serializers.session_serializers import (
+    SessionRegistrationSerializer,
+    SessionSerializer,
+)
 from docs.serializers import EventAttendeeSerializer
 from Events.models.event_model import Event, EventField
-from Events.serializers.event_serializers import EventFieldSerializer
-from Events.models.event_registration_model import EventRegistration, ExtraAttendee
+from Events.serializers.event_serializers import (
+    EventFieldSerializer,
+    EventRegistrationFieldSerializer,
+)
+from Events.models.event_registration_model import (
+    EventRegistration,
+    EventRegistrationField,
+    ExtraAttendee,
+)
 from Events.serializers.event_serializers import (
     EventSerializer,
     EventRegistrationSerializer,
@@ -331,6 +343,104 @@ class EventRegistrationDetailView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error deleting registration", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventRegistrationFieldSerializer(many=True),
+            description="List all event registration fields",
+            tags=["Event Registration Fields"],
+        ),
+        "post": doc_create(
+            request=EventRegistrationFieldSerializer,
+            response=EventRegistrationFieldSerializer,
+            description="Create a new event registration field",
+            tags=["Event Registration Fields"],
+        ),
+    }
+)
+class EventRegistrationFieldList(APIView):
+    def get(self, request):
+        try:
+            qs = EventRegistrationField.objects.all()
+            return Response(EventRegistrationFieldSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching event registration fields", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            ser = EventRegistrationFieldSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data, status=status.HTTP_201_CREATED)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating event registration field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=EventRegistrationFieldSerializer,
+            description="Retrieve an event registration field by ID",
+            tags=["Event Registration Fields"],
+        ),
+        "put": doc_update(
+            request=EventRegistrationFieldSerializer,
+            response=EventRegistrationFieldSerializer,
+            description="Update an event registration field by ID",
+            tags=["Event Registration Fields"],
+        ),
+        "delete": doc_destroy(
+            description="Delete an event registration field by ID",
+            tags=["Event Registration Fields"],
+        ),
+    }
+)
+class EventRegistrationFieldDetail(APIView):
+    def get(self, request, pk):
+        try:
+            obj = get_object_or_404(EventRegistrationField, pk=pk)
+            return Response(EventRegistrationFieldSerializer(obj).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching event registration field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, pk):
+        try:
+            obj = get_object_or_404(EventRegistrationField, pk=pk)
+            ser = EventRegistrationFieldSerializer(obj, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating event registration field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        try:
+            obj = get_object_or_404(EventRegistrationField, pk=pk)
+            obj.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error deleting event registration field", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -785,46 +895,55 @@ class EventRegistrationAttendeesAPIView(APIView):
             )
 
 
-# @document_api_view(
-#     {
-#         "get": doc_list(
-#             response=SessionRegistrationSerializer(many=True),
-#             description=(
-#                 "List all session registrations for the guest referenced by the EventRegistration. "
-#                 "Returns all SessionRegistrations for sessions under the same event for this guest."
-#             ),
-#             tags=["Event Registrations"],
-#         ),
-#     }
-# )
-# class EventRegistrationSessionRegistrationsAPIView(APIView):
-#     """
-#     GET /api/event-registrations/{registration_id}/session-registrations/
-#     Returns all session registrations for the guest in this event registration.
-#     """
+@document_api_view(
+    {
+        "get": doc_list(
+            response=SessionRegistrationSerializer(many=True),
+            description=(
+                "List all session registrations for the guest referenced by the EventRegistration. "
+                "Returns all SessionRegistrations for sessions under the same event for this guest."
+            ),
+            tags=["Event Registrations"],
+        ),
+    }
+)
+class EventRegistrationSessionRegistrationsAPIView(APIView):
+    """
+    GET /api/event-registrations/{registration_id}/session-registrations/
+    Returns all session registrations for the guest in this event registration.
+    """
 
-#     def get(self, request, registration_id):
-#         try:
-#             event_reg = get_object_or_404(EventRegistration, pk=registration_id)
-#             sessions = Session.objects.filter(event=event_reg.event)
-#             session_regs = SessionRegistration.objects.filter(
-#                 guest=event_reg.guest,
-#                 session__in=sessions,
-#             ).select_related("session")
-#             serializer = SessionRegistrationSerializer(session_regs, many=True)
-#             return Response(serializer.data, status=status.HTTP_200_OK)
-#         except EventRegistration.DoesNotExist:
-#             return Response(
-#                 {"detail": "EventRegistration not found."},
-#                 status=status.HTTP_404_NOT_FOUND,
-#             )
-#         except Exception as e:
-#             return Response(
-#                 {"detail": "Error fetching session registrations", "error": str(e)},
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             )
-# path(
-#     "event-registrations/<uuid:registration_id>/session-registrations/",
-#     EventRegistrationSessionRegistrationsAPIView.as_view(),
-#     name="eventregistration-sessionregistrations",
-# ),
+    def get(self, request, registration_id):
+        try:
+            # 1. Get the EventRegistration (404s if not found)
+            event_reg = get_object_or_404(EventRegistration, pk=registration_id)
+            guest = event_reg.guest
+
+            # 2. Get all SessionRegistrations for this guest in this event
+            session_regs = SessionRegistration.objects.filter(
+                guest=guest, session__event=event_reg.event
+            ).select_related("session")
+
+            # 3. Serialize the session registrations and their sessions
+            session_data = [SessionSerializer(sr.session).data for sr in session_regs]
+            session_reg_data = SessionRegistrationSerializer(
+                session_regs, many=True
+            ).data
+
+            return Response(
+                {
+                    "sessions": session_data,  # Only sessions this guest is registered for
+                    "session_registrations": session_reg_data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except EventRegistration.DoesNotExist:
+            return Response(
+                {"detail": "EventRegistration not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching session registrations", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

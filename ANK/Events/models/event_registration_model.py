@@ -74,3 +74,18 @@ class ExtraAttendee(models.Model):
 
     def __str__(self):
         return f"{self.name} (extra for {self.registration.guest})"
+
+
+class EventRegistrationField(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Exact field name on EventRegistration (e.g. 'location', 'venue')",
+    )
+    label = models.CharField(
+        max_length=100, help_text="Human-readable label (e.g. 'Venue')"
+    )
+
+    def __str__(self):
+        return self.label

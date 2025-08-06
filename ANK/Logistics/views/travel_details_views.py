@@ -4,8 +4,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 
-from Logistics.models.travel_details_models import TravelDetail
-from Logistics.serializers.travel_details_serializers import TravelDetailSerializer
+from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
+from Logistics.serializers.travel_details_serializers import (
+    TravelDetailFieldSerializer,
+    TravelDetailSerializer,
+)
 from utils.swagger import (
     document_api_view,
     doc_list,
@@ -144,5 +147,103 @@ class TravelDetailDetail(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error deleting travel detail", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=TravelDetailFieldSerializer(many=True),
+            description="List all travel detail fields",
+            tags=["Travel Detail Fields"],
+        ),
+        "post": doc_create(
+            request=TravelDetailFieldSerializer,
+            response=TravelDetailFieldSerializer,
+            description="Create a new travel detail field",
+            tags=["Travel Detail Fields"],
+        ),
+    }
+)
+class TravelDetailFieldList(APIView):
+    def get(self, request):
+        try:
+            qs = TravelDetailField.objects.all()
+            return Response(TravelDetailFieldSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching travel detail fields", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            ser = TravelDetailFieldSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data, status=status.HTTP_201_CREATED)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating travel detail field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=TravelDetailFieldSerializer,
+            description="Retrieve a travel detail field by ID",
+            tags=["Travel Detail Fields"],
+        ),
+        "put": doc_update(
+            request=TravelDetailFieldSerializer,
+            response=TravelDetailFieldSerializer,
+            description="Update a travel detail field by ID",
+            tags=["Travel Detail Fields"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a travel detail field by ID",
+            tags=["Travel Detail Fields"],
+        ),
+    }
+)
+class TravelDetailFieldDetail(APIView):
+    def get(self, request, pk):
+        try:
+            obj = get_object_or_404(TravelDetailField, pk=pk)
+            return Response(TravelDetailFieldSerializer(obj).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching travel detail field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, pk):
+        try:
+            obj = get_object_or_404(TravelDetailField, pk=pk)
+            ser = TravelDetailFieldSerializer(obj, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating travel detail field", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        try:
+            obj = get_object_or_404(TravelDetailField, pk=pk)
+            obj.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error deleting travel detail field", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from Logistics.models.accomodation_models import Hotel
+from Logistics.models.accomodation_models import AccommodationField, Hotel
 from Logistics.models.accomodation_models import Accommodation
 from Logistics.serializers.hotel_serializers import HotelSerializer
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
@@ -64,6 +64,12 @@ class AccommodationSerializer(serializers.ModelSerializer):
         if eas is not None:
             instance.extra_attendees.set(eas)
         return instance
+
+
+class AccommodationFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccommodationField
+        fields = ["id", "name", "label"]
 
 
 # class AccommodationSerializer(serializers.ModelSerializer):

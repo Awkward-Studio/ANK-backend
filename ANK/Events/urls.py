@@ -5,8 +5,11 @@ from Events.views.event_views import (
     EventDetailView,
     EventRegistrationAccommodationsAPIView,
     EventRegistrationAttendeesAPIView,
+    EventRegistrationFieldDetail,
+    EventRegistrationFieldList,
     EventRegistrationListCreateView,
     EventRegistrationDetailView,
+    EventRegistrationSessionRegistrationsAPIView,
     EventRegistrationTravelDetailsAPIView,
     EventRegistrationsAPIView,
     EventSessionsAPIView,
@@ -82,7 +85,17 @@ urlpatterns = [
         EventRegistrationDetailView.as_view(),
         name="eventregistration-detail",
     ),
-    #
+    # EventRegistrationField
+    path(
+        "eventregistration-fields/",
+        EventRegistrationFieldList.as_view(),
+        name="eventregistrationfield-list",
+    ),
+    path(
+        "eventregistration-fields/<uuid:pk>/",
+        EventRegistrationFieldDetail.as_view(),
+        name="eventregistrationfield-detail",
+    ),
     path(
         "event-registrations/<uuid:pk>/extra-attendees/",
         ExtraAttendeesForRegistrationAPIView.as_view(),
@@ -102,6 +115,11 @@ urlpatterns = [
         "event-registrations/<uuid:registration_pk>/attendees/",
         EventRegistrationAttendeesAPIView.as_view(),
         name="eventregistration-attendees",
+    ),
+    path(
+        "event-registrations/<uuid:registration_id>/session-registrations/",
+        EventRegistrationSessionRegistrationsAPIView.as_view(),
+        name="eventregistration-sessionregistrations",
     ),
     # ─── Sessions ─────────────────────────────────────────────────────────
     path("sessions/", SessionListCreateView.as_view(), name="session-list"),

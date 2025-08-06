@@ -1,7 +1,17 @@
 from django.urls import path
 from Logistics.views.hotel_views import HotelList, HotelDetail
-from Logistics.views.accomodation_views import AccommodationList, AccommodationDetail
-from Logistics.views.travel_details_views import TravelDetailList, TravelDetailDetail
+from Logistics.views.accomodation_views import (
+    AccommodationFieldDetail,
+    AccommodationFieldList,
+    AccommodationList,
+    AccommodationDetail,
+)
+from Logistics.views.travel_details_views import (
+    TravelDetailFieldDetail,
+    TravelDetailFieldList,
+    TravelDetailList,
+    TravelDetailDetail,
+)
 
 urlpatterns = [
     # ─── Hotel ────────────────────────────────────────────────────────
@@ -18,6 +28,17 @@ urlpatterns = [
         AccommodationDetail.as_view(),
         name="accommodation-detail",
     ),
+    # AccommodationField
+    path(
+        "accommodation-fields/",
+        AccommodationFieldList.as_view(),
+        name="accommodationfield-list",
+    ),
+    path(
+        "accommodation-fields/<uuid:pk>/",
+        AccommodationFieldDetail.as_view(),
+        name="accommodationfield-detail",
+    ),
     # ─── TravelDetail ─────────────────────────────────────────────────
     # GET  list,  POST create
     path("traveldetails/", TravelDetailList.as_view(), name="traveldetail-list"),
@@ -26,5 +47,16 @@ urlpatterns = [
         "traveldetails/<uuid:pk>/",
         TravelDetailDetail.as_view(),
         name="traveldetail-detail",
+    ),
+    # TravelDetailField
+    path(
+        "traveldetail-fields/",
+        TravelDetailFieldList.as_view(),
+        name="traveldetailfield-list",
+    ),
+    path(
+        "traveldetail-fields/<uuid:pk>/",
+        TravelDetailFieldDetail.as_view(),
+        name="traveldetailfield-detail",
     ),
 ]

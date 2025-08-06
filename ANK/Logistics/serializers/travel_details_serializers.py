@@ -68,6 +68,12 @@ class TravelDetailSerializer(serializers.ModelSerializer):
         return instance
 
 
+class TravelDetailFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TravelDetail
+        fields = ["id", "name", "label"]
+
+
 # class TravelDetailSerializer(serializers.ModelSerializer):
 
 #     class Meta:
