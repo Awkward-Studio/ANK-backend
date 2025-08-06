@@ -52,6 +52,8 @@ class TravelDetail(models.Model):
     departure = models.CharField(max_length=20, choices=DEPARTURE_CHOICES, blank=True)
     departure_date = models.DateField(null=True, blank=True)
     departure_details = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def clean(self):
         super().clean()
