@@ -839,7 +839,7 @@ class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
         "post": doc_create(
             request=None,  # customize as needed
             response=None,  # customize as needed
-            description="Bulk assign all field permissions (event/guest/session) for a user on an event. Wipes previous.",
+            description="Bulk assign all field permissions (event/guest/session/travel/accommodation/eventregistration) for a user on an event. Wipes previous.",
             tags=["Field Permissions"],
         )
     }
@@ -850,7 +850,10 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
     {
       "eventfield_ids": [ ... ],
       "guestfield_ids": [ ... ],
-      "sessionfield_ids": [ ... ]
+      "sessionfield_ids": [ ... ],
+      "traveldetailfield_ids": [ ... ],
+      "accommodationfield_ids": [ ... ],
+      "eventregistrationfield_ids": [ ... ]
     }
     """
 
@@ -862,12 +865,22 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
             eventfield_ids = request.data.get("eventfield_ids", [])
             guestfield_ids = request.data.get("guestfield_ids", [])
             sessionfield_ids = request.data.get("sessionfield_ids", [])
+            traveldetailfield_ids = request.data.get("traveldetailfield_ids", [])
+            accommodationfield_ids = request.data.get("accommodationfield_ids", [])
+            eventregistrationfield_ids = request.data.get(
+                "eventregistrationfield_ids", []
+            )
 
             # Validate all are lists
-            if not all(
-                isinstance(ids, list)
-                for ids in [eventfield_ids, guestfield_ids, sessionfield_ids]
-            ):
+            all_fields = [
+                eventfield_ids,
+                guestfield_ids,
+                sessionfield_ids,
+                traveldetailfield_ids,
+                accommodationfield_ids,
+                eventregistrationfield_ids,
+            ]
+            if not all(isinstance(ids, list) for ids in all_fields):
                 return Response(
                     {"detail": "All fields must be lists of UUIDs."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -879,6 +892,15 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
                 user=user, event=event
             ).delete()
             UserEventSessionFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            UserEventTravelDetailFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            UserEventAccommodationFieldPermission.objects.filter(
+                user=user, event=event
+            ).delete()
+            UserEventEventRegistrationFieldPermission.objects.filter(
                 user=user, event=event
             ).delete()
 
@@ -901,6 +923,27 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
                 sf = get_object_or_404(SessionField, pk=sid)
                 UserEventSessionFieldPermission.objects.get_or_create(
                     user=user, event=event, session_field=sf
+                )
+
+            # Bulk create TravelDetailField perms
+            for tid in traveldetailfield_ids:
+                tf = get_object_or_404(TravelDetailField, pk=tid)
+                UserEventTravelDetailFieldPermission.objects.get_or_create(
+                    user=user, event=event, traveldetail_field=tf
+                )
+
+            # Bulk create AccommodationField perms
+            for aid in accommodationfield_ids:
+                af = get_object_or_404(AccommodationField, pk=aid)
+                UserEventAccommodationFieldPermission.objects.get_or_create(
+                    user=user, event=event, accommodation_field=af
+                )
+
+            # Bulk create EventRegistrationField perms
+            for erid in eventregistrationfield_ids:
+                erf = get_object_or_404(EventRegistrationField, pk=erid)
+                UserEventEventRegistrationFieldPermission.objects.get_or_create(
+                    user=user, event=event, eventregistration_field=erf
                 )
 
             return Response(

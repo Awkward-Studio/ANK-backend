@@ -40,14 +40,20 @@ from Events.views.staff_assignment_views import (
     SessionStaffAssignmentDetail,
 )
 from Events.views.staff_event_fields_permissions_views import (
+    UserEventAccommodationFieldPermAddRemoveAPIView,
+    UserEventAccommodationFieldPermsAPIView,
     UserEventAllAllowedFieldsAPIView,
     UserEventAssignAllFieldPermsAPIView,
     UserEventEventFieldPermsAPIView,
     UserEventEventFieldPermAddRemoveAPIView,
+    UserEventEventRegistrationFieldPermAddRemoveAPIView,
+    UserEventEventRegistrationFieldPermsAPIView,
     UserEventGuestFieldPermsAPIView,
     UserEventGuestFieldPermAddRemoveAPIView,
     UserEventSessionFieldPermsAPIView,
     UserEventSessionFieldPermAddRemoveAPIView,
+    UserEventTravelDetailFieldPermAddRemoveAPIView,
+    UserEventTravelDetailFieldPermsAPIView,
 )
 
 urlpatterns = [
@@ -257,6 +263,54 @@ urlpatterns = [
         "events/<uuid:event_pk>/users/<uuid:user_pk>/sessionfields/<uuid:field_pk>/",
         UserEventSessionFieldPermAddRemoveAPIView.as_view(),
         name="user-sessionfields-remove",
+    ),
+    # TravelDetailField perms
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/traveldetailfields/",
+        UserEventTravelDetailFieldPermsAPIView.as_view(),
+        name="user-traveldetailfields-list",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/traveldetailfields/add/",
+        UserEventTravelDetailFieldPermAddRemoveAPIView.as_view(),
+        name="user-traveldetailfields-add",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/traveldetailfields/<uuid:field_pk>/",
+        UserEventTravelDetailFieldPermAddRemoveAPIView.as_view(),
+        name="user-traveldetailfields-remove",
+    ),
+    # AccommodationField perms
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/accommodationfields/",
+        UserEventAccommodationFieldPermsAPIView.as_view(),
+        name="user-accommodationfields-list",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/accommodationfields/add/",
+        UserEventAccommodationFieldPermAddRemoveAPIView.as_view(),
+        name="user-accommodationfields-add",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/accommodationfields/<uuid:field_pk>/",
+        UserEventAccommodationFieldPermAddRemoveAPIView.as_view(),
+        name="user-accommodationfields-remove",
+    ),
+    # EventRegistrationField perms
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/eventregistrationfields/",
+        UserEventEventRegistrationFieldPermsAPIView.as_view(),
+        name="user-eventregistrationfields-list",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/eventregistrationfields/add/",
+        UserEventEventRegistrationFieldPermAddRemoveAPIView.as_view(),
+        name="user-eventregistrationfields-add",
+    ),
+    path(
+        "events/<uuid:event_pk>/users/<uuid:user_pk>/eventregistrationfields/<uuid:field_pk>/",
+        UserEventEventRegistrationFieldPermAddRemoveAPIView.as_view(),
+        name="user-eventregistrationfields-remove",
     ),
     # Fetch all guest(and their extra-attendees) for an event.
     path(
