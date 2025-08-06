@@ -54,6 +54,8 @@ class EventRegistration(models.Model):
 
     # Field to track how many extra attendees
     additional_guest_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         unique_together = ("guest", "event")
