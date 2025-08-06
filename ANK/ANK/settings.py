@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
+import dj_database_url
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,9 +28,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 # SECRET_KEY = "django-insecure-ddkszuou!6vdozt5u2d(w+4hjf3qi+^+&5lm%0^l7&dutj)&26"
 SECRET_KEY = os.getenv("SECRET_KEY")
-
+print("USE_JWT VALUE AT STARTUP:", SECRET_KEY)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False") == "True"
+
+
+def get_bool_env(var_name, default=False):
+    val = os.getenv(var_name, str(default))
+    print(f"DEBUG: {var_name}={val} (raw from env)")
+    return val.lower() in ("1", "true", "yes", "on")
+
+
+USE_JWT = get_bool_env("USE_JWT", False)
+print("USE_JWT VALUE AT STARTUP:", USE_JWT)
 
 ALLOWED_HOSTS = ["*"]
 
@@ -75,19 +86,26 @@ STATICSTORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ROOT_URLCONF = "ANK.urls"
 
-REST_FRAMEWORK = {
-    # "DEFAULT_AUTHENTICATION_CLASSES": [
-    #     "rest_framework.authentication.SessionAuthentication",
-    # ],
-    # "DEFAULT_AUTHENTICATION_CLASSES": [],
-    # "DEFAULT_PERMISSION_CLASSES": [
-    #     "rest_framework.permissions.IsAuthenticated",
-    # ],
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # "DEFAULT_AUTHENTICATION_CLASSES": (
-    #     "rest_framework_simplejwt.authentication.JWTAuthentication",
-    # ),
-}
+if USE_JWT:
+    REST_FRAMEWORK = {
+        "DEFAULT_AUTHENTICATION_CLASSES": [
+            "rest_framework_simplejwt.authentication.JWTAuthentication",
+        ],
+        "DEFAULT_PERMISSION_CLASSES": [
+            "rest_framework.permissions.IsAuthenticated",
+        ],
+        "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    }
+else:
+    REST_FRAMEWORK = {
+        "DEFAULT_AUTHENTICATION_CLASSES": [
+            "rest_framework.authentication.SessionAuthentication",
+        ],
+        "DEFAULT_PERMISSION_CLASSES": [
+            "rest_framework.permissions.IsAuthenticated",
+        ],
+        "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    }
 
 SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
@@ -130,13 +148,21 @@ WSGI_APPLICATION = "ANK.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+if os.getenv("RAILWAY_ENVIRONMENT_ID", None) or os.getenv("DATABASE_URL", None):
+    DATABASES = {
+        "default": dj_database_url.parse(
+            os.getenv("DATABASE_URL"),
+            conn_max_age=600,
+            ssl_require=not DEBUG,
+        )
     }
-}
-
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -214,8 +240,15 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 
+if DEBUG:
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SECURE = False
+else:
+    SESSION_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SAMESITE = "None"
+    CSRF_COOKIE_SECURE = True
+
 AUTH_USER_MODEL = "Staff.User"
-# SESSION_COOKIE_SAMESITE = "None"
-# SESSION_COOKIE_SECURE = True
-# CSRF_COOKIE_SAMESITE = "None"
-# CSRF_COOKIE_SECURE = True

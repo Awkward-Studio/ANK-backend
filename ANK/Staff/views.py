@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
-
+from django.conf import settings
 from docs.serializers import (
     TokenRefreshRequestSerializer,
     TokenRefreshResponseSerializer,
@@ -42,9 +42,202 @@ from drf_spectacular.utils import (
 )
 from django.contrib.auth import login, logout
 
+
+def is_jwt_mode():
+    """Reliable check for JWT mode (avoids weird truthy string bugs)"""
+    return bool(settings.USE_JWT)
+
+
+# ─── Register ────────────────────────────────────────────────────────────────
+
+
+@extend_schema(
+    request=RegisterSerializer,
+    responses={201: RegisterSerializer},
+    description="Register a new user; returns JWT tokens (if enabled) and/or sets session cookie.",
+    tags=["Authentication"],
+)
+class RegisterView(GenericAPIView):
+    permission_classes = (AllowAny,)
+    serializer_class = RegisterSerializer
+
+    def post(self, request):
+        try:
+            ser = RegisterSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            user = ser.save()
+            user_data = UserSerializer(user).data
+
+            if getattr(settings, "USE_JWT", False):
+                refresh = RefreshToken.for_user(user)
+                tokens = {
+                    "refresh": str(refresh),
+                    "access": str(refresh.access_token),
+                }
+                return Response(
+                    {
+                        "user": user_data,
+                        "tokens": tokens,
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+            else:
+                login(request, user)
+                return Response(
+                    {
+                        "user": user_data,
+                        "detail": "Registration successful, session started.",
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+        except serializers.ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Registration failed", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# ─── Login ───────────────────────────────────────────────────────────────────
+
+
+class EmailSessionLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
+class SessionLoginResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    user = UserSerializer()
+
+
+@extend_schema(
+    request=EmailSessionLoginSerializer,
+    responses={
+        200: SessionLoginResponseSerializer,
+        400: OpenApiResponse(description="Invalid credentials or missing fields"),
+    },
+    description="Login using email and password. Returns tokens (JWT) or sets session cookie (SessionAuth).",
+    tags=["Authentication"],
+)
+class LoginView(GenericAPIView):
+    permission_classes = (AllowAny,)
+    authentication_classes = []
+    serializer_class = EmailSessionLoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        print("====== HITTING CUSTOM LOGIN VIEW ======")
+
+        print(settings.USE_JWT)
+
+        # print("***** Custom LoginView CALLED *****")
+        ser = self.serializer_class(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = ser.validated_data["email"]
+        password = ser.validated_data["password"]
+
+        user = authenticate(request, email=email, password=password)
+        if user is not None:
+            user_data = UserSerializer(user).data
+            if settings.USE_JWT:
+                refresh = RefreshToken.for_user(user)
+                tokens = {
+                    "refresh": str(refresh),
+                    "access": str(refresh.access_token),
+                }
+                return Response(
+                    {
+                        "user": user_data,
+                        "tokens": tokens,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                login(request, user)
+                return Response(
+                    {
+                        "detail": "Login successful",
+                        "user": user_data,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+        else:
+            return Response(
+                {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+# ─── Token Refresh (JWT only) ────────────────────────────────────────────────
+
+
+@extend_schema(
+    request=TokenRefreshRequestSerializer,
+    responses={200: TokenRefreshResponseSerializer},
+    description="Refresh access token (JWT only)",
+    tags=["Authentication"],
+)
+class RefreshView(TokenRefreshView):
+    permission_classes = (AllowAny,)
+
+    def post(self, request, *args, **kwargs):
+        if not getattr(settings, "USE_JWT", False):
+            return Response(
+                {"detail": "Token refresh not enabled with session authentication."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().post(request, *args, **kwargs)
+
+
+# ─── Logout ──────────────────────────────────────────────────────────────────
+
+
+@extend_schema(
+    request=LogoutRequestSerializer,
+    responses={
+        205: OpenApiResponse(description="Refresh token blacklisted, session cleared")
+    },
+    description="Logout (JWT: blacklist refresh token, Session: clear session)",
+    tags=["Authentication"],
+)
+class LogoutView(GenericAPIView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class = LogoutRequestSerializer
+
+    def post(self, request):
+        try:
+            # JWT mode: blacklist refresh token if provided
+            if getattr(settings, "USE_JWT", False):
+                refresh_token = request.data.get("refresh")
+                if refresh_token:
+                    try:
+                        token = RefreshToken(refresh_token)
+                        token.blacklist()
+                    except (TokenError, InvalidToken) as jwt_error:
+                        return Response(
+                            {"detail": "Invalid token", "error": str(jwt_error)},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+            # Always try to logout session
+            try:
+                logout(request)
+            except Exception:
+                pass
+
+            return Response(
+                {"detail": "Logged out and token blacklisted (if provided)"},
+                status=status.HTTP_205_RESET_CONTENT,
+            )
+        except Exception as e:
+            return Response(
+                {"detail": "Logout failed", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
 # # ─── Register ────────────────────────────────────────────────────────────────
-
-
 # @extend_schema(
 #     request=RegisterSerializer,
 #     responses={201: RegisterSerializer},
@@ -177,161 +370,6 @@ from django.contrib.auth import login, logout
 #                 {"detail": "Logout failed", "error": str(e)},
 #                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
 #             )
-@extend_schema(
-    request=RegisterSerializer,
-    responses={201: RegisterSerializer},
-    description="Register a new user; returns JWT tokens and sets session cookie",
-    tags=["Authentication"],
-)
-class RegisterView(GenericAPIView):
-    permission_classes = (AllowAny,)
-    serializer_class = RegisterSerializer
-
-    def post(self, request):
-        try:
-            ser = RegisterSerializer(data=request.data)
-            ser.is_valid(raise_exception=True)
-            user = ser.save()
-
-            # Generate JWT tokens for the new user
-            refresh = RefreshToken.for_user(user)
-            tokens = {
-                "refresh": str(refresh),
-                "access": str(refresh.access_token),
-            }
-
-            # Log in user (creates session)
-            login(request, user)
-
-            # Serialize user data
-            user_data = UserSerializer(user).data
-
-            return Response(
-                {
-                    "user": user_data,
-                    "tokens": tokens,
-                },
-                status=status.HTTP_201_CREATED,
-            )
-        except serializers.ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Registration failed", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-
-class EmailSessionLoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
-
-
-class SessionLoginResponseSerializer(serializers.Serializer):
-    detail = serializers.CharField()
-
-
-@extend_schema(
-    request=EmailSessionLoginSerializer,
-    responses={
-        200: SessionLoginResponseSerializer,
-        400: OpenApiResponse(description="Invalid credentials or missing fields"),
-    },
-    description="Session-based login using email and password. Sets session cookie on success.",
-    tags=["Authentication"],
-)
-class LoginView(APIView):
-    permission_classes = (AllowAny,)
-    serializer_class = EmailSessionLoginSerializer
-
-    def post(self, request, *args, **kwargs):
-        ser = self.serializer_class(data=request.data)
-        if not ser.is_valid():
-            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        email = ser.validated_data["email"]
-        password = ser.validated_data["password"]
-
-        user = authenticate(request, email=email, password=password)
-        if user is not None:
-            login(request, user)
-            user_data = UserSerializer(user).data
-            return Response(
-                {
-                    "detail": "Login successful",
-                    "user": user_data,
-                },
-                status=status.HTTP_200_OK,
-            )
-        else:
-            return Response(
-                {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-
-# ─── Token Refresh ──────────────────────────────────────────────────────────
-
-
-@extend_schema(
-    request=TokenRefreshRequestSerializer,
-    responses={200: TokenRefreshResponseSerializer},
-    description="Refresh access token",
-    tags=["Authentication"],
-)
-class RefreshView(TokenRefreshView):
-    permission_classes = (AllowAny,)
-
-
-# ─── Logout ─────────────────────────────────────────────────────────────────
-
-
-@extend_schema(
-    request=LogoutRequestSerializer,
-    responses={
-        205: OpenApiResponse(description="Refresh token blacklisted, session cleared")
-    },
-    description="Logout and blacklist the provided refresh token and clear session",
-    tags=["Authentication"],
-)
-class LogoutView(GenericAPIView):
-    permission_classes = (IsAuthenticated,)
-    serializer_class = LogoutRequestSerializer
-
-    def post(self, request):
-        try:
-            # Blacklist JWT refresh token if present
-            refresh_token = request.data.get("refresh")
-            if refresh_token:
-                try:
-                    token = RefreshToken(refresh_token)
-                    token.blacklist()
-                except (TokenError, InvalidToken) as jwt_error:
-                    return Response(
-                        {"detail": "Invalid token", "error": str(jwt_error)},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-            # Log out user from session
-            try:
-                logout(request)
-            except Exception as e:
-                # If session is already logged out, just pass
-                pass
-
-            return Response(
-                {"detail": "Logged out and token blacklisted (if provided)"},
-                status=status.HTTP_205_RESET_CONTENT,
-            )
-        except KeyError:
-            return Response(
-                {"detail": "`refresh` field is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except Exception as e:
-            return Response(
-                {"detail": "Logout failed", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
 
 @document_api_view(
