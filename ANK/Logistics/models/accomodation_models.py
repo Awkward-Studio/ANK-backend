@@ -1,7 +1,7 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 import uuid
-from Logistics.models.hotel_models import Hotel
+from Logistics.models.hotel_models import EventHotel
 from Guest.models import Guest
 from Events.models.event_model import Event
 from Events.models.session_registration import SessionRegistration
@@ -26,8 +26,8 @@ class Accommodation(models.Model):
         on_delete=models.CASCADE,
         related_name="accommodations",
     )
-    hotel = models.ForeignKey(
-        Hotel, on_delete=models.CASCADE, related_name="accommodations"
+    event_hotel = models.ForeignKey(
+        EventHotel, on_delete=models.CASCADE, related_name="accommodations"
     )
     sharing_with = models.ForeignKey(
         Guest,

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from Logistics.models.accomodation_models import AccommodationField, Hotel
+from Logistics.models.accomodation_models import AccommodationField
 from Logistics.models.accomodation_models import Accommodation
 from Logistics.serializers.hotel_serializers import HotelSerializer
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee

@@ -1,5 +1,16 @@
 from django.urls import path
-from Logistics.views.hotel_views import HotelList, HotelDetail
+from Logistics.views.hotel_views import (
+    BulkRoomAvailabilityAPIView,
+    EventHotelDetail,
+    EventHotelList,
+    EventHotelRoomTypeDetail,
+    EventHotelRoomTypeList,
+    EventHotelsByEventAPIView,
+    HotelList,
+    HotelDetail,
+    RoomTypeAvailabilityAPIView,
+    RoomTypesByEventHotelAPIView,
+)
 from Logistics.views.accomodation_views import (
     AccommodationFieldDetail,
     AccommodationFieldList,
@@ -15,14 +26,46 @@ from Logistics.views.travel_details_views import (
 
 urlpatterns = [
     # ─── Hotel ────────────────────────────────────────────────────────
-    # GET  list,  POST create
     path("hotels/", HotelList.as_view(), name="hotel-list"),
-    # GET retrieve, PUT update, DELETE destroy
     path("hotels/<uuid:pk>/", HotelDetail.as_view(), name="hotel-detail"),
+    # EventHotel
+    path("event-hotels/", EventHotelList.as_view(), name="eventhotel-list"),
+    path(
+        "event-hotels/<uuid:pk>/", EventHotelDetail.as_view(), name="eventhotel-detail"
+    ),
+    # EventHotelRoomType
+    path(
+        "event-hotel-room-types/",
+        EventHotelRoomTypeList.as_view(),
+        name="eventhotelroomtype-list",
+    ),
+    path(
+        "event-hotel-room-types/<uuid:pk>/",
+        EventHotelRoomTypeDetail.as_view(),
+        name="eventhotelroomtype-detail",
+    ),
+    path(
+        "event-hotels/by-event/",
+        EventHotelsByEventAPIView.as_view(),
+        name="event-hotels-by-event",
+    ),
+    path(
+        "event-hotel-room-types/by-event-hotel/",
+        RoomTypesByEventHotelAPIView.as_view(),
+        name="room-types-by-event-hotel",
+    ),
+    path(
+        "event-hotel-room-types/<uuid:event_hotel_id>/<str:room_type>/availability/",
+        RoomTypeAvailabilityAPIView.as_view(),
+        name="room-type-availability",
+    ),
+    path(
+        "event-hotel-room-types/bulk-update-availability/",
+        BulkRoomAvailabilityAPIView.as_view(),
+        name="bulk-room-availability",
+    ),
     # ─── Accommodation ───────────────────────────────────────────────
-    # GET  list,  POST create
     path("accommodations/", AccommodationList.as_view(), name="accommodation-list"),
-    # GET retrieve, PUT update, DELETE destroy
     path(
         "accommodations/<uuid:pk>/",
         AccommodationDetail.as_view(),
@@ -40,9 +83,7 @@ urlpatterns = [
         name="accommodationfield-detail",
     ),
     # ─── TravelDetail ─────────────────────────────────────────────────
-    # GET  list,  POST create
     path("traveldetails/", TravelDetailList.as_view(), name="traveldetail-list"),
-    # GET retrieve, PUT update, DELETE destroy
     path(
         "traveldetails/<uuid:pk>/",
         TravelDetailDetail.as_view(),
