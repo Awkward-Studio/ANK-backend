@@ -23,6 +23,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 from ANK.csrf import csrf
+from Events.views.webhooks import track_send, whatsapp_rsvp
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -31,6 +32,7 @@ urlpatterns = [
     path("api/", include("Events.urls")),
     path("api/", include("Guest.urls")),
     path("api/", include("Logistics.urls")),
+    path("api/", include("MessageTemplates.urls")),
     # API schema generation (raw OpenAPI)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     # Swagger UI
@@ -45,4 +47,8 @@ urlpatterns = [
         SpectacularRedocView.as_view(url_name="schema"),
         name="redoc",
     ),
+    # ----------------- Webhook -------------------- #
+    path("api/webhooks/whatsapp-rsvp/", whatsapp_rsvp, name="whatsapp_rsvp"),
+    # path("api/debug/echo-secret/", echo_secret),
+    path("api/webhooks/track-send/", track_send, name="track_send"),
 ]

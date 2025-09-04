@@ -4,12 +4,17 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 
-from Logistics.models.hotel_models import EventHotel, EventHotelRoomType
-from Logistics.models.hotel_models import Hotel
+from Logistics.models.hotel_models import (
+    Hotel,
+    HotelRoomType,
+    EventHotel,
+    EventHotelRoomType,
+)
 from Logistics.serializers.hotel_serializers import (
-    EventHotelRoomTypeSerializer,
-    EventHotelSerializer,
     HotelSerializer,
+    HotelRoomTypeSerializer,
+    EventHotelSerializer,
+    EventHotelRoomTypeSerializer,
 )
 
 from utils.swagger import (
@@ -22,13 +27,19 @@ from utils.swagger import (
     query_param,
 )
 
+# -------------------------
+# Hotels
+# -------------------------
+
 
 @document_api_view(
     {
         "get": doc_list(
             response=HotelSerializer(many=True),
             parameters=[
-                query_param("name", "str", False, "Filter by hotel name"),
+                query_param("name", "str", False, "Filter by hotel name (icontains)"),
+                query_param("city", "str", False, "Filter by city (iexact)"),
+                query_param("country", "str", False, "Filter by country (iexact)"),
             ],
             description="List all hotels",
             tags=["Hotels"],
@@ -36,7 +47,10 @@ from utils.swagger import (
         "post": doc_create(
             request=HotelSerializer,
             response=HotelSerializer,
-            description="Create a new hotel",
+            description=(
+                "Create a new hotel. To add room types at the same time, pass "
+                "`room_types_input: [{name, total_count}, ...]`."
+            ),
             tags=["Hotels"],
         ),
     }
@@ -45,6 +59,15 @@ class HotelList(APIView):
     def get(self, request):
         try:
             qs = Hotel.objects.all()
+            name = request.GET.get("name")
+            city = request.GET.get("city")
+            country = request.GET.get("country")
+            if name:
+                qs = qs.filter(name__icontains=name)
+            if city:
+                qs = qs.filter(city__iexact=city)
+            if country:
+                qs = qs.filter(country__iexact=country)
             return Response(HotelSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -77,7 +100,7 @@ class HotelList(APIView):
         "put": doc_update(
             request=HotelSerializer,
             response=HotelSerializer,
-            description="Update a hotel by ID",
+            description="Update a hotel by ID (hotel fields only).",
             tags=["Hotels"],
         ),
         "delete": doc_destroy(description="Delete a hotel by ID", tags=["Hotels"]),
@@ -97,6 +120,7 @@ class HotelDetail(APIView):
     def put(self, request, pk):
         try:
             hotel = get_object_or_404(Hotel, pk=pk)
+            # Only hotel fields are updated here; manage room types via RoomType endpoints.
             ser = HotelSerializer(hotel, data=request.data, partial=True)
             ser.is_valid(raise_exception=True)
             hotel = ser.save()
@@ -121,6 +145,128 @@ class HotelDetail(APIView):
             )
 
 
+# -------------------------
+# Hotel Room Types (at Hotel level)
+# -------------------------
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=HotelRoomTypeSerializer(many=True),
+            parameters=[
+                query_param("hotel", "uuid", False, "Filter by hotel UUID"),
+                query_param("name", "str", False, "Filter by room type name (iexact)"),
+            ],
+            description="List hotel room types",
+            tags=["Hotel Room Types"],
+        ),
+        "post": doc_create(
+            request=HotelRoomTypeSerializer,
+            response=HotelRoomTypeSerializer,
+            description="Create a hotel room type (requires hotel_id).",
+            tags=["Hotel Room Types"],
+        ),
+    }
+)
+class HotelRoomTypeList(APIView):
+    def get(self, request):
+        try:
+            qs = HotelRoomType.objects.all()
+            hotel = request.GET.get("hotel")
+            name = request.GET.get("name")
+            if hotel:
+                qs = qs.filter(hotel__id=hotel)
+            if name:
+                qs = qs.filter(name__iexact=name)
+            return Response(HotelRoomTypeSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching room types", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            ser = HotelRoomTypeSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            if "hotel" not in ser.validated_data and "hotel_id" not in request.data:
+                return Response({"detail": "hotel_id is required"}, status=400)
+            room_type = ser.save()
+            return Response(
+                HotelRoomTypeSerializer(room_type).data,
+                status=status.HTTP_201_CREATED,
+            )
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating room type", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=HotelRoomTypeSerializer,
+            description="Retrieve a hotel room type by ID",
+            tags=["Hotel Room Types"],
+        ),
+        "put": doc_update(
+            request=HotelRoomTypeSerializer,
+            response=HotelRoomTypeSerializer,
+            description="Update a hotel room type by ID",
+            tags=["Hotel Room Types"],
+        ),
+        "delete": doc_destroy(
+            description="Delete a hotel room type by ID", tags=["Hotel Room Types"]
+        ),
+    }
+)
+class HotelRoomTypeDetail(APIView):
+    def get(self, request, pk):
+        try:
+            obj = get_object_or_404(HotelRoomType, pk=pk)
+            return Response(HotelRoomTypeSerializer(obj).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching room type", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request, pk):
+        try:
+            obj = get_object_or_404(HotelRoomType, pk=pk)
+            ser = HotelRoomTypeSerializer(obj, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            obj = ser.save()
+            return Response(HotelRoomTypeSerializer(obj).data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating room type", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        try:
+            obj = get_object_or_404(HotelRoomType, pk=pk)
+            obj.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error deleting room type", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# -------------------------
+# Event ↔ Hotel
+# -------------------------
+
+
 @document_api_view(
     {
         "get": doc_list(
@@ -129,7 +275,7 @@ class HotelDetail(APIView):
                 query_param("event", "uuid", False, "Filter by event UUID"),
                 query_param("hotel", "uuid", False, "Filter by hotel UUID"),
             ],
-            description="List all event-hotel associations",
+            description="List event-hotel associations",
             tags=["Event Hotels"],
         ),
         "post": doc_create(
@@ -161,9 +307,9 @@ class EventHotelList(APIView):
         try:
             ser = EventHotelSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            event_hotel = ser.save()
+            obj = ser.save()
             return Response(
-                EventHotelSerializer(event_hotel).data, status=status.HTTP_201_CREATED
+                EventHotelSerializer(obj).data, status=status.HTTP_201_CREATED
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
@@ -230,21 +376,32 @@ class EventHotelDetail(APIView):
             )
 
 
+# -------------------------
+# Event ↔ Hotel Room Types (allocations)
+# -------------------------
+
+
 @document_api_view(
     {
         "get": doc_list(
             response=EventHotelRoomTypeSerializer(many=True),
             parameters=[
-                query_param("event_hotel", "uuid", False, "Filter by event hotel UUID"),
-                query_param("room_type", "str", False, "Filter by room type"),
+                query_param("event_hotel", "uuid", False, "Filter by EventHotel UUID"),
+                query_param(
+                    "hotel_room_type", "uuid", False, "Filter by HotelRoomType UUID"
+                ),
             ],
-            description="List all event-hotel room types",
+            description="List event-hotel room type allocations",
             tags=["Event Hotel Room Types"],
         ),
         "post": doc_create(
             request=EventHotelRoomTypeSerializer,
             response=EventHotelRoomTypeSerializer,
-            description="Create a new room type for an event hotel",
+            description=(
+                "Create an allocation for an event-hotel and a hotel's room type. "
+                "Provide event_hotel_id, hotel_room_type_id, allocation_count, "
+                "and optionally available_count (defaults to allocation_count)."
+            ),
             tags=["Event Hotel Room Types"],
         ),
     }
@@ -252,17 +409,19 @@ class EventHotelDetail(APIView):
 class EventHotelRoomTypeList(APIView):
     def get(self, request):
         try:
-            qs = EventHotelRoomType.objects.all()
+            qs = EventHotelRoomType.objects.select_related(
+                "event_hotel", "hotel_room_type", "event_hotel__hotel"
+            )
             event_hotel = request.GET.get("event_hotel")
-            room_type = request.GET.get("room_type")
+            hotel_room_type = request.GET.get("hotel_room_type")
             if event_hotel:
                 qs = qs.filter(event_hotel__id=event_hotel)
-            if room_type:
-                qs = qs.filter(room_type__iexact=room_type)
+            if hotel_room_type:
+                qs = qs.filter(hotel_room_type__id=hotel_room_type)
             return Response(EventHotelRoomTypeSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
-                {"detail": "Error fetching room types", "error": str(e)},
+                {"detail": "Error fetching allocations", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -270,16 +429,16 @@ class EventHotelRoomTypeList(APIView):
         try:
             ser = EventHotelRoomTypeSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            room_type = ser.save()
+            obj = ser.save()
             return Response(
-                EventHotelRoomTypeSerializer(room_type).data,
+                EventHotelRoomTypeSerializer(obj).data,
                 status=status.HTTP_201_CREATED,
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
-                {"detail": "Error creating room type", "error": str(e)},
+                {"detail": "Error creating allocation", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -288,17 +447,17 @@ class EventHotelRoomTypeList(APIView):
     {
         "get": doc_retrieve(
             response=EventHotelRoomTypeSerializer,
-            description="Retrieve an event hotel room type by ID",
+            description="Retrieve an event-hotel room type allocation by ID",
             tags=["Event Hotel Room Types"],
         ),
         "put": doc_update(
             request=EventHotelRoomTypeSerializer,
             response=EventHotelRoomTypeSerializer,
-            description="Update an event hotel room type by ID",
+            description="Update an event-hotel room type allocation by ID",
             tags=["Event Hotel Room Types"],
         ),
         "delete": doc_destroy(
-            description="Delete an event hotel room type by ID",
+            description="Delete an event-hotel room type allocation by ID",
             tags=["Event Hotel Room Types"],
         ),
     }
@@ -310,7 +469,7 @@ class EventHotelRoomTypeDetail(APIView):
             return Response(EventHotelRoomTypeSerializer(obj).data)
         except Exception as e:
             return Response(
-                {"detail": "Error fetching room type", "error": str(e)},
+                {"detail": "Error fetching allocation", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -325,7 +484,7 @@ class EventHotelRoomTypeDetail(APIView):
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
-                {"detail": "Error updating room type", "error": str(e)},
+                {"detail": "Error updating allocation", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -336,9 +495,14 @@ class EventHotelRoomTypeDetail(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             return Response(
-                {"detail": "Error deleting room type", "error": str(e)},
+                {"detail": "Error deleting allocation", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+# -------------------------
+# Custom convenience endpoints
+# -------------------------
 
 
 @document_api_view(
@@ -357,8 +521,10 @@ class EventHotelsByEventAPIView(APIView):
         if not event_id:
             return Response({"detail": "Event UUID required"}, status=400)
         try:
-            event_hotels = EventHotel.objects.filter(event__id=event_id)
-            hotels = [eh.hotel for eh in event_hotels.select_related("hotel")]
+            event_hotels = EventHotel.objects.filter(event__id=event_id).select_related(
+                "hotel"
+            )
+            hotels = [eh.hotel for eh in event_hotels]
             return Response(HotelSerializer(hotels, many=True).data)
         except Exception as e:
             return Response(
@@ -372,7 +538,7 @@ class EventHotelsByEventAPIView(APIView):
         "get": doc_list(
             response=EventHotelRoomTypeSerializer(many=True),
             parameters=[query_param("event_hotel", "uuid", True, "EventHotel UUID")],
-            description="List all room types for an event hotel",
+            description="List all room type allocations for an EventHotel",
             tags=["Event Hotel Room Types"],
         ),
     }
@@ -387,7 +553,7 @@ class RoomTypesByEventHotelAPIView(APIView):
             return Response(EventHotelRoomTypeSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
-                {"detail": "Error fetching room types", "error": str(e)},
+                {"detail": "Error fetching room type allocations", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -396,33 +562,42 @@ class RoomTypesByEventHotelAPIView(APIView):
     {
         "get": doc_retrieve(
             response=EventHotelRoomTypeSerializer,
-            description="Get room type availability for an event hotel",
+            description="Get availability for a named room type under an EventHotel",
             tags=["Event Hotel Room Types"],
         ),
     }
 )
 class RoomTypeAvailabilityAPIView(APIView):
-    def get(self, request, event_hotel_id, room_type):
+    """
+    URL expects: /.../availability/<event_hotel_id>/<room_type_name>/
+    """
+
+    def get(self, request, event_hotel_id, room_type_name):
         try:
-            room = EventHotelRoomType.objects.get(
-                event_hotel__id=event_hotel_id, room_type=room_type
+            event_hotel = get_object_or_404(EventHotel, id=event_hotel_id)
+            # Find the hotel's room type by name
+            hotel_room_type = get_object_or_404(
+                HotelRoomType, hotel=event_hotel.hotel, name=room_type_name
             )
-            return Response(EventHotelRoomTypeSerializer(room).data)
-        except EventHotelRoomType.DoesNotExist:
-            return Response({"detail": "Room type not found."}, status=404)
+            obj = get_object_or_404(
+                EventHotelRoomType,
+                event_hotel=event_hotel,
+                hotel_room_type=hotel_room_type,
+            )
+            return Response(EventHotelRoomTypeSerializer(obj).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching availability", "error": str(e)},
-                status=500,
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
 @document_api_view(
     {
         "put": doc_update(
-            request=None,  # customize as needed
+            request=None,
             response=EventHotelRoomTypeSerializer(many=True),
-            description="Bulk update available_count for multiple room types in an event hotel",
+            description="Bulk update available_count for multiple event-hotel room type allocations",
             tags=["Event Hotel Room Types"],
         ),
     }
@@ -432,17 +607,26 @@ class BulkRoomAvailabilityAPIView(APIView):
         updates = request.data.get("room_updates", [])
         if not isinstance(updates, list):
             return Response({"detail": "room_updates should be a list"}, status=400)
+
         updated = []
-        for upd in updates:
-            pk = upd.get("id")
-            count = upd.get("available_count")
-            if not pk or count is None:
-                continue
-            try:
-                room = EventHotelRoomType.objects.get(pk=pk)
-                room.available_count = count
-                room.save()
-                updated.append(room)
-            except EventHotelRoomType.DoesNotExist:
-                continue
-        return Response(EventHotelRoomTypeSerializer(updated, many=True).data)
+        try:
+            for upd in updates:
+                pk = upd.get("id")
+                count = upd.get("available_count")
+                if not pk or count is None:
+                    continue
+                obj = EventHotelRoomType.objects.get(pk=pk)
+                # Optional: basic guard to prevent available > allocation
+                if count < 0 or count > obj.allocation_count:
+                    continue
+                obj.available_count = count
+                obj.save()
+                updated.append(obj)
+            return Response(EventHotelRoomTypeSerializer(updated, many=True).data)
+        except EventHotelRoomType.DoesNotExist:
+            return Response({"detail": "One or more IDs not found."}, status=404)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating availability", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

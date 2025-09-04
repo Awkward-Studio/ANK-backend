@@ -45,6 +45,7 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -56,17 +57,19 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",  # for logout/blacklist
-    "Events",
+    "Events.apps.EventsConfig",
     "Guest",
     "Staff",
     "CustomField",
     "Logistics",
+    "MessageTemplates",
     "drf_spectacular",
+    "channels",
 ]
 
 MIDDLEWARE = [
-    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -141,6 +144,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "ANK.wsgi.application"
+ASGI_APPLICATION = "ANK.asgi.application"
 
 
 # Database
@@ -198,6 +202,7 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -250,3 +255,33 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 AUTH_USER_MODEL = "Staff.User"
+
+# -------------------------------------------------------------
+# Channels (Redis in prod; in-memory fallback for easy local dev)
+# -------------------------------------------------------------
+REDIS_URL = os.getenv("REDIS_URL", "")  # set to "redis://127.0.0.1:6379/0" to use Redis
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        }
+    }
+else:
+    # In-memory layer is perfect for LOCAL single-process testing
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+
+# -------------------------------------------------------------
+# Logging (helps catch signal/consumer errors in console)
+# -------------------------------------------------------------
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
+}

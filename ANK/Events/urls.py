@@ -56,6 +56,8 @@ from Events.views.staff_event_fields_permissions_views import (
     UserEventTravelDetailFieldPermsAPIView,
 )
 
+from Events.views.webhooks import whatsapp_rsvp
+
 urlpatterns = [
     # ─── Events ────────────────────────────────────────────────────────────
     path("events/", EventListCreateView.as_view(), name="event-list"),

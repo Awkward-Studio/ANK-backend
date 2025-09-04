@@ -8,6 +8,8 @@ from Logistics.views.hotel_views import (
     EventHotelsByEventAPIView,
     HotelList,
     HotelDetail,
+    HotelRoomTypeDetail,
+    HotelRoomTypeList,
     RoomTypeAvailabilityAPIView,
     RoomTypesByEventHotelAPIView,
 )
@@ -63,6 +65,12 @@ urlpatterns = [
         "event-hotel-room-types/bulk-update-availability/",
         BulkRoomAvailabilityAPIView.as_view(),
         name="bulk-room-availability",
+    ),
+    path("hotel-room-types/", HotelRoomTypeList.as_view(), name="hotelroomtype-list"),
+    path(
+        "hotel-room-types/<uuid:pk>/",
+        HotelRoomTypeDetail.as_view(),
+        name="hotelroomtype-detail",
     ),
     # ─── Accommodation ───────────────────────────────────────────────
     path("accommodations/", AccommodationList.as_view(), name="accommodation-list"),
