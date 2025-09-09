@@ -58,13 +58,12 @@ class MessageTemplateVariable(models.Model):
 
 class QueuedMessage(models.Model):
     """
-    Stores a message we wanted to send to a guest but couldn't
-    because the 24h WhatsApp session was closed.
+    Stores the final rendered local message we wanted to send but couldn't
+    because the 24h WhatsApp window was closed.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # Link to event + guest
     event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="queued_messages"
     )
@@ -72,18 +71,26 @@ class QueuedMessage(models.Model):
         EventRegistration, on_delete=models.CASCADE, related_name="queued_messages"
     )
 
-    # The template that generated this message (optional)
     template = models.ForeignKey(
         MessageTemplate, on_delete=models.SET_NULL, null=True, blank=True
     )
 
-    # Fully rendered text we planned to send
+    # Final text already rendered with {{vars}}. No surprises later.
     rendered_text = models.TextField()
 
-    # Status tracking
     sent = models.BooleanField(default=False)
     created_at = models.DateTimeField(default=timezone.now)
     sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["registration", "sent"]),
+        ]
+
+    def mark_sent(self):
+        self.sent = True
+        self.sent_at = timezone.now()
+        self.save(update_fields=["sent", "sent_at"])
 
     def __str__(self):
         return f"QueuedMessage(reg={self.registration_id}, sent={self.sent})"

@@ -18,11 +18,22 @@ class HotelRoomTypeSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "total_count", "hotel_id"]
 
 
+class HotelRoomTypeNestedCreateSerializer(serializers.ModelSerializer):
+    """Used only when creating room types inside Hotel.create().
+    No hotel_id here; parent will attach hotel.
+    """
+
+    class Meta:
+        model = HotelRoomType
+        fields = ["name", "total_count"]
+
+
 class HotelSerializer(serializers.ModelSerializer):
     # Read room types with hotel
     room_types = HotelRoomTypeSerializer(many=True, read_only=True)
-    # Allow nested creation: pass "room_types_input" when creating a hotel
-    room_types_input = HotelRoomTypeSerializer(
+
+    # Use the nested-create variant for incoming POST data
+    room_types_input = HotelRoomTypeNestedCreateSerializer(
         many=True, write_only=True, required=False
     )
 
