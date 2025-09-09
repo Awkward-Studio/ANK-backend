@@ -39,7 +39,7 @@ class SendLocalTemplateView(APIView):
       - Returns JSON indicating 'sent' or 'queued'.
     """
 
-    permission_classes = [IsAuthenticated]  # adjust if needed
+    # permission_classes = [IsAuthenticated]
 
     def post(self, request, event_id: str, registration_id: str):
         serializer = SendTemplateInput(data=request.data)
