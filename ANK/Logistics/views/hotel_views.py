@@ -58,7 +58,7 @@ from utils.swagger import (
 class HotelList(APIView):
     def get(self, request):
         try:
-            qs = Hotel.objects.all()
+            qs = Hotel.objects.all().prefetch_related("room_types")
             name = request.GET.get("name")
             city = request.GET.get("city")
             country = request.GET.get("country")
