@@ -508,7 +508,7 @@ class EventHotelRoomTypeDetail(APIView):
 @document_api_view(
     {
         "get": doc_list(
-            response=HotelSerializer(many=True),
+            response=EventHotelSerializer(many=True),
             parameters=[query_param("event", "uuid", True, "Event UUID")],
             description="List all hotels for a specific event",
             tags=["Hotels"],
@@ -519,13 +519,16 @@ class EventHotelsByEventAPIView(APIView):
     def get(self, request):
         event_id = request.GET.get("event")
         if not event_id:
-            return Response({"detail": "Event UUID required"}, status=400)
-        try:
-            event_hotels = EventHotel.objects.filter(event__id=event_id).select_related(
-                "hotel"
+            return Response(
+                {"detail": "Event UUID required"}, status=status.HTTP_400_BAD_REQUEST
             )
-            hotels = [eh.hotel for eh in event_hotels]
-            return Response(HotelSerializer(hotels, many=True).data)
+        try:
+            qs = EventHotel.objects.filter(event_id=event_id).select_related(
+                "hotel"
+            )  # efficient join
+            return Response(
+                EventHotelSerializer(qs, many=True).data, status=status.HTTP_200_OK
+            )
         except Exception as e:
             return Response(
                 {"detail": "Error fetching hotels for event", "error": str(e)},
