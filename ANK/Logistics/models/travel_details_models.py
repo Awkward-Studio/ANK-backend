@@ -24,6 +24,7 @@ class TravelDetail(models.Model):
         on_delete=models.CASCADE,
         related_name="travel_details",
     )
+
     ARRIVAL_CHOICES = [
         ("commercial", "Commercial"),
         ("local_pickup", "Local Pickup"),
@@ -35,23 +36,31 @@ class TravelDetail(models.Model):
         ("Car", "Car"),
     ]
     DEPARTURE_CHOICES = ARRIVAL_CHOICES
+
     travel_type = models.CharField(
         max_length=20, choices=TRAVEL_TYPE_CHOICES, blank=True
     )
+
+    # --- Arrival fields ---
     arrival = models.CharField(max_length=20, choices=ARRIVAL_CHOICES)
     arrival_date = models.DateField()
     flight_number = models.CharField(max_length=20, blank=True)
     airline = models.CharField(max_length=50, blank=True)
-    pnr = models.CharField(max_length=20, blank=True)
+    pnr = models.CharField(max_length=20, blank=True, null=True)
     arrival_details = models.TextField(blank=True)
     arrival_time = models.TimeField()
     hotel_arrival_time = models.TimeField(null=True, blank=True)
     hotel_departure_time = models.TimeField(null=True, blank=True)
 
+    # --- Departure fields ---
     return_travel = models.BooleanField(default=False)
     departure = models.CharField(max_length=20, choices=DEPARTURE_CHOICES, blank=True)
     departure_date = models.DateField(null=True, blank=True)
     departure_details = models.TextField(blank=True)
+    departure_flight_number = models.CharField(max_length=20, null=True, blank=True)
+    departure_airline = models.CharField(max_length=50, null=True, blank=True)
+    departure_pnr = models.CharField(max_length=20, null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

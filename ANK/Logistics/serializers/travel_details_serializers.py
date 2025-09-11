@@ -2,8 +2,6 @@ from rest_framework import serializers
 from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
-# serializers.py
-
 
 class TravelDetailSerializer(serializers.ModelSerializer):
     event_registrations = serializers.PrimaryKeyRelatedField(
@@ -31,6 +29,9 @@ class TravelDetailSerializer(serializers.ModelSerializer):
             "departure",
             "departure_date",
             "departure_details",
+            "departure_flight_number",
+            "departure_airline",
+            "departure_pnr",
             "flight_number",
             "airline",
             "pnr",
