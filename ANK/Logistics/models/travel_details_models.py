@@ -42,13 +42,15 @@ class TravelDetail(models.Model):
     )
 
     # --- Arrival fields ---
-    arrival = models.CharField(max_length=20, choices=ARRIVAL_CHOICES)
-    arrival_date = models.DateField()
+    arrival = models.CharField(
+        max_length=20, choices=ARRIVAL_CHOICES, blank=True, null=True
+    )
+    arrival_date = models.DateField(null=True, blank=True)
     flight_number = models.CharField(max_length=20, blank=True)
     airline = models.CharField(max_length=50, blank=True)
     pnr = models.CharField(max_length=20, blank=True, null=True)
     arrival_details = models.TextField(blank=True)
-    arrival_time = models.TimeField()
+    arrival_time = models.TimeField(blank=True, null=True)
     hotel_arrival_time = models.TimeField(null=True, blank=True)
     hotel_departure_time = models.TimeField(null=True, blank=True)
 
