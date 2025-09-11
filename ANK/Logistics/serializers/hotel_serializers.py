@@ -29,10 +29,10 @@ class HotelRoomTypeNestedCreateSerializer(serializers.ModelSerializer):
 
 
 class HotelSerializer(serializers.ModelSerializer):
-    # Read room types with hotel
+    # Read: show related room types via related_name="room_types"
     room_types = HotelRoomTypeSerializer(many=True, read_only=True)
 
-    # Use the nested-create variant for incoming POST data
+    # Write: preferred input key
     room_types_input = HotelRoomTypeNestedCreateSerializer(
         many=True, write_only=True, required=False
     )
@@ -45,17 +45,42 @@ class HotelSerializer(serializers.ModelSerializer):
             "address",
             "country",
             "city",
-            "room_types",
-            "room_types_input",
+            "room_types",  # read-only output
+            "room_types_input",  # write-only input (preferred)
         ]
 
     def create(self, validated_data):
-        room_types_data = validated_data.pop("room_types_input", [])
+        # Primary (documented) input
+        room_types_data = validated_data.pop("room_types_input", None)
+
+        # Back-compat / ergonomic input:
+        # if client sent "room_types" (your current payload), accept it for create
+        if room_types_data is None:
+            # self.initial_data is the raw incoming payload before validation
+            candidate = self.initial_data.get("room_types")
+            if isinstance(candidate, list):
+                # Optionally validate the list items, keeping it minimal:
+                room_types_data = []
+                for item in candidate:
+                    # Allow {"name": "...", "total_count": 23}
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name")
+                    total = item.get("total_count", 0)
+                    if name is None:
+                        continue
+                    room_types_data.append(
+                        {"name": str(name), "total_count": int(total or 0)}
+                    )
+            else:
+                room_types_data = []
+
         hotel = Hotel.objects.create(**validated_data)
-        for rt in room_types_data:
-            # "hotel" is implied by context; ignore any accidental hotel_id here
-            rt.pop("hotel", None)
+
+        # Create nested room types (if any)
+        for rt in room_types_data or []:
             HotelRoomType.objects.create(hotel=hotel, **rt)
+
         return hotel
 
 
