@@ -11,6 +11,7 @@ from Logistics.views.hotel_views import (
     HotelRoomTypeDetail,
     HotelRoomTypeList,
     RoomTypeAvailabilityAPIView,
+    RoomTypesByEventAPIView,
     RoomTypesByEventHotelAPIView,
 )
 from Logistics.views.accomodation_views import (
@@ -55,6 +56,11 @@ urlpatterns = [
         "event-hotel-room-types/by-event-hotel/",
         RoomTypesByEventHotelAPIView.as_view(),
         name="room-types-by-event-hotel",
+    ),
+    path(
+        "event-hotel-room-types/by-event/",
+        RoomTypesByEventAPIView.as_view(),
+        name="ehrtypes-by-event",
     ),
     path(
         "event-hotel-room-types/<uuid:event_hotel_id>/<str:room_type>/availability/",

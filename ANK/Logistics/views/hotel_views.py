@@ -633,3 +633,40 @@ class BulkRoomAvailabilityAPIView(APIView):
                 {"detail": "Error updating availability", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventHotelRoomTypeSerializer(many=True),
+            parameters=[query_param("event", "uuid", True, "Event UUID")],
+            description="List all room type allocations for a given Event (across all EventHotels under that event).",
+            tags=["Event Hotel Room Types"],
+        ),
+    }
+)
+class RoomTypesByEventAPIView(APIView):
+    def get(self, request):
+        event_id = request.GET.get("event")
+        if not event_id:
+            return Response({"detail": "Event UUID required"}, status=400)
+
+        try:
+            qs = EventHotelRoomType.objects.filter(
+                event_hotel__event_id=event_id
+            ).select_related(
+                "event_hotel",
+                "event_hotel__hotel",
+                "hotel_room_type",
+                "hotel_room_type__hotel",
+            )
+            data = EventHotelRoomTypeSerializer(qs, many=True).data
+            return Response(data)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error fetching room type allocations for event",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
