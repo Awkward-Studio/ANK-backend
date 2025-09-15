@@ -6,15 +6,17 @@ from Logistics.models.accomodation_models import (
     EventHotelRoomType,
     EventHotel,
 )
-from Logistics.serializers.hotel_serializers import HotelSerializer
+from Logistics.serializers.hotel_serializers import (
+    EventHotelSerializer,
+    HotelSerializer,
+)
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class AccommodationSerializer(serializers.ModelSerializer):
-    # Optional: expose hotel details via the event_hotel relation
-    hotel = HotelSerializer(source="event_hotel.hotel", read_only=True)
 
-    event_hotel = serializers.PrimaryKeyRelatedField(queryset=EventHotel.objects.all())
+    event_hotel = EventHotelSerializer(read_only=True)
+
     event_room_type = serializers.PrimaryKeyRelatedField(
         queryset=EventHotelRoomType.objects.all()
     )
@@ -33,7 +35,6 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "event",
             "event_hotel",
             "event_room_type",
-            "hotel",
             "event_registrations",
             "extra_attendees",
             "sharing_with",
@@ -45,7 +46,7 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["created_at", "updated_at", "hotel"]
+        read_only_fields = ["created_at", "updated_at"]
 
     def validate(self, data):
         ers = data.get("event_registrations", [])
