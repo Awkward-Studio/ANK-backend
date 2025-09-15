@@ -15,7 +15,7 @@ from Events.models.event_registration_model import EventRegistration, ExtraAtten
 
 class AccommodationSerializer(serializers.ModelSerializer):
 
-    event_room_type = EventHotelRoomTypeSerializer(many=True)
+    event_room_type = EventHotelRoomTypeSerializer()
 
     # event_registrations = serializers.PrimaryKeyRelatedField(
     #     queryset=EventRegistration.objects.all(), many=True, required=False
