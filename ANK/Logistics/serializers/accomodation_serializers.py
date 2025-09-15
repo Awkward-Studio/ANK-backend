@@ -1,12 +1,24 @@
+from django.db import transaction
 from rest_framework import serializers
-from Logistics.models.accomodation_models import AccommodationField
-from Logistics.models.accomodation_models import Accommodation
+from Logistics.models.accomodation_models import (
+    Accommodation,
+    AccommodationField,
+    EventHotelRoomType,
+    EventHotel,
+)
 from Logistics.serializers.hotel_serializers import HotelSerializer
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class AccommodationSerializer(serializers.ModelSerializer):
-    hotel = HotelSerializer(read_only=True)
+    # Optional: expose hotel details via the event_hotel relation
+    hotel = HotelSerializer(source="event_hotel.hotel", read_only=True)
+
+    event_hotel = serializers.PrimaryKeyRelatedField(queryset=EventHotel.objects.all())
+    event_room_type = serializers.PrimaryKeyRelatedField(
+        queryset=EventHotelRoomType.objects.all()
+    )
+
     event_registrations = serializers.PrimaryKeyRelatedField(
         queryset=EventRegistration.objects.all(), many=True, required=False
     )
@@ -19,12 +31,13 @@ class AccommodationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "event",
+            "event_hotel",
+            "event_room_type",
+            "hotel",
             "event_registrations",
             "extra_attendees",
-            "hotel",
             "sharing_with",
             "room_count",
-            "room_type",
             "bed_type",
             "check_in",
             "check_out",
@@ -32,6 +45,7 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["created_at", "updated_at", "hotel"]
 
     def validate(self, data):
         ers = data.get("event_registrations", [])
@@ -40,82 +54,71 @@ class AccommodationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "At least one event registration or extra attendee must be assigned."
             )
-        # Optional: Prevent any duplicate assignment logic here, if needed
+
+        event_hotel = data.get("event_hotel") or getattr(
+            self.instance, "event_hotel", None
+        )
+        event_room_type = data.get("event_room_type") or getattr(
+            self.instance, "event_room_type", None
+        )
+        room_count = data.get("room_count", getattr(self.instance, "room_count", 1))
+
+        if not event_hotel or not event_room_type:
+            raise serializers.ValidationError(
+                "event_hotel and event_room_type are required."
+            )
+
+        # Ensure the selected event_room_type belongs to the same event_hotel
+        if event_room_type.event_hotel_id != event_hotel.id:
+            raise serializers.ValidationError(
+                "Selected event_room_type does not belong to the provided event_hotel."
+            )
+
+        if room_count <= 0:
+            raise serializers.ValidationError("room_count must be a positive integer.")
+
         return data
 
+    @transaction.atomic
     def create(self, validated_data):
-        ers = validated_data.pop("event_registrations", [])
-        eas = validated_data.pop("extra_attendees", [])
-        acc = Accommodation.objects.create(**validated_data)
-        if ers:
-            acc.event_registrations.set(ers)
-        if eas:
-            acc.extra_attendees.set(eas)
-        return acc
+        room_type = validated_data["event_room_type"]
+        count = validated_data.get("room_count", 1)
 
+        rt = EventHotelRoomType.objects.select_for_update().get(pk=room_type.pk)
+        if rt.available_count < count:
+            raise serializers.ValidationError("Not enough rooms available.")
+
+        rt.available_count -= count
+        rt.save()
+        return super().create(validated_data)
+
+    @transaction.atomic
     def update(self, instance, validated_data):
-        ers = validated_data.pop("event_registrations", None)
-        eas = validated_data.pop("extra_attendees", None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if ers is not None:
-            instance.event_registrations.set(ers)
-        if eas is not None:
-            instance.extra_attendees.set(eas)
-        return instance
+        new_rt = validated_data.get("event_room_type", instance.event_room_type)
+        new_count = validated_data.get("room_count", instance.room_count)
+
+        old_rt = instance.event_room_type
+        old_count = instance.room_count
+
+        if new_rt != old_rt or new_count != old_count:
+            # lock both
+            rts = EventHotelRoomType.objects.select_for_update().filter(
+                pk__in=[old_rt.pk, new_rt.pk]
+            )
+            rt_map = {rt.pk: rt for rt in rts}
+
+            rt_map[old_rt.pk].available_count += old_count
+            if rt_map[new_rt.pk].available_count < new_count:
+                raise serializers.ValidationError("Not enough rooms available.")
+            rt_map[new_rt.pk].available_count -= new_count
+
+            for rt in rt_map.values():
+                rt.save()
+
+        return super().update(instance, validated_data)
 
 
 class AccommodationFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccommodationField
         fields = ["id", "name", "label"]
-
-
-# class AccommodationSerializer(serializers.ModelSerializer):
-#     hotel = HotelSerializer(read_only=True)
-#     event_registrations = serializers.PrimaryKeyRelatedField(
-#         queryset=EventRegistration.objects.all(), many=True, required=False
-#     )
-#     extra_attendees = serializers.PrimaryKeyRelatedField(
-#         queryset=ExtraAttendee.objects.all(), many=True, required=False
-#     )
-
-#     class Meta:
-#         model = Accommodation
-#         fields = [
-#             "id",
-#             "event_id",
-#             "event_registration",
-#             "session_registration",
-#             "hotel",
-#             "sharing_with",
-#             "room_count",
-#             "room_type",
-#             "bed_type",
-#             "check_in",
-#             "check_out",
-#             "rooming_remarks",
-#             "extra_attendee",
-#             "created_at",
-#             "updated_at",
-#         ]
-
-#     def validate(self, data):
-#         extra_attendee = data.get("extra_attendee")
-#         er = data.get("event_registration")
-#         sr = data.get("session_registration")
-
-#         if extra_attendee:
-#             # ensure they didn’t also pass registration FKs
-#             if er or sr:
-#                 raise serializers.ValidationError(
-#                     "When specifying attendee, do NOT set event_registration or session_registration."
-#                 )
-#             return data
-#         # enforce exactly one FK is provided
-#         if not bool(er) ^ bool(sr):
-#             raise serializers.ValidationError(
-#                 "Provide exactly one of event_registration or session_registration when no attendee is given."
-#             )
-#         return data
