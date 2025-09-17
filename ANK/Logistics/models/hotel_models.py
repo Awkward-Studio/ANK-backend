@@ -5,10 +5,13 @@ from Events.models.event_model import Event
 
 class Hotel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=200, unique=True)
+    name = models.CharField(max_length=200)
     address = models.CharField(max_length=300)
     country = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ("name", "city")
 
     def __str__(self):
         return f"{self.name} - {self.city}, {self.country}"

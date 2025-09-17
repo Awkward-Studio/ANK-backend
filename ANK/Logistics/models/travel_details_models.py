@@ -81,49 +81,6 @@ class TravelDetail(models.Model):
         names = ", ".join(str(obj) for obj in assigned)
         return f"TravelDetail for: {names or 'No one'}"
 
-    # class Meta:
-    #     constraints = [
-    #         # ensure either:
-    #         # attendee is set (and we ignore the old registration fields), or
-    #         # exactly one of the registration FKs is set
-    #         models.CheckConstraint(
-    #             check=(
-    #                 models.Q(extra_attendee__isnull=False)
-    #                 | (
-    #                     models.Q(extra_attendee__isnull=True)
-    #                     & (
-    #                         models.Q(event_registration__isnull=False)
-    #                         & models.Q(session_registration__isnull=True)
-    #                     )
-    #                     | (
-    #                         models.Q(event_registration__isnull=True)
-    #                         & models.Q(session_registration__isnull=False)
-    #                     )
-    #                 )
-    #             ),
-    #             name="travel_details_extraattendee_or_one_registration",
-    #         )
-    #     ]
-
-    # def clean(self):
-    #     super().clean()
-    #     # count how many of the three are truthy
-    #     choices = [
-    #         bool(self.event_registration),
-    #         bool(self.session_registration),
-    #         bool(self.extra_attendee),
-    #     ]
-    #     if sum(choices) != 1:
-    #         raise ValidationError(
-    #             "Exactly one of event_registration, session_registration or extra_attendee must be set."
-    #         )
-
-    # def __str__(self):
-    #     target = (
-    #         self.extra_attendee or self.event_registration or self.session_registration
-    #     )
-    #     return f"Travel Details for {target}"
-
 
 class TravelDetailField(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

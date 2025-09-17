@@ -96,16 +96,17 @@ class EventHotelSerializer(serializers.ModelSerializer):
 
 
 class EventHotelRoomTypeSerializer(serializers.ModelSerializer):
+    # Read-only nested representations for GETs
     event_hotel = EventHotelSerializer(read_only=True)
-    # event_hotel_id = serializers.PrimaryKeyRelatedField(
-    #     queryset=EventHotel.objects.all(), source="event_hotel", write_only=True
-    # )
     hotel_room_type = HotelRoomTypeSerializer(read_only=True)
-    # hotel_room_type_id = serializers.PrimaryKeyRelatedField(
-    #     queryset=HotelRoomType.objects.all(),
-    #     source="hotel_room_type",
-    #     write_only=True,
-    # )
+
+    # Write-only ID inputs for POST/PUT/PATCH
+    event_hotel_id = serializers.PrimaryKeyRelatedField(
+        queryset=EventHotel.objects.all(), source="event_hotel", write_only=True
+    )
+    hotel_room_type_id = serializers.PrimaryKeyRelatedField(
+        queryset=HotelRoomType.objects.all(), source="hotel_room_type", write_only=True
+    )
 
     class Meta:
         model = EventHotelRoomType
