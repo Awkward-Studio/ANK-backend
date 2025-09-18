@@ -4,25 +4,17 @@ from Logistics.models.accomodation_models import (
     Accommodation,
     AccommodationField,
     EventHotelRoomType,
-    EventHotel,
 )
 from Logistics.serializers.hotel_serializers import (
-    EventHotelSerializer,
     EventHotelRoomTypeSerializer,
 )
-from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class AccommodationSerializer(serializers.ModelSerializer):
 
-    event_room_type = EventHotelRoomTypeSerializer()
-
-    # event_registrations = serializers.PrimaryKeyRelatedField(
-    #     queryset=EventRegistration.objects.all(), many=True, required=False
-    # )
-    # extra_attendees = serializers.PrimaryKeyRelatedField(
-    #     queryset=ExtraAttendee.objects.all(), many=True, required=False
-    # )
+    event_room_type = serializers.PrimaryKeyRelatedField(
+        queryset=EventHotelRoomType.objects.all()
+    )
 
     class Meta:
         model = Accommodation
