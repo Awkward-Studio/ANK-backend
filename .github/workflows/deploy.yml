@@ -31,6 +31,15 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Debug build context
+        run: |
+          pwd
+          git rev-parse --short HEAD
+          echo "--- top-level ---"
+          ls -la
+          echo "--- .dockerignore ---"
+          [ -f .dockerignore ] && cat .dockerignore || echo "(none)"
+
       - name: Build, tag, and push image
         run: |
           IMAGE_URI=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_NAME }}:${{ env.IMAGE_TAG }}
