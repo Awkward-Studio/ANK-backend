@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+echo "== ls /app =="
+ls -la /app || true
 
 # Fail fast if critical envs missing (so you see clear errors)
 : "${SECRET_KEY:?SECRET_KEY not set}"
