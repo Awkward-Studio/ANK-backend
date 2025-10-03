@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-echo "== ls /app =="
-ls -la /app || true
 
-# Fail fast if critical envs missing (so you see clear errors)
-: "${SECRET_KEY:?SECRET_KEY not set}"
-: "${DATABASE_URL:?DATABASE_URL not set}"
-: "${REDIS_URL:?REDIS_URL not set}"
+cd /app
 
 # ---- RELEASE PHASE ----
-# python 3.11.4; run in container startup so every deploy migrates, creates superuser, collects static
-python manage.py migrate --noinput
-python manage.py ensure_superuser || true
-python manage.py collectstatic --noinput
+python ANK/manage.py migrate --noinput
+python ANK/manage.py ensure_superuser || true
+python ANK/manage.py collectstatic --noinput
 
 # ---- WEB PHASE ----
-PORT="${PORT:-8000}"
-exec daphne -b 0.0.0.0 -p "$PORT" ANK.asgi:application
+exec daphne -b 0.0.0.0 -p "${PORT:-8000}" ANK.asgi:application
