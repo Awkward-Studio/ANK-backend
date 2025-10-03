@@ -1,13 +1,13 @@
 #!/bin/sh
 set -e
 
-echo "== ls /app =="; ls -la /app
-echo "== ls /app/ANK =="; ls -la /app/ANK
+cd /app/ANK
 
-# DB migrations + static
-python ANK/manage.py migrate --noinput
-python ANK/manage.py collectstatic --noinput
+export DJANGO_SETTINGS_MODULE=ANK.settings
 
-# Start ASGI
-exec daphne -b 0.0.0.0 -p 8000 ANK.ANK.asgi:application
+# Migrate + collect static
+python manage.py migrate --noinput
+python manage.py collectstatic --noinput
 
+# Start ASGI server pointing at the inner package
+exec daphne -b 0.0.0.0 -p 8000 ANK.asgi:application
