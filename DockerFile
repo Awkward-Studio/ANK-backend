@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# OS deps for psycopg2, wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps first (better cache)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy code
+COPY . .
+
+# Healthcheck is handled by App Runner; we just expose the port
+EXPOSE 8000
+
+# Entrypoint runs your "release" tasks, then starts Daphne
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Default command (PORT will be provided by App Runner config; we default to 8000)
+CMD ["/entrypoint.sh"]

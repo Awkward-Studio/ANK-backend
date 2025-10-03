@@ -13,7 +13,6 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ANK.settings")
 
 django_asgi_app = get_asgi_application()
 
-# Import here to avoid AppRegistryNotReady errors
 from ANK.routing import websocket_urlpatterns  # noqa: E402
 
 application = ProtocolTypeRouter(

@@ -244,18 +244,22 @@ ALLOWED_HOSTS = hosts_env(
     "DJANGO_ALLOWED_HOSTS",
     # Default: your Railway app host; add others as needed
     "ank-backend-production.up.railway.app,.railway.app",
+    "main.d1h4duu4ni1dhm.amplifyapp.com",
 )
 
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = csv_env(
-    "DJANGO_CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,https://ank-test.vercel.app",
-)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://ank-test.vercel.app",
+    "https://main.d1h4duu4ni1dhm.amplifyapp.com",
+]
+
 
 CSRF_TRUSTED_ORIGINS = csv_env(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,https://*.railway.app,https://ank-test.vercel.app",
+    "http://localhost:3000,http://127.0.0.1:3000,https://*.railway.app,https://ank-test.vercel.app,https://main.d1h4duu4ni1dhm.amplifyapp.com",
 )
 
 CORS_ALLOW_HEADERS = [
