@@ -262,6 +262,7 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_TRUSTED_ORIGINS = csv_env(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
     "http://localhost:3000,http://127.0.0.1:3000,https://*.railway.app,https://ank-test.vercel.app,https://main.d1h4duu4ni1dhm.amplifyapp.com",
+    "https://main.d1h4duu4ni1dhm.amplifyapp.com",
 )
 
 CORS_ALLOW_HEADERS = [
