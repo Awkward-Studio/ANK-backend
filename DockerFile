@@ -25,5 +25,5 @@ EXPOSE 8000
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Default command (PORT will be provided by App Runner config; we default to 8000)
+# Default command (PORT will be provided by App Runner config; we default to 8000
 CMD ["/entrypoint.sh"]
