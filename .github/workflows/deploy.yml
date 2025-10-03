@@ -132,3 +132,5 @@ jobs:
             --services "${ECS_SERVICE}" \
             --query 'services[0].events[0:15].[createdAt,message]' \
             --output table
+
+
