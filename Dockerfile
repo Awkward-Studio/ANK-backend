@@ -16,16 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy code
-COPY manage.py ./                 # <-- explicit
-COPY ANK ./ANK
-COPY CustomField ./CustomField
-COPY Events ./Events
-COPY Guest ./Guest
-COPY Logistics ./Logistics
-COPY docs ./docs
-COPY MessageTemplates ./MessageTemplates
-COPY Staff ./Staff
-COPY utils ./utils
+COPY . .
 
 # Healthcheck is handled by App Runner; we just expose the port
 EXPOSE 8000
