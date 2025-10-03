@@ -1,7 +1,9 @@
-import os
-import requests
-from typing import Dict, Any, Optional
 from datetime import timedelta
+import os
+import re
+import requests
+from typing import Dict, Any, List, Optional
+from django.utils import timezone as dj_tz
 from django.utils import timezone
 
 WABA_API_BASE = "https://graph.facebook.com/v21.0"
@@ -10,6 +12,8 @@ WABA_TOKEN = os.getenv("WABA_ACCESS_TOKEN", "")
 WABA_PHONE_ID = os.getenv("WABA_PHONE_NUMBER_ID", "")
 RESUME_TEMPLATE_NAME = os.getenv("WABA_RESUME_TEMPLATE_NAME", "resume_conversation")
 RESUME_TEMPLATE_LANG = os.getenv("WABA_RESUME_TEMPLATE_LANG", "en_US")
+TRAVEL_DETAIL_TEMPLATE_NAME = "resume_travel_detail"
+TRAVEL_DETAIL_TEMPLATE_LANG = "en_US"
 
 
 class WhatsAppError(Exception):
@@ -21,6 +25,15 @@ def _ensure_creds():
         raise WhatsAppError(
             "WABA credentials are missing. Set WABA_ACCESS_TOKEN and WABA_PHONE_NUMBER_ID."
         )
+
+
+_digits = re.compile(r"\D+")  # -c add global regex for phone normalization
+
+
+def _norm_digits(s: str) -> str:  # -c new helper
+    if not s:
+        return ""
+    return _digits.sub("", s)[-15:]  # keep last 10–15 digits
 
 
 def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,7 +59,7 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
         "messages",
         {
             "messaging_product": "whatsapp",
-            "to": to_wa_id,
+            "to": _norm_digits(to_wa_id),
             "type": "text",
             "text": {"body": text or ""},
         },
@@ -84,7 +97,7 @@ def send_resume_opener(
         "messages",
         {
             "messaging_product": "whatsapp",
-            "to": to_wa_id,
+            "to": _norm_digits(to_wa_id),
             "type": "template",
             "template": {
                 "name": RESUME_TEMPLATE_NAME,
@@ -105,4 +118,49 @@ def within_24h_window(last_inbound: Optional[timezone.datetime]) -> bool:
     # if not last_inbound:
     #     return False
     # return (timezone.now() - last_inbound) <= timedelta(hours=24)
-    return False
+    return True
+
+
+def send_choice_buttons(
+    to_wa_id: str,
+    body: str,
+    choices: List[Dict[str, str]],
+    header: Optional[str] = None,
+    footer: Optional[str] = None,
+) -> str:
+    """
+    Send interactive 'button' message with up to 3 choices.
+    choices = [{ "id": "tc|step|value", "title": "Air" }, ...]
+    """
+    buttons = [
+        {
+            "type": "reply",
+            "reply": {"id": c["id"], "title": (c.get("title") or "")[:20]},
+        }
+        for c in (choices or [])
+    ][:3]
+
+    if not buttons:
+
+        return send_freeform_text(to_wa_id, body)
+
+    interactive: Dict[str, Any] = {
+        "type": "button",
+        "body": {"text": body},
+        "action": {"buttons": buttons},
+    }
+    if header:
+        interactive["header"] = {"type": "text", "text": header[:60]}
+    if footer:
+        interactive["footer"] = {"text": footer[:60]}
+
+    data = _post(
+        "messages",
+        {
+            "messaging_product": "whatsapp",
+            "to": _norm_digits(to_wa_id),
+            "type": "interactive",
+            "interactive": interactive,
+        },
+    )
+    return (data.get("messages") or [{}])[0].get("id", "")

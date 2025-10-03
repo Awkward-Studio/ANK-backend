@@ -10,6 +10,7 @@ from rest_framework.permissions import AllowAny
 from Events.models.event_registration_model import EventRegistration
 from MessageTemplates.models import QueuedMessage
 from MessageTemplates.services.whatsapp import (
+    _norm_digits,
     send_freeform_text,
 )
 
@@ -48,7 +49,7 @@ class FlushQueuedMessagesView(APIView):
         reg = get_object_or_404(
             EventRegistration.objects.select_related("guest"), id=reg_id
         )
-        to_wa = getattr(reg.guest, "phone", None)
+        to_wa = _norm_digits(getattr(reg.guest, "phone", None))
         if not to_wa:
             return Response(
                 {"ok": False, "error": "guest_has_no_phone"},
