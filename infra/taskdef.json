@@ -1,1 +1,95 @@
-{}
+{
+  "family": "ank-prod-taskdef",
+  "taskRoleArn": "arn:aws:iam::912448661225:role/ecsTaskRole-ank",
+  "executionRoleArn": "arn:aws:iam::912448661225:role/ecsTaskExecutionRole-ank",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "web",
+      "image": "912448661225.dkr.ecr.ap-south-1.amazonaws.com/ank-prod-backend:latest",
+      "cpu": 0,
+      "memory": null,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "DJANGO_CSRF_TRUSTED_ORIGINS",
+          "value": "http://localhost:3000,http://127.0.0.1:3000,https://ank-test.vercel.app"
+        },
+        {
+          "name": "DJANGO_SETTINGS_MODULE",
+          "value": "ANK.settings"
+        },
+        {
+          "name": "WABA_PHONE_NUMBER_ID",
+          "value": "779543888572297"
+        },
+        {
+          "name": "USE_JWT",
+          "value": "false"
+        },
+        {
+          "name": "DJANGO_ALLOWED_HOSTS",
+          "value": "*"
+        },
+        {
+          "name": "DEBUG",
+          "value": "true"
+        },
+        {
+          "name": "DJANGO_CORS_ALLOWED_ORIGINS",
+          "value": "http://localhost:3000,http://127.0.0.1:3000,https://ank-test.vercel.app"
+        },
+        {
+          "name": "WABA_RESUME_TEMPLATE_NAME",
+          "value": "resume_conversation"
+        },
+        {
+          "name": "WABA_RESUME_TEMPLATE_LANG",
+          "value": "en"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/DATABASE_URL:DATABASE_URL:AWSCURRENT:"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/REDIS_URL:REDIS_URL:AWSCURRENT:"
+        },
+        {
+          "name": "SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/SECRET_KEY:SECRET_KEY:AWSCURRENT:"
+        },
+        {
+          "name": "DJANGO_RSVP_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/DJANGO_RSVP_SECRET:DJANGO_RSVP_SECRET:AWSCURRENT:"
+        },
+        {
+          "name": "WABA_ACCESS_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/WABA_ACCESS_TOKEN:WABA_ACCESS_TOKEN:AWSCURRENT:"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ank-prod",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "web"
+        }
+      }
+    }
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "2048"
+}
