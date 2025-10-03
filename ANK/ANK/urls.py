@@ -15,15 +15,22 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+from django.http import HttpResponse
 from django.contrib import admin
-from django.urls import path, include, re_path
+from django.urls import path, include
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
+from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
 from ANK.csrf import csrf
 from Events.views.webhooks import track_send, whatsapp_rsvp
+
+
+def healthz(_):
+    return HttpResponse("ok", content_type="text/plain")
+
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -51,4 +58,6 @@ urlpatterns = [
     path("api/webhooks/whatsapp-rsvp/", whatsapp_rsvp, name="whatsapp_rsvp"),
     # path("api/debug/echo-secret/", echo_secret),
     path("api/webhooks/track-send/", track_send, name="track_send"),
+    path("api/webhooks/whatsapp-travel/", whatsapp_travel_webhook),
+    path("healthz", healthz),
 ]

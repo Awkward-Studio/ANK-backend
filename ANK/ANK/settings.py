@@ -240,12 +240,14 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 # - ALLOWED_HOSTS must be hostnames only
 # - CORS/CSRF origins must be absolute URLs with scheme
 # ---------------------------
-ALLOWED_HOSTS = hosts_env(
-    "DJANGO_ALLOWED_HOSTS",
-    # Default: your Railway app host; add others as needed
-    "ank-backend-production.up.railway.app,.railway.app",
-    "main.d1h4duu4ni1dhm.amplifyapp.com",
-)
+# ALLOWED_HOSTS = hosts_env(
+#     "DJANGO_ALLOWED_HOSTS",
+#     # Default: your Railway app host; add others as needed
+#     "ank-backend-production.up.railway.app,.railway.app",
+#     "main.d1h4duu4ni1dhm.amplifyapp.com",
+# )
+ALLOWED_HOSTS = hosts_env("DJANGO_ALLOWED_HOSTS", "*")
+
 
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
@@ -288,17 +290,18 @@ if REDIS_URL:
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [REDIS_URL],
-                # Optional tuning:
-                # "capacity": 1000,
-                # "expiry": 10,
+                "hosts": [
+                    {
+                        "address": REDIS_URL,  # e.g. rediss://:<token>@endpoint:6379/0
+                        "ssl": True,
+                        "ssl_cert_reqs": None,  # relax for now; tighten later with a CA bundle
+                    }
+                ],
             },
         }
     }
 else:
-    # In-memory is fine for single-process LOCAL dev only.
     if not DEBUG:
-        # Warn loudly in prod if someone forgot REDIS_URL.
         raise ImproperlyConfigured("REDIS_URL must be set in production for Channels")
     CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
@@ -329,7 +332,7 @@ else:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SAMESITE = "None"
     CSRF_COOKIE_SECURE = True
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = False
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 7  # 1 week; raise once verified
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
