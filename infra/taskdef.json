@@ -40,7 +40,7 @@
         },
         {
           "name": "DEBUG",
-          "value": "false"
+          "value": "true"
         },
         {
           "name": "DJANGO_CORS_ALLOWED_ORIGINS",
