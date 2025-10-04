@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.contrib import admin
 from django.urls import path, include
 from drf_spectacular.views import (
@@ -32,7 +32,12 @@ def healthz(_):
     return HttpResponse("ok", content_type="text/plain")
 
 
+def root(_request):
+    return JsonResponse({"ok": True, "service": "ank-backend"})
+
+
 urlpatterns = [
+    path("", root),
     path("admin/", admin.site.urls),
     path("api/", include("Staff.urls")),
     path("api/csrf/", csrf),
