@@ -7,6 +7,6 @@ from Departments.models import (
 )
 
 
-admin.register(Department)
-admin.register(EventDepartmentStaffAssignment)
-admin.register(EventDepartment)
+admin.site.register(Department)
+admin.site.register(EventDepartmentStaffAssignment)
+admin.site.register(EventDepartment)
