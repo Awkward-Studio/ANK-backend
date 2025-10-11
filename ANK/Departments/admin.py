@@ -1,3 +1,12 @@
 from django.contrib import admin
+from Departments.models import (
+    Department,
+    EventDepartment,
+    EventDepartmentStaffAssignment,
+    BudgetFieldPermission,
+)
 
-# Register your models here.
+
+admin.register(Department)
+admin.register(EventDepartmentStaffAssignment)
+admin.register(EventDepartment)
