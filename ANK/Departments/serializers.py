@@ -157,3 +157,22 @@ class BudgetFieldPermissionSerializer(serializers.ModelSerializer):
         if value not in BUDGET_FIELD_KEYS:
             raise serializers.ValidationError("Invalid field_key.")
         return value
+
+
+class UserEventDepartmentFieldAccessSerializer(serializers.Serializer):
+    """
+    Compact read-only serializer for:
+      {
+        "event_department": {
+          "id": UUID,
+          "event": { "id": UUID, "name": str },
+          "department": { "id": UUID, "name": str }
+        },
+        "role": str,
+        "field_keys": [str, ...]
+      }
+    """
+
+    event_department = serializers.SerializerMethodField()
+    role = serializers.CharField()
+    field_keys = serializers.ListField(child=serializers.CharField(), allow_empty=True)

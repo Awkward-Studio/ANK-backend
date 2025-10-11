@@ -18,6 +18,7 @@ from Departments.views import (
     EventDepartmentUserFieldPermsSetAPIView,
     EventDepartmentUserFieldPermsAddAPIView,
     EventDepartmentUserFieldPermsRemoveAPIView,
+    UserEventScopedDepartmentFieldAccessAPIView,
 )
 
 urlpatterns = [
@@ -106,5 +107,10 @@ urlpatterns = [
         "event-departments/<uuid:event_dept_pk>/users/<uuid:user_pk>/field-permissions/remove/",
         EventDepartmentUserFieldPermsRemoveAPIView.as_view(),
         name="eventdepartment-user-fieldpermissions-remove",
+    ),
+    path(
+        "users/<uuid:user_pk>/events/<uuid:event_pk>/departments/field-access/",
+        UserEventScopedDepartmentFieldAccessAPIView.as_view(),
+        name="user-eventdept-field-access-by-event",
     ),
 ]

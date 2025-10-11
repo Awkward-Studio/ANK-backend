@@ -19,6 +19,7 @@ from Departments.serializers import (
     EventDepartmentStaffAssignmentSerializer,
     BudgetLineItemSerializer,
     BudgetFieldPermissionSerializer,
+    UserEventDepartmentFieldAccessSerializer,
 )
 from utils.swagger import (
     document_api_view,
@@ -956,5 +957,80 @@ class EventDepartmentUserFieldPermsRemoveAPIView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error removing field permissions", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+def _build_access_rows(assignments, user_id):
+    """
+    Utility to build the response rows with one DB round-trip
+    for the permissions, avoiding N+1.
+    """
+    if not assignments:
+        return []
+
+    ed_ids = [a.event_department_id for a in assignments]
+
+    perms_map = {}
+    for ed_id, field_key in BudgetFieldPermission.objects.filter(
+        user_id=user_id, event_department_id__in=ed_ids
+    ).values_list("event_department_id", "field_key"):
+        perms_map.setdefault(str(ed_id), []).append(field_key)
+
+    data = []
+    for a in assignments:
+        ed = a.event_department
+        data.append(
+            {
+                "event_department": {
+                    "id": ed.id,
+                    "event": {"id": ed.event.id, "name": ed.event.name},
+                    "department": {"id": ed.department.id, "name": ed.department.name},
+                },
+                "role": a.role,
+                "field_keys": perms_map.get(str(ed.id), []),
+            }
+        )
+    return data
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=UserEventDepartmentFieldAccessSerializer(many=True),
+            description="All event-departments (for a single event) the user is assigned to, with allowed budget field keys.",
+            tags=["Event-Department: User Field Access"],
+        )
+    }
+)
+class UserEventScopedDepartmentFieldAccessAPIView(APIView):
+    """
+    GET /api/users/<user_pk>/events/<event_pk>/departments/field-access/
+    → Only event-departments under <event_pk> where the user is assigned + allowed field_keys.
+    """
+
+    def get(self, request, user_pk, event_pk):
+        try:
+            user = get_object_or_404(User, pk=user_pk)
+            get_object_or_404(Event, pk=event_pk)
+
+            assignments = list(
+                EventDepartmentStaffAssignment.objects.select_related(
+                    "event_department__event",
+                    "event_department__department",
+                ).filter(
+                    user_id=user.id,
+                    event_department__event_id=event_pk,
+                )
+            )
+            rows = _build_access_rows(assignments, user.id)
+            serializer = UserEventDepartmentFieldAccessSerializer(rows, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Error fetching user field access for event",
+                    "error": str(e),
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
