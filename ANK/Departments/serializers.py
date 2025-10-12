@@ -159,20 +159,23 @@ class BudgetFieldPermissionSerializer(serializers.ModelSerializer):
         return value
 
 
-class UserEventDepartmentFieldAccessSerializer(serializers.Serializer):
-    """
-    Compact read-only serializer for:
-      {
-        "event_department": {
-          "id": UUID,
-          "event": { "id": UUID, "name": str },
-          "department": { "id": UUID, "name": str }
-        },
-        "role": str,
-        "field_keys": [str, ...]
-      }
-    """
+class EventRefSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    name = serializers.CharField()
 
-    event_department = serializers.SerializerMethodField()
+
+class DepartmentRefSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+
+
+class EventDepartmentRefSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    event = EventRefSerializer()
+    department = DepartmentRefSerializer()
+
+
+class UserEventDepartmentFieldAccessSerializer(serializers.Serializer):
+    event_department = EventDepartmentRefSerializer()
     role = serializers.CharField()
     field_keys = serializers.ListField(child=serializers.CharField(), allow_empty=True)
