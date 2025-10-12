@@ -10,3 +10,4 @@ from Departments.models import (
 admin.site.register(Department)
 admin.site.register(EventDepartmentStaffAssignment)
 admin.site.register(EventDepartment)
+admin.site.register(BudgetFieldPermission)
