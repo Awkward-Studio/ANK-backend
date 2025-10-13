@@ -1,11 +1,7 @@
-# Events/models/budget_models.py
-
 import uuid
 from decimal import Decimal
 from django.db import models
 from django.contrib.auth import get_user_model
-
-# Adjust this import if your Event is defined elsewhere
 from Events.models.event_model import Event
 
 User = get_user_model()

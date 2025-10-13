@@ -85,7 +85,7 @@ INSTALLED_APPS = [
     "CustomField",
     "Logistics",
     "MessageTemplates",
-    "Departments",
+    "Departments.apps.DepartmentsConfig",
 ]
 
 # ---------------------------
