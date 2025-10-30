@@ -20,7 +20,7 @@
       "environment": [
         {
           "name": "DJANGO_CSRF_TRUSTED_ORIGINS",
-          "value": "https://localhost:3000,https://127.0.0.1:3000,https://rsvp.anewknot.com"
+          "value": "https://localhost:3000,https://127.0.0.1:3000,https://rsvp.anewknot.com,https://api.anewknot.com"
         },
         {
           "name": "DJANGO_SETTINGS_MODULE",
@@ -44,7 +44,7 @@
         },
         {
           "name": "DJANGO_CORS_ALLOWED_ORIGINS",
-          "value": "https://localhost:3000,https://127.0.0.1:3000,https://rsvp.anewknot.com"
+          "value": "https://localhost:3000,https://127.0.0.1:3000,https://rsvp.anewknot.com,https://api.anewknot.com"
         },
         {
           "name": "WABA_RESUME_TEMPLATE_NAME",
