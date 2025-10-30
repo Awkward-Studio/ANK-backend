@@ -271,7 +271,7 @@ else:
 # ---------------------------
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
-
+CSRF_COOKIE_DOMAIN = ".anewknot.com"
 if DEBUG:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = False
