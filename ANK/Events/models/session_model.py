@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.contrib.contenttypes.fields import GenericRelation
+from Logistics.models.hotel_models import Hotel
 from Events.models.event_model import Event
 from CustomField.models import CustomFieldValue
 
@@ -16,7 +17,14 @@ class Session(models.Model):
         default=0, help_text="Expected number of attendees in this session"
     )
     date = models.DateField(db_index=True, blank=True, null=True)
-    venue = models.CharField(max_length=200, blank=True, null=True)
+    venue = models.ForeignKey(
+        Hotel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sessions",
+        db_index=True,
+    )
     location = models.CharField(max_length=200, null=True, blank=True)
     entertainment = models.TextField(
         blank=True, help_text="Describe the entertainment planned"
