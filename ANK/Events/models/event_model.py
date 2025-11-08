@@ -5,8 +5,20 @@ from CustomField.models import CustomFieldValue
 
 
 class Event(models.Model):
+    class EventType(models.TextChoices):
+        WEDDING = "wedding", "Wedding"
+        CORPORATE = "corporate", "Corporate"
+        SOCIAL = "social", "Social"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
+    client_name = models.CharField(max_length=200, blank=True, null=True)
+    type = models.CharField(
+        max_length=20,
+        choices=EventType.choices,
+        default=EventType.WEDDING,
+        help_text="Type of event: Wedding, Corporate, or Social",
+    )
     location = models.CharField(max_length=200, blank=True, null=True)
     venue = models.CharField(max_length=200, blank=True, null=True)
     start_date = models.DateField(db_index=True, blank=True, null=True)
@@ -16,7 +28,6 @@ class Event(models.Model):
     )
     bride_name = models.CharField(max_length=200, blank=True, null=True)
     groom_name = models.CharField(max_length=200, blank=True, null=True)
-    # allow querying event.custom_field_values
     custom_field_values = GenericRelation(
         CustomFieldValue,
         content_type_field="content_type",
