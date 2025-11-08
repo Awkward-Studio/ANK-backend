@@ -21,6 +21,8 @@ class EventSerializer(serializers.ModelSerializer):
             "pax",
             "bride_name",
             "groom_name",
+            "type",
+            "client_name",
         ]
 
 

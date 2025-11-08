@@ -58,6 +58,7 @@ class TravelDetail(models.Model):
     return_travel = models.BooleanField(default=False)
     departure = models.CharField(max_length=20, choices=DEPARTURE_CHOICES, blank=True)
     departure_date = models.DateField(null=True, blank=True)
+    source_departure_time = models.DateField(null=True, blank=True)
     departure_time = models.TimeField(null=True, blank=True)
     departure_details = models.TextField(blank=True, null=True)
     departure_flight_number = models.CharField(max_length=20, null=True, blank=True)
