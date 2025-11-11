@@ -75,8 +75,8 @@ class EventHotelRoomType(models.Model):
         null=True,
         blank=True,
     )
-    allocation_count = models.PositiveIntegerField(default=0)
-    available_count = models.PositiveIntegerField(default=0)
+    allocation_count = models.IntegerField(default=0)
+    available_count = models.IntegerField(default=0)
 
     class Meta:
         unique_together = ("event_hotel", "hotel_room_type")
