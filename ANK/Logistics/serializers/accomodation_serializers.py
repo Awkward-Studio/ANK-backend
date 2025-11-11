@@ -73,12 +73,15 @@ class AccommodationSerializer(serializers.ModelSerializer):
         room_type = validated_data["event_room_type"]
         count = validated_data.get("room_count", 1)
 
+        # Lock this room type for concurrent writes
         rt = EventHotelRoomType.objects.select_for_update().get(pk=room_type.pk)
-        if rt.available_count < count:
-            raise serializers.ValidationError("Not enough rooms available.")
+
+        # OLD:
+        # if rt.available_count < count:
+        #     raise serializers.ValidationError("Not enough rooms available.")
 
         rt.available_count -= count
-        rt.save()
+        rt.save(update_fields=["available_count"])
         return super().create(validated_data)
 
     @transaction.atomic
@@ -90,19 +93,22 @@ class AccommodationSerializer(serializers.ModelSerializer):
         old_count = instance.room_count
 
         if new_rt != old_rt or new_count != old_count:
-            # lock both
             rts = EventHotelRoomType.objects.select_for_update().filter(
                 pk__in=[old_rt.pk, new_rt.pk]
             )
             rt_map = {rt.pk: rt for rt in rts}
 
+            # revert previous allocation
             rt_map[old_rt.pk].available_count += old_count
-            if rt_map[new_rt.pk].available_count < new_count:
-                raise serializers.ValidationError("Not enough rooms available.")
+
+            # OLD:
+            # if rt_map[new_rt.pk].available_count < new_count:
+            #     raise serializers.ValidationError("Not enough rooms available.")
+
             rt_map[new_rt.pk].available_count -= new_count
 
             for rt in rt_map.values():
-                rt.save()
+                rt.save(update_fields=["available_count"])
 
         return super().update(instance, validated_data)
 
