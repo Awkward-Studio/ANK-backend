@@ -198,6 +198,12 @@ class BudgetLineItem(models.Model):
         max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unbilled"
     )
     payment_due_date = models.DateField(null=True, blank=True)
+    exchange_rate_to_inr = models.DecimalField(
+        max_digits=20,
+        decimal_places=4,
+        default=Decimal("1.0000"),
+        help_text="Conversion rate from item currency to INR (e.g. 83.2500 for USD → INR)",
+    )
     remarks = models.TextField(blank=True)
 
     # Misc

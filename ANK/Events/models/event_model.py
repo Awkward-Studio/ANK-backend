@@ -10,6 +10,10 @@ class Event(models.Model):
         CORPORATE = "corporate", "Corporate"
         SOCIAL = "social", "Social"
 
+    class EventLocationType(models.TextChoices):
+        DOMESTIC = "domestic", "Domestic"
+        INTERNATIONAL = "international", "International"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
     client_name = models.CharField(max_length=200, blank=True, null=True)
@@ -18,6 +22,12 @@ class Event(models.Model):
         choices=EventType.choices,
         default=EventType.WEDDING,
         help_text="Type of event: Wedding, Corporate, or Social",
+    )
+    location_type = models.CharField(
+        max_length=20,
+        choices=EventLocationType.choices,
+        default=EventLocationType.DOMESTIC,
+        help_text="Whether the event is Domestic or International",
     )
     location = models.CharField(max_length=200, blank=True, null=True)
     venue = models.CharField(max_length=200, blank=True, null=True)
