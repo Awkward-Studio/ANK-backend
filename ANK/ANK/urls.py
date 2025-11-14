@@ -45,6 +45,8 @@ urlpatterns = [
     path("api/", include("Guest.urls")),
     path("api/", include("Logistics.urls")),
     path("api/", include("MessageTemplates.urls")),
+    path("api/", include("Departments.urls")),
+    path("api/", include("utilities.urls")),
     # API schema generation (raw OpenAPI)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     # Swagger UI
