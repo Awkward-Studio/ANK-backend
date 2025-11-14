@@ -115,11 +115,21 @@ class BudgetLineItem(models.Model):
     ]
     PAYMENT_STATUS_CHOICES = [
         ("unbilled", "Unbilled"),
-        ("due", "Due"),
+        ("billed", "Billed"),
         ("partially_paid", "Partially Paid"),
-        ("paid", "Paid"),
+        ("fully_paid", "Fully Paid"),
+        ("due", "Due"),
         ("overdue", "Overdue"),
         ("cancelled", "Cancelled"),
+    ]
+
+    APPROVAL_STATUS_CHOICES = [
+        ("rough_estimate", "Rough Estimate"),
+        ("shared_with_client", "Shared with Client"),
+        ("pending_from_family", "Pending from Family"),
+        ("pending_from_vendor", "Pending from Vendor"),
+        ("negotiation", "Negotiation"),
+        ("approved", "Approved"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -131,8 +141,8 @@ class BudgetLineItem(models.Model):
     category = models.CharField(max_length=100)
     sub_category = models.CharField(max_length=100, blank=True)
     description = models.TextField(blank=True)
-    sub_event = models.CharField(max_length=120, blank=True)  # "Sub Event / Day"
-    function_name = models.CharField(max_length=120, blank=True)  # "Function"
+    sub_event = models.CharField(max_length=120, blank=True)
+    function_name = models.CharField(max_length=120, blank=True)
     venue = models.CharField(max_length=120, blank=True)
 
     # Quantities & rates
@@ -172,22 +182,34 @@ class BudgetLineItem(models.Model):
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
 
-    # Vendor & invoice (no Vendor model; single invoice ref)
+    # Vendor & invoice
     vendor_name = models.CharField(max_length=150, blank=True)
     invoice = models.CharField(max_length=120, blank=True)
+
+    approval_status = models.CharField(
+        max_length=40,
+        choices=APPROVAL_STATUS_CHOICES,
+        default="rough_estimate",
+        help_text="Track approval progress of this line item",
+    )
 
     # Payment & notes
     payment_status = models.CharField(
         max_length=20, choices=PAYMENT_STATUS_CHOICES, default="unbilled"
     )
     payment_due_date = models.DateField(null=True, blank=True)
+    exchange_rate_to_inr = models.DecimalField(
+        max_digits=20,
+        decimal_places=4,
+        default=Decimal("1.0000"),
+        help_text="Conversion rate from item currency to INR (e.g. 83.2500 for USD → INR)",
+    )
     remarks = models.TextField(blank=True)
 
     # Misc
     currency = models.CharField(max_length=3, default="INR")
     is_active = models.BooleanField(default=True)
 
-    # Timestamps only (as requested)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

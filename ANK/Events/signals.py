@@ -4,10 +4,11 @@ from channels.layers import get_channel_layer
 from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-
 from Events.models.event_registration_model import (
     EventRegistration,
 )
+from Events.models.event_model import Event
+from Departments.models import Department, EventDepartment
 
 logger = logging.getLogger(__name__)
 
@@ -78,3 +79,32 @@ def broadcast_rsvp_update(sender, instance: EventRegistration, created, **kwargs
 
     except Exception:
         logger.exception("Error preparing RSVP broadcast")
+
+
+@receiver(post_save, sender=Event)
+def create_event_departments(sender, instance: Event, created: bool, **kwargs):
+    """
+    When a new Event is created, create EventDepartment rows for all current Departments.
+    Runs after the surrounding DB transaction commits to avoid race/PK issues.
+    """
+    if not created:
+        return
+
+    def _create_all_event_departments():
+        # Keep memory small and queries fast
+        deps = Department.objects.all().only("id", "name")
+        rows = [
+            EventDepartment(
+                event=instance,
+                department=d,
+                # Optional: show a friendly name by default
+                display_name=d.name,
+            )
+            for d in deps
+        ]
+
+        # unique_together(event, department) is enforced; this avoids IntegrityErrors
+        # if another worker created the same rows concurrently.
+        EventDepartment.objects.bulk_create(rows, ignore_conflicts=True)
+
+    transaction.on_commit(_create_all_event_departments)
