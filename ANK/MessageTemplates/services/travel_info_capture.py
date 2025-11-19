@@ -1,3 +1,410 @@
+import logging
+import re
+from datetime import datetime, time
+from typing import Tuple, Optional, Dict
+
+from django.utils import timezone as dj_tz
+from django.db import transaction
+
+from Logistics.models.travel_details_models import TravelDetail
+from Logistics.models.travel_detail_capture_session import TravelCaptureSession
+from Events.models.event_registration_model import EventRegistration
+from MessageTemplates.services.whatsapp import (
+    send_freeform_text,
+    send_choice_buttons,
+)
+
+logger = logging.getLogger("travel")
+
+# ---------- constants ----------
+
+ARRIVAL_CHOICES = {
+    "commercial": "Commercial",
+    "local_pickup": "Local Pickup",
+    "self": "Self",
+}
+TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
+
+# [CRITICAL FIX] Defined steps that require buttons
+BUTTON_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
+
+PROMPTS = {
+    "travel_type": "How are you traveling?",
+    "arrival": "How will you arrive?",
+    "arrival_date": "What is your arrival date? Reply like 03-10-2025",
+    "arrival_time": "What is your arrival time? Reply like 14:30 or 2:30pm",
+    "airline": "What is the airline?",
+    "flight_number": "What is your flight number?",
+    "pnr": "What is your PNR? (optional, reply 'skip' to skip)",
+    "arrival_details": "Any arrival details we should know? (reply 'skip' to skip)",
+    "hotel_arrival_time": "What time will you reach the hotel? (HH:MM, or 'skip')",
+    "hotel_departure_time": "What time will you depart the hotel? (HH:MM, or 'skip')",
+    "return_travel": "Do you have a return journey?",
+    "departure": "How will you depart?",
+    "departure_date": "What is your departure date? (DD-MM-YYYY)",
+    "departure_time": "What is your departure time? (HH:MM)",
+    "departure_airline": "Departure airline? (if applicable; or 'skip')",
+    "departure_flight_number": "Departure flight/train number? (or 'skip')",
+    "departure_pnr": "Departure PNR? (or 'skip')",
+    "departure_details": "Any departure details? (or 'skip')",
+    "done": "Thanks! We’ve recorded your travel details. Reply if you need to change anything.",
+}
+
+# ---------- parsing helpers (kept compact) ----------
+_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
+_time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
+
+
+def _parse_date(s):
+    m = _date_rx.match(s or "")
+    if not m:
+        return None
+    d, mo, y = map(int, m.groups())
+    try:
+        return datetime(y, mo, d).date()
+    except:
+        return None
+
+
+def _parse_time(s):
+    m = _time_rx.match(s or "")
+    if not m:
+        return None
+    hh, mm, ap = m.groups()
+    hh, mm = int(hh), int(mm)
+    if ap:
+        if ap.lower() == "pm" and hh < 12:
+            hh += 12
+        if ap.lower() == "am" and hh == 12:
+            hh = 0
+    return time(hh, mm) if 0 <= hh <= 23 and 0 <= mm <= 59 else None
+
+
+def _choice(s, choices):
+    x = (s or "").strip().lower()
+    for k in choices:
+        if x == k.lower():
+            return k
+    return None
+
+
+def _yn(s):
+    x = (s or "").strip().lower()
+    return (
+        True
+        if x in {"y", "yes", "true"}
+        else False if x in {"n", "no", "false"} else None
+    )
+
+
+def _set_optional_text(v):
+    if not v or v.strip().lower() in {"skip", "none", "na"}:
+        return ""
+    return v.strip()
+
+
+# ---------- session/detail helpers ----------
+
+
+def _get_or_create_session(reg):
+    sess, _ = TravelCaptureSession.objects.get_or_create(registration=reg)
+    if sess.state is None:
+        sess.state = {}
+    return sess
+
+
+def _get_or_create_detail(reg):
+    td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
+    if not td:
+        td = TravelDetail.objects.create(event=reg.event)
+        td.event_registrations.add(reg)
+    return td
+
+
+def _next_step(sess, td):
+    if sess.step == "done":
+        return None
+    pending = []
+    state = sess.state or {}
+
+    # Core
+    if not td.travel_type:
+        pending.append("travel_type")
+    if not td.arrival:
+        pending.append("arrival")
+    if not td.arrival_date:
+        pending.append("arrival_date")
+    if not td.arrival_time:
+        pending.append("arrival_time")
+
+    # Air specifics
+    if td.travel_type == "Air" and td.arrival == "commercial":
+        if not td.airline:
+            pending.append("airline")
+        if not td.flight_number:
+            pending.append("flight_number")
+        if td.pnr is None:
+            pending.append("pnr")
+
+    if td.arrival_details is None:
+        pending.append("arrival_details")
+    if td.hotel_arrival_time is None and not state.get("hat_skip"):
+        pending.append("hotel_arrival_time")
+    if td.hotel_departure_time is None and not state.get("hdt_skip"):
+        pending.append("hotel_departure_time")
+
+    # Return Travel
+    if td.return_travel is False and "return_travel" not in state:
+        pending.append("return_travel")
+    elif td.return_travel is True:
+        if not td.departure:
+            pending.append("departure")
+        if not td.departure_date:
+            pending.append("departure_date")
+        if not td.departure_time:
+            pending.append("departure_time")
+        if td.travel_type == "Air" and td.departure == "commercial":
+            if td.departure_airline is None:
+                pending.append("departure_airline")
+            if td.departure_flight_number is None:
+                pending.append("departure_flight_number")
+            if td.departure_pnr is None:
+                pending.append("departure_pnr")
+        if td.departure_details is None:
+            pending.append("departure_details")
+
+    return pending[0] if pending else "done"
+
+
+# ---------- Public API ----------
+
+
+def resume_or_start(reg: EventRegistration) -> None:
+    sess = _get_or_create_session(reg)
+    if not sess.step or sess.step in {"opt_in", ""}:
+        sess.step = "travel_type"
+        sess.save()
+    send_next_prompt(reg)
+
+
+@transaction.atomic
+def send_next_prompt(reg: EventRegistration) -> None:
+    sess = _get_or_create_session(reg)
+    td = _get_or_create_detail(reg)
+
+    step = _next_step(sess, td) or "done"
+
+    # Check for duplicate send
+    if sess.last_prompt_step == step and step != "done":
+        return
+
+    sess.step = step
+    sess.last_prompt_step = step
+    sess.last_msg_at = dj_tz.now()
+    if step == "done":
+        sess.is_complete = True
+    sess.save()
+
+    try:
+        if step == "travel_type":
+            send_choice_buttons(
+                reg.guest.phone,
+                PROMPTS["travel_type"],
+                [
+                    {"id": "tc|travel_type|Air", "title": "Air"},
+                    {"id": "tc|travel_type|Train", "title": "Train"},
+                    {"id": "tc|travel_type|Car", "title": "Car"},
+                ],
+            )
+        elif step == "arrival":
+            send_choice_buttons(
+                reg.guest.phone,
+                PROMPTS["arrival"],
+                [
+                    {"id": "tc|arrival|commercial", "title": "Commercial"},
+                    {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
+                    {"id": "tc|arrival|self", "title": "Self"},
+                ],
+            )
+        elif step == "return_travel":
+            send_choice_buttons(
+                reg.guest.phone,
+                PROMPTS["return_travel"],
+                [
+                    {"id": "tc|return_travel|yes", "title": "Yes"},
+                    {"id": "tc|return_travel|no", "title": "No"},
+                ],
+            )
+        elif step == "departure":
+            send_choice_buttons(
+                reg.guest.phone,
+                PROMPTS["departure"],
+                [
+                    {"id": "tc|departure|commercial", "title": "Commercial"},
+                    {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
+                    {"id": "tc|departure|self", "title": "Self"},
+                ],
+            )
+        else:
+            send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
+    except Exception as e:
+        logger.error(f"Failed to send prompt for {step}: {e}")
+
+
+@transaction.atomic
+def apply_button_choice(reg, step, raw_value):
+    td = _get_or_create_detail(reg)
+    sess = _get_or_create_session(reg)
+
+    if step == "travel_type":
+        td.travel_type = raw_value
+    elif step == "arrival":
+        td.arrival = raw_value
+    elif step == "return_travel":
+        td.return_travel = raw_value == "yes"
+        sess.state["return_travel"] = td.return_travel
+    elif step == "departure":
+        td.departure = raw_value
+
+    td.save()
+    sess.save()
+    send_next_prompt(reg)
+
+
+@transaction.atomic
+def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
+    """
+    Returns (reply_text, done_flag).
+    If next step is a button, returns ("", False) so webhook knows to call send_next_prompt.
+    """
+    sess = _get_or_create_session(reg)
+    td = _get_or_create_detail(reg)
+    step = sess.step or "travel_type"
+    t = (text or "").strip()
+
+    # --- Input Processing ---
+    if step == "travel_type":
+        val = _choice(t, TRAVEL_TYPE_CHOICES)
+        if val:
+            td.travel_type = val
+        else:
+            return ("Please tap a button or reply: Air / Train / Car", False)
+
+    elif step == "arrival":
+        val = _choice(t, ARRIVAL_CHOICES)
+        if val:
+            td.arrival = val
+        else:
+            return (
+                "Please tap a button or reply: Commercial / Local Pickup / Self",
+                False,
+            )
+
+    elif step == "arrival_date":
+        dt = _parse_date(t)
+        if dt:
+            td.arrival_date = dt
+        else:
+            return ("Please use DD-MM-YYYY format (e.g., 03-10-2025)", False)
+
+    elif step == "arrival_time":
+        tm = _parse_time(t)
+        if tm:
+            td.arrival_time = tm
+        else:
+            return ("Please use time format like 14:30 or 2:30pm", False)
+
+    elif step == "airline":
+        td.airline = t
+    elif step == "flight_number":
+        td.flight_number = t.upper()
+    elif step == "pnr":
+        td.pnr = _set_optional_text(t)
+    elif step == "arrival_details":
+        td.arrival_details = _set_optional_text(t)
+
+    elif step == "hotel_arrival_time":
+        if t.lower() in {"skip", ""}:
+            sess.state["hat_skip"] = True
+            td.hotel_arrival_time = None
+        else:
+            tm = _parse_time(t)
+            if not tm:
+                return ("Time looks off. Example: 13:45", False)
+            td.hotel_arrival_time = tm
+
+    elif step == "hotel_departure_time":
+        if t.lower() in {"skip", ""}:
+            sess.state["hdt_skip"] = True
+            td.hotel_departure_time = None
+        else:
+            tm = _parse_time(t)
+            if not tm:
+                return ("Time looks off. Example: 10:00", False)
+            td.hotel_departure_time = tm
+
+    elif step == "return_travel":
+        b = _yn(t)
+        if b is None:
+            return ("Please tap Yes or No.", False)
+        td.return_travel = b
+        sess.state["return_travel"] = b
+
+    elif step == "departure":
+        val = _choice(t, ARRIVAL_CHOICES)
+        if val:
+            td.departure = val
+        else:
+            return (
+                "Please tap a button or reply: Commercial / Local Pickup / Self",
+                False,
+            )
+
+    elif step == "departure_date":
+        dt = _parse_date(t)
+        if dt:
+            td.departure_date = dt
+        else:
+            return ("Please use DD-MM-YYYY", False)
+
+    elif step == "departure_time":
+        tm = _parse_time(t)
+        if tm:
+            td.departure_time = tm
+        else:
+            return ("Please use HH:MM format", False)
+
+    elif step == "departure_airline":
+        td.departure_airline = _set_optional_text(t)
+    elif step == "departure_flight_number":
+        td.departure_flight_number = _set_optional_text(t)
+    elif step == "departure_pnr":
+        td.departure_pnr = _set_optional_text(t)
+    elif step == "departure_details":
+        td.departure_details = _set_optional_text(t)
+
+    td.save()
+    sess.save()
+
+    # --- Calculate Next Step ---
+    next_step = _next_step(sess, td) or "done"
+    sess.step = next_step
+
+    # [CRITICAL FIX] Do NOT save last_prompt_step here.
+    # Leave that to send_next_prompt so it knows it's a fresh step.
+    sess.save()
+
+    if next_step == "done":
+        return (PROMPTS["done"], True)
+
+    # [CRITICAL FIX] If next step is a button, return EMPTY string.
+    # This tells the webhook view to run send_next_prompt()
+    if next_step in BUTTON_STEPS:
+        return ("", False)
+
+    return (PROMPTS.get(next_step, "OK."), False)
+
+
 # """
 # Conversation orchestrator for capturing TravelDetail via WhatsApp.
 
@@ -10,7 +417,6 @@
 # Choice steps use button IDs like: "tc|<step>|<value>"
 # """
 
-# import logging
 # import re
 # from datetime import datetime, time
 # from typing import Tuple, Optional, Dict, Any
@@ -27,7 +433,6 @@
 # )
 
 # # ---------- parsing helpers ----------
-
 # _date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
 # _time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
 
@@ -85,23 +490,13 @@
 #     return v.strip()
 
 
-# def _normalize_text(s: str) -> str:
-#     """Normalize inbound free-text a bit: strip + collapse whitespace."""
-#     s = (s or "").strip()
-#     s = re.sub(r"\s+", " ", s)
-#     return s
-
-
 # # ---------- constants ----------
-
 # ARRIVAL_CHOICES = {
 #     "commercial": "Commercial",
 #     "local_pickup": "Local Pickup",
 #     "self": "Self",
 # }
 # TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
-
-# BUTTON_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
 
 # PROMPTS = {
 #     "travel_type": "How are you traveling?",
@@ -127,12 +522,8 @@
 
 
 # # ---------- session/detail helpers ----------
-
-
 # def _get_or_create_session(reg: EventRegistration) -> TravelCaptureSession:
 #     sess, _ = TravelCaptureSession.objects.get_or_create(registration=reg)
-#     if sess.state is None:
-#         sess.state = {}
 #     return sess
 
 
@@ -146,14 +537,11 @@
 
 
 # # ---------- next step logic ----------
-
-
 # def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
 #     if sess.step == "done":
 #         return None
 
 #     pending = []
-#     state = sess.state or {}
 
 #     # core
 #     if not td.travel_type:
@@ -177,17 +565,13 @@
 #     # optional arrival note, hotel times
 #     if td.arrival_details is None:
 #         pending.append("arrival_details")
-
-#     # hotel times: allow skip via state flags
-#     if td.hotel_arrival_time is None and not state.get("hotel_arrival_time_skipped"):
+#     if td.hotel_arrival_time is None:
 #         pending.append("hotel_arrival_time")
-#     if td.hotel_departure_time is None and not state.get(
-#         "hotel_departure_time_skipped"
-#     ):
+#     if td.hotel_departure_time is None:
 #         pending.append("hotel_departure_time")
 
 #     # return branch
-#     if td.return_travel is False and "return_travel" not in (state or {}):
+#     if td.return_travel is False and "return_travel" not in (sess.state or {}):
 #         pending.append("return_travel")
 #     elif td.return_travel is True:
 #         if not td.departure:
@@ -212,14 +596,7 @@
 
 
 # # ---------- public API ----------
-
-
 # def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False) -> str:
-#     """
-#     Called when guest presses 'Yes' on your travel opt-in OR when using a wake word.
-#     If restart=True or session is complete, we reset to 'travel_type'; otherwise we continue.
-#     Always sends the first prompt immediately.
-#     """
 #     sess = _get_or_create_session(reg)
 #     _get_or_create_detail(reg)
 
@@ -240,61 +617,35 @@
 
 
 # def resume_or_start(reg: EventRegistration) -> None:
-#     """
-#     Resume from saved step or start at 'travel_type' and send the appropriate next prompt.
-#     Also restarts if session is stale.
-#     """
+#     """Resume from saved step or start at 'travel_type' and send the appropriate next prompt."""
 #     sess = _get_or_create_session(reg)
-#     now = dj_tz.now()
-
-#     # stale session -> restart capture from beginning
-#     if sess.last_msg_at and (now - sess.last_msg_at).total_seconds() > 24 * 3600:
-#         start_capture_after_opt_in(reg, restart=True)
-#         return
-
 #     if not sess.step or sess.step in {"opt_in", ""}:
 #         start_capture_after_opt_in(reg, restart=False)
-#         return
-
 #     send_next_prompt(reg)
 
 
-# @transaction.atomic
 # def send_next_prompt(reg: EventRegistration) -> None:
 #     """
-#     SAFE version:
-#     - never crashes if WhatsApp fails
-#     - never interrupts Django response
-#     - logs WA errors
+#     Chooses buttons for choice steps; otherwise sends text prompt.
+#     Uses last_prompt_step to avoid repeating the same question accidentally.
 #     """
-#     logger = logging.getLogger("travel")
 #     sess = _get_or_create_session(reg)
 #     td = _get_or_create_detail(reg)
 
-#     try:
-#         step = _next_step(sess, td)
-#     except Exception:
-#         logger.exception("NEXT STEP FAILED")
-#         return
-
-#     # DONE CASE
+#     step = _next_step(sess, td) if sess.step != "done" else None
 #     if not step or step == "done":
-#         try:
-#             send_freeform_text(reg.guest.phone, PROMPTS["done"])
-#         except Exception:
-#             logger.exception("FAILED SENDING DONE MESSAGE")
-
+#         send_freeform_text(reg.guest.phone, PROMPTS["done"])
 #         sess.step = "done"
-#         sess.last_prompt_step = "done"
 #         sess.is_complete = True
+#         sess.last_prompt_step = "done"
 #         sess.last_msg_at = dj_tz.now()
 #         sess.save(
-#             update_fields=["step", "last_prompt_step", "is_complete", "last_msg_at"]
+#             update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
 #         )
 #         return
 
-#     # Prevent duplicate prompts
 #     if sess.last_prompt_step == step:
+#         # Avoid resending the exact same prompt.
 #         return
 
 #     sess.step = step
@@ -302,64 +653,53 @@
 #     sess.last_msg_at = dj_tz.now()
 #     sess.save(update_fields=["step", "last_prompt_step", "last_msg_at"])
 
-#     # BUTTON STEPS (WRAPPED WITH SAFETY)
-#     try:
-#         if step == "travel_type":
-#             send_choice_buttons(
-#                 reg.guest.phone,
-#                 "How are you traveling?",
-#                 [
-#                     {"id": "tc|travel_type|Air", "title": "Air"},
-#                     {"id": "tc|travel_type|Train", "title": "Train"},
-#                     {"id": "tc|travel_type|Car", "title": "Car"},
-#                 ],
-#             )
-#             return
+#     # Buttons for choice steps
+#     if step == "travel_type":
+#         send_choice_buttons(
+#             reg.guest.phone,
+#             "How are you traveling?",
+#             [
+#                 {"id": "tc|travel_type|Air", "title": "Air"},
+#                 {"id": "tc|travel_type|Train", "title": "Train"},
+#                 {"id": "tc|travel_type|Car", "title": "Car"},
+#             ],
+#         )
+#         return
+#     if step == "arrival":
+#         send_choice_buttons(
+#             reg.guest.phone,
+#             "How will you arrive?",
+#             [
+#                 {"id": "tc|arrival|commercial", "title": "Commercial"},
+#                 {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
+#                 {"id": "tc|arrival|self", "title": "Self"},
+#             ],
+#         )
+#         return
+#     if step == "return_travel":
+#         send_choice_buttons(
+#             reg.guest.phone,
+#             "Do you have a return journey?",
+#             [
+#                 {"id": "tc|return_travel|yes", "title": "Yes"},
+#                 {"id": "tc|return_travel|no", "title": "No"},
+#             ],
+#         )
+#         return
+#     if step == "departure":
+#         send_choice_buttons(
+#             reg.guest.phone,
+#             "How will you depart?",
+#             [
+#                 {"id": "tc|departure|commercial", "title": "Commercial"},
+#                 {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
+#                 {"id": "tc|departure|self", "title": "Self"},
+#             ],
+#         )
+#         return
 
-#         if step == "arrival":
-#             send_choice_buttons(
-#                 reg.guest.phone,
-#                 "How will you arrive?",
-#                 [
-#                     {"id": "tc|arrival|commercial", "title": "Commercial"},
-#                     {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
-#                     {"id": "tc|arrival|self", "title": "Self"},
-#                 ],
-#             )
-#             return
-
-#         if step == "return_travel":
-#             send_choice_buttons(
-#                 reg.guest.phone,
-#                 "Do you have a return journey?",
-#                 [
-#                     {"id": "tc|return_travel|yes", "title": "Yes"},
-#                     {"id": "tc|return_travel|no", "title": "No"},
-#                 ],
-#             )
-#             return
-
-#         if step == "departure":
-#             send_choice_buttons(
-#                 reg.guest.phone,
-#                 "How will you depart?",
-#                 [
-#                     {"id": "tc|departure|commercial", "title": "Commercial"},
-#                     {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
-#                     {"id": "tc|departure|self", "title": "Self"},
-#                 ],
-#             )
-#             return
-
-#     except Exception:
-#         logger.exception("WHATSAPP BUTTON SEND FAILED")
-#         return  # don't break the flow
-
-#     # FREEFORM PROMPT
-#     try:
-#         send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
-#     except Exception:
-#         logger.exception("WHATSAPP FREEFORM SEND FAILED")
+#     # Free-form prompts for the rest
+#     send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
 
 
 # @transaction.atomic
@@ -384,7 +724,6 @@
 #         td.departure = raw_value
 #         td.save(update_fields=["departure"])
 
-#     sess.save(update_fields=["state"])
 #     send_next_prompt(reg)
 
 
@@ -393,8 +732,6 @@
 #     """
 #     Handles typed (free-text) answers for non-choice steps.
 #     Returns (reply_text, completed_flag).
-
-#     If the next step is a BUTTON step, reply_text == "" and caller must call send_next_prompt().
 #     """
 #     sess = _get_or_create_session(reg)
 #     td = _get_or_create_detail(reg)
@@ -403,7 +740,7 @@
 #         sess.step = "travel_type"
 
 #     step = sess.step or "travel_type"
-#     t = _normalize_text(text)
+#     t = (text or "").strip()
 
 #     if step == "travel_type":
 #         val = _choice(t, TRAVEL_TYPE_CHOICES)
@@ -453,34 +790,24 @@
 #         td.save(update_fields=["arrival_details"])
 
 #     elif step == "hotel_arrival_time":
-#         state = sess.state or {}
-#         if t.strip().lower() in {"skip", "", "none", "na"}:
+#         if t.strip().lower() in {"skip", ""}:
 #             td.hotel_arrival_time = None
-#             state["hotel_arrival_time_skipped"] = True
 #         else:
 #             tm = _parse_time(t)
 #             if not tm:
 #                 return ("Time looks off. Example: 13:45", False)
 #             td.hotel_arrival_time = tm
-#             state.pop("hotel_arrival_time_skipped", None)
 #         td.save(update_fields=["hotel_arrival_time"])
-#         sess.state = state
-#         sess.save(update_fields=["state"])
 
 #     elif step == "hotel_departure_time":
-#         state = sess.state or {}
-#         if t.strip().lower() in {"skip", "", "none", "na"}:
+#         if t.strip().lower() in {"skip", ""}:
 #             td.hotel_departure_time = None
-#             state["hotel_departure_time_skipped"] = True
 #         else:
 #             tm = _parse_time(t)
 #             if not tm:
 #                 return ("Time looks off. Example: 10:00", False)
 #             td.hotel_departure_time = tm
-#             state.pop("hotel_departure_time_skipped", None)
 #         td.save(update_fields=["hotel_departure_time"])
-#         sess.state = state
-#         sess.save(update_fields=["state"])
 
 #     elif step == "return_travel":
 #         b = _yn(t)
@@ -489,7 +816,6 @@
 #         td.return_travel = b
 #         td.save(update_fields=["return_travel"])
 #         sess.state["return_travel"] = b
-#         sess.save(update_fields=["state"])
 
 #     elif step == "departure":
 #         val = _choice(t, ARRIVAL_CHOICES)
@@ -504,9 +830,9 @@
 #     elif step == "departure_date":
 #         dt = _parse_date(t)
 #         if not dt:
-#             return ("Please send date as DD-MM-YYYY (e.g., 05-10-2025).", False)
+#             return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
 #         td.departure_date = dt
-#         td.save(update_fields=(["departure_date"]))
+#         td.save(update_fields=["departure_date"])
 
 #     elif step == "departure_time":
 #         tm = _parse_time(t)
@@ -532,487 +858,14 @@
 #         td.save(update_fields=["departure_details"])
 
 #     # advance
-#     next_step = _next_step(sess, td) or "done"
-#     sess.step = next_step
+#     sess.step = _next_step(sess, td) or "done"
 #     sess.last_msg_at = dj_tz.now()
 #     if sess.step == "done":
 #         sess.is_complete = True
-#     # IMPORTANT: do NOT touch last_prompt_step here; send_next_prompt manages it
-#     sess.save(update_fields=["step", "last_msg_at", "is_complete"])
+#     sess.last_prompt_step = sess.step
+#     sess.save(update_fields=["step", "last_msg_at", "is_complete", "last_prompt_step"])
 
 #     done = sess.step == "done"
 #     if done:
 #         return (PROMPTS["done"], True)
-
-#     # If next step is a button step, return empty text and let caller trigger send_next_prompt().
-#     if sess.step in BUTTON_STEPS:
-#         return ("", False)
-
-#     # Otherwise, return the free-form prompt.
 #     return (PROMPTS.get(sess.step, "OK."), False)
-
-
-"""
-Conversation orchestrator for capturing TravelDetail via WhatsApp.
-
-Responsibilities:
-- Decide next question (step) based on TravelDetail fields and session state.
-- Send buttons for choice steps; text prompts for free-form steps.
-- Parse + validate answers; write to TravelDetail; auto-advance.
-- Resume from where the guest left off; avoid resending the same prompt.
-
-Choice steps use button IDs like: "tc|<step>|<value>"
-"""
-
-import re
-from datetime import datetime, time
-from typing import Tuple, Optional, Dict, Any
-
-from django.utils import timezone as dj_tz
-from django.db import transaction
-
-from Logistics.models.travel_details_models import TravelDetail
-from Logistics.models.travel_detail_capture_session import TravelCaptureSession
-from Events.models.event_registration_model import EventRegistration
-from MessageTemplates.services.whatsapp import (
-    send_freeform_text,
-    send_choice_buttons,
-)
-
-# ---------- parsing helpers ----------
-_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
-_time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
-
-
-def _parse_date(s: str):
-    m = _date_rx.match(s or "")
-    if not m:
-        return None
-    d, mo, y = map(int, m.groups())
-    try:
-        return datetime(y, mo, d).date()
-    except ValueError:
-        return None
-
-
-def _parse_time(s: str):
-    m = _time_rx.match(s or "")
-    if not m:
-        return None
-    hh, mm, ap = m.groups()
-    hh, mm = int(hh), int(mm)
-    if ap:
-        ap = ap.lower()
-        if ap == "pm" and hh < 12:
-            hh += 12
-        if ap == "am" and hh == 12:
-            hh = 0
-    if 0 <= hh <= 23 and 0 <= mm <= 59:
-        return time(hh, mm)
-    return None
-
-
-def _yn(s: str) -> Optional[bool]:
-    x = (s or "").strip().lower()
-    if x in {"y", "yes", "yeah", "yup", "true"}:
-        return True
-    if x in {"n", "no", "nope", "false"}:
-        return False
-    return None
-
-
-def _choice(s: str, choices: Dict[str, str]) -> Optional[str]:
-    x = (s or "").strip().lower()
-    for key in choices:
-        if x == key.lower():
-            return key
-    return None
-
-
-def _set_optional_text(v: str) -> Optional[str]:
-    if not v:
-        return None
-    if v.strip().lower() in {"skip", "none", "na"}:
-        return ""
-    return v.strip()
-
-
-# ---------- constants ----------
-ARRIVAL_CHOICES = {
-    "commercial": "Commercial",
-    "local_pickup": "Local Pickup",
-    "self": "Self",
-}
-TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
-
-PROMPTS = {
-    "travel_type": "How are you traveling?",
-    "arrival": "How will you arrive?",
-    "arrival_date": "What is your arrival date? Reply like 03-10-2025",
-    "arrival_time": "What is your arrival time? Reply like 14:30 or 2:30pm",
-    "airline": "What is the airline?",
-    "flight_number": "What is your flight number?",
-    "pnr": "What is your PNR? (optional, reply 'skip' to skip)",
-    "arrival_details": "Any arrival details we should know (pickup location, notes)? (reply 'skip' to skip)",
-    "hotel_arrival_time": "What time will you reach the hotel? (HH:MM, or 'skip')",
-    "hotel_departure_time": "What time will you depart the hotel? (HH:MM, or 'skip')",
-    "return_travel": "Do you have a return journey?",
-    "departure": "How will you depart?",
-    "departure_date": "What is your departure date? (DD-MM-YYYY)",
-    "departure_time": "What is your departure time? (HH:MM)",
-    "departure_airline": "Departure airline? (if applicable; or 'skip')",
-    "departure_flight_number": "Departure flight/train number? (or 'skip')",
-    "departure_pnr": "Departure PNR? (or 'skip')",
-    "departure_details": "Any departure details (pickup spot/notes)? (or 'skip')",
-    "done": "Thanks! We’ve recorded your travel details. You can reply later to update a field (e.g., 'change airline Indigo').",
-}
-
-
-# ---------- session/detail helpers ----------
-def _get_or_create_session(reg: EventRegistration) -> TravelCaptureSession:
-    sess, _ = TravelCaptureSession.objects.get_or_create(registration=reg)
-    return sess
-
-
-def _get_or_create_detail(reg: EventRegistration) -> TravelDetail:
-    td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
-    if td:
-        return td
-    td = TravelDetail.objects.create(event=reg.event)
-    td.event_registrations.add(reg)
-    return td
-
-
-# ---------- next step logic ----------
-def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
-    if sess.step == "done":
-        return None
-
-    pending = []
-
-    # core
-    if not td.travel_type:
-        pending.append("travel_type")
-    if not td.arrival:
-        pending.append("arrival")
-    if not td.arrival_date:
-        pending.append("arrival_date")
-    if not td.arrival_time:
-        pending.append("arrival_time")
-
-    # commercial air specifics
-    if td.travel_type == "Air" and td.arrival == "commercial":
-        if not td.airline:
-            pending.append("airline")
-        if not td.flight_number:
-            pending.append("flight_number")
-        if td.pnr is None:
-            pending.append("pnr")
-
-    # optional arrival note, hotel times
-    if td.arrival_details is None:
-        pending.append("arrival_details")
-    if td.hotel_arrival_time is None:
-        pending.append("hotel_arrival_time")
-    if td.hotel_departure_time is None:
-        pending.append("hotel_departure_time")
-
-    # return branch
-    if td.return_travel is False and "return_travel" not in (sess.state or {}):
-        pending.append("return_travel")
-    elif td.return_travel is True:
-        if not td.departure:
-            pending.append("departure")
-        if not td.departure_date:
-            pending.append("departure_date")
-        if not td.departure_time:
-            pending.append("departure_time")
-        if td.travel_type == "Air" and td.departure == "commercial":
-            if td.departure_airline is None:
-                pending.append("departure_airline")
-            if td.departure_flight_number is None:
-                pending.append("departure_flight_number")
-            if td.departure_pnr is None:
-                pending.append("departure_pnr")
-        if td.departure_details is None:
-            pending.append("departure_details")
-
-    if not pending:
-        return "done"
-    return pending[0]
-
-
-# ---------- public API ----------
-def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False) -> str:
-    sess = _get_or_create_session(reg)
-    _get_or_create_detail(reg)
-
-    if restart or sess.is_complete:
-        sess.step = "travel_type"
-        sess.is_complete = False
-        sess.state = {}
-    else:
-        sess.step = sess.step or "travel_type"
-
-    sess.last_msg_at = dj_tz.now()
-    sess.save(update_fields=["step", "is_complete", "state", "last_msg_at"])
-
-    # Immediately fire first pending question
-    send_next_prompt(reg)
-
-    return sess.step
-
-
-def resume_or_start(reg: EventRegistration) -> None:
-    """Resume from saved step or start at 'travel_type' and send the appropriate next prompt."""
-    sess = _get_or_create_session(reg)
-    if not sess.step or sess.step in {"opt_in", ""}:
-        start_capture_after_opt_in(reg, restart=False)
-    send_next_prompt(reg)
-
-
-def send_next_prompt(reg: EventRegistration) -> None:
-    """
-    Chooses buttons for choice steps; otherwise sends text prompt.
-    Uses last_prompt_step to avoid repeating the same question accidentally.
-    """
-    sess = _get_or_create_session(reg)
-    td = _get_or_create_detail(reg)
-
-    step = _next_step(sess, td) if sess.step != "done" else None
-    if not step or step == "done":
-        send_freeform_text(reg.guest.phone, PROMPTS["done"])
-        sess.step = "done"
-        sess.is_complete = True
-        sess.last_prompt_step = "done"
-        sess.last_msg_at = dj_tz.now()
-        sess.save(
-            update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
-        )
-        return
-
-    if sess.last_prompt_step == step:
-        # Avoid resending the exact same prompt.
-        return
-
-    sess.step = step
-    sess.last_prompt_step = step
-    sess.last_msg_at = dj_tz.now()
-    sess.save(update_fields=["step", "last_prompt_step", "last_msg_at"])
-
-    # Buttons for choice steps
-    if step == "travel_type":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How are you traveling?",
-            [
-                {"id": "tc|travel_type|Air", "title": "Air"},
-                {"id": "tc|travel_type|Train", "title": "Train"},
-                {"id": "tc|travel_type|Car", "title": "Car"},
-            ],
-        )
-        return
-    if step == "arrival":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How will you arrive?",
-            [
-                {"id": "tc|arrival|commercial", "title": "Commercial"},
-                {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
-                {"id": "tc|arrival|self", "title": "Self"},
-            ],
-        )
-        return
-    if step == "return_travel":
-        send_choice_buttons(
-            reg.guest.phone,
-            "Do you have a return journey?",
-            [
-                {"id": "tc|return_travel|yes", "title": "Yes"},
-                {"id": "tc|return_travel|no", "title": "No"},
-            ],
-        )
-        return
-    if step == "departure":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How will you depart?",
-            [
-                {"id": "tc|departure|commercial", "title": "Commercial"},
-                {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
-                {"id": "tc|departure|self", "title": "Self"},
-            ],
-        )
-        return
-
-    # Free-form prompts for the rest
-    send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
-
-
-@transaction.atomic
-def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> None:
-    """
-    Applies a button value to the appropriate TravelDetail field and advances to the next prompt.
-    """
-    td = _get_or_create_detail(reg)
-    sess = _get_or_create_session(reg)
-
-    if step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
-        td.travel_type = raw_value
-        td.save(update_fields=["travel_type"])
-    elif step == "arrival" and raw_value in ARRIVAL_CHOICES:
-        td.arrival = raw_value
-        td.save(update_fields=["arrival"])
-    elif step == "return_travel":
-        td.return_travel = raw_value == "yes"
-        td.save(update_fields=["return_travel"])
-        sess.state["return_travel"] = td.return_travel
-    elif step == "departure" and raw_value in ARRIVAL_CHOICES:
-        td.departure = raw_value
-        td.save(update_fields=["departure"])
-
-    send_next_prompt(reg)
-
-
-@transaction.atomic
-def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
-    """
-    Handles typed (free-text) answers for non-choice steps.
-    Returns (reply_text, completed_flag).
-    """
-    sess = _get_or_create_session(reg)
-    td = _get_or_create_detail(reg)
-
-    if sess.step in {"opt_in", ""}:
-        sess.step = "travel_type"
-
-    step = sess.step or "travel_type"
-    t = (text or "").strip()
-
-    if step == "travel_type":
-        val = _choice(t, TRAVEL_TYPE_CHOICES)
-        if not val:
-            return ("Please tap a button or reply: Air / Train / Car", False)
-        td.travel_type = val
-        td.save(update_fields=["travel_type"])
-
-    elif step == "arrival":
-        val = _choice(t, ARRIVAL_CHOICES)
-        if not val:
-            return (
-                "Please tap a button or reply: commercial / local_pickup / self",
-                False,
-            )
-        td.arrival = val
-        td.save(update_fields=["arrival"])
-
-    elif step == "arrival_date":
-        dt = _parse_date(t)
-        if not dt:
-            return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
-        td.arrival_date = dt
-        td.save(update_fields=["arrival_date"])
-
-    elif step == "arrival_time":
-        tm = _parse_time(t)
-        if not tm:
-            return ("Please send time like 14:30 or 2:30pm.", False)
-        td.arrival_time = tm
-        td.save(update_fields=["arrival_time"])
-
-    elif step == "airline":
-        td.airline = t
-        td.save(update_fields=["airline"])
-
-    elif step == "flight_number":
-        td.flight_number = t.upper()
-        td.save(update_fields=["flight_number"])
-
-    elif step == "pnr":
-        td.pnr = _set_optional_text(t)
-        td.save(update_fields=["pnr"])
-
-    elif step == "arrival_details":
-        td.arrival_details = _set_optional_text(t)
-        td.save(update_fields=["arrival_details"])
-
-    elif step == "hotel_arrival_time":
-        if t.strip().lower() in {"skip", ""}:
-            td.hotel_arrival_time = None
-        else:
-            tm = _parse_time(t)
-            if not tm:
-                return ("Time looks off. Example: 13:45", False)
-            td.hotel_arrival_time = tm
-        td.save(update_fields=["hotel_arrival_time"])
-
-    elif step == "hotel_departure_time":
-        if t.strip().lower() in {"skip", ""}:
-            td.hotel_departure_time = None
-        else:
-            tm = _parse_time(t)
-            if not tm:
-                return ("Time looks off. Example: 10:00", False)
-            td.hotel_departure_time = tm
-        td.save(update_fields=["hotel_departure_time"])
-
-    elif step == "return_travel":
-        b = _yn(t)
-        if b is None:
-            return ("Please tap Yes/No.", False)
-        td.return_travel = b
-        td.save(update_fields=["return_travel"])
-        sess.state["return_travel"] = b
-
-    elif step == "departure":
-        val = _choice(t, ARRIVAL_CHOICES)
-        if not val:
-            return (
-                "Please tap a button or reply: commercial / local_pickup / self",
-                False,
-            )
-        td.departure = val
-        td.save(update_fields=["departure"])
-
-    elif step == "departure_date":
-        dt = _parse_date(t)
-        if not dt:
-            return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
-        td.departure_date = dt
-        td.save(update_fields=["departure_date"])
-
-    elif step == "departure_time":
-        tm = _parse_time(t)
-        if not tm:
-            return ("Send time like 18:20 or 6:20pm", False)
-        td.departure_time = tm
-        td.save(update_fields=["departure_time"])
-
-    elif step == "departure_airline":
-        td.departure_airline = _set_optional_text(t)
-        td.save(update_fields=["departure_airline"])
-
-    elif step == "departure_flight_number":
-        td.departure_flight_number = _set_optional_text(t)
-        td.save(update_fields=["departure_flight_number"])
-
-    elif step == "departure_pnr":
-        td.departure_pnr = _set_optional_text(t)
-        td.save(update_fields=["departure_pnr"])
-
-    elif step == "departure_details":
-        td.departure_details = _set_optional_text(t)
-        td.save(update_fields=["departure_details"])
-
-    # advance
-    sess.step = _next_step(sess, td) or "done"
-    sess.last_msg_at = dj_tz.now()
-    if sess.step == "done":
-        sess.is_complete = True
-    sess.last_prompt_step = sess.step
-    sess.save(update_fields=["step", "last_msg_at", "is_complete", "last_prompt_step"])
-
-    done = sess.step == "done"
-    if done:
-        return (PROMPTS["done"], True)
-    return (PROMPTS.get(sess.step, "OK."), False)
