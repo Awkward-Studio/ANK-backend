@@ -70,6 +70,16 @@ def whatsapp_travel_webhook(request):
     logger = logging.getLogger("travel_webhook")
 
     # -------- SAFE JSON LOAD --------
+    print("A -------- webhook reached BEFORE BODY LOG")
+
+    print("BODY_RAW=", request.body)
+    logger.warning("WEBHOOK HIT")
+
+    try:
+        logger.warning(request.body)
+        print("B -------- BODY LOG OK")
+    except Exception as e:
+        print("LOGGER CRASHED:", e)
     try:
         body = json.loads(request.body.decode("utf-8"))
     except Exception:
