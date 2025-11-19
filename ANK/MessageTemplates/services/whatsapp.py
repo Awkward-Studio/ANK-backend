@@ -85,8 +85,6 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
     Sends a free-form WhatsApp text (must be within 24h window).
     Returns provider message id (if any).
     """
-    logger.warning(f"[WA] RESPONSE STATUS: {r.status_code}")
-    logger.warning(f"[WA] RESPONSE BODY: {r.text}")
 
     data = _post(
         "messages",
