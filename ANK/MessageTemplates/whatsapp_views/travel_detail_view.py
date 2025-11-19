@@ -77,7 +77,7 @@ def whatsapp_travel_webhook(request):
         return JsonResponse({"ok": True}, status=200)
 
     logger.warning("WEBHOOK HIT")
-    logger.warning(request.body)
+    logger.warning(str(request.body))
 
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
