@@ -4,7 +4,7 @@ from datetime import datetime, time
 from typing import Tuple, Optional, Dict
 
 from django.utils import timezone as dj_tz
-from django.db import transaction
+from django.db import transaction, DatabaseError  # Import DatabaseError for safety
 
 from Logistics.models.travel_details_models import TravelDetail
 from Logistics.models.travel_detail_capture_session import TravelCaptureSession
@@ -106,16 +106,16 @@ def _set_optional_text(v):
 # ---------- session/detail helpers ----------
 
 
-def _get_or_create_session(reg):
+def _get_or_create_session_internal(reg):
     """
-    [FINAL CRITICAL FIX] Use select_for_update with get_or_create for one atomic lock.
-    Also ensures the JSONField 'state' is initialized to a dict.
-    Must be called inside @transaction.atomic
+    [Internal Function] Assumes the transaction/lock is already applied on `reg`.
     """
-    # This locks the row if it exists, or safely creates it, preventing 502/IntegrityErrors.
-    sess, _ = TravelCaptureSession.objects.select_for_update().get_or_create(
-        registration=reg, defaults={"step": "travel_type"}
-    )
+    try:
+        # Tries to get the session normally (safe because `reg` is locked)
+        sess = TravelCaptureSession.objects.get(registration=reg)
+    except TravelCaptureSession.DoesNotExist:
+        # Creates the session (safe because `reg` is locked)
+        sess = TravelCaptureSession.objects.create(registration=reg, step="travel_type")
 
     # Ensures the state dictionary is initialized, preventing 'NoneType' errors (502)
     if sess.state is None:
@@ -191,12 +191,16 @@ def _next_step(sess, td):
     return pending[0] if pending else "done"
 
 
-# ---------- Public API ----------
+# ---------- Public API (All must start with locking the EventRegistration) ----------
 
 
 @transaction.atomic
 def resume_or_start(reg: EventRegistration) -> None:
-    sess = _get_or_create_session(reg)
+    # 1. LOCK THE PARENT (EventRegistration) for this transaction.
+    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
+
+    # 2. Get/Create the session safely
+    sess = _get_or_create_session_internal(reg)
     td = _get_or_create_detail(reg)
 
     # Force recalculation of step in case we are restarting
@@ -215,7 +219,11 @@ def resume_or_start(reg: EventRegistration) -> None:
 
 @transaction.atomic
 def send_next_prompt(reg: EventRegistration) -> None:
-    sess = _get_or_create_session(reg)
+    # 1. LOCK THE PARENT (EventRegistration)
+    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
+
+    # 2. Get the session safely
+    sess = _get_or_create_session_internal(reg)
     td = _get_or_create_detail(reg)
     send_next_prompt_internal(reg, sess, td)
 
@@ -223,7 +231,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
 def send_next_prompt_internal(reg, sess, td):
     step = _next_step(sess, td) or "done"
 
-    # [FIX] Prevents double sending if we are already on this step
+    # Prevents double sending if we are already on this step
     if sess.last_prompt_step == step and step != "done":
         return
 
@@ -282,7 +290,11 @@ def send_next_prompt_internal(reg, sess, td):
 
 @transaction.atomic
 def apply_button_choice(reg, step, raw_value):
-    sess = _get_or_create_session(reg)
+    # 1. LOCK THE PARENT (EventRegistration)
+    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
+
+    # 2. Get the session safely
+    sess = _get_or_create_session_internal(reg)
     td = _get_or_create_detail(reg)
 
     if step == "travel_type":
@@ -303,9 +315,19 @@ def apply_button_choice(reg, step, raw_value):
 @transaction.atomic
 def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool, bool]:
     """
-    [CRITICAL FIX 1] Returns (reply_text, done_flag, is_button_step). 3 values!
+    Returns (reply_text, done_flag, is_button_step). 3 values!
     """
-    sess = _get_or_create_session(reg)
+    # 1. LOCK THE PARENT (EventRegistration) - THIS IS THE CRITICAL FIX FOR 502
+    try:
+        reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
+    except DatabaseError as e:
+        # Safely log potential deadlock/concurrency issue if locking fails early
+        logger.error(f"Failed to lock EventRegistration {reg.pk}: {e}")
+        # Re-raise the error to ensure the transaction is rolled back
+        raise
+
+    # 2. Get the session safely
+    sess = _get_or_create_session_internal(reg)
     td = _get_or_create_detail(reg)
     step = sess.step or "travel_type"
     t = (text or "").strip()
@@ -434,8 +456,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool,
         return (PROMPTS["done"], True, False)
 
     if is_button_step:
-        # Returns (reply_text="", done=False, is_button_step=True)
-        # The view (travel_detail_view.py) will see the empty string and call send_next_prompt()
+        # Returns (reply_text="", done=False, is_button_step=True) - This sends buttons only
         return ("", False, True)
 
     # Returns (reply_text=PROMPT, done=False, is_button_step=False)
