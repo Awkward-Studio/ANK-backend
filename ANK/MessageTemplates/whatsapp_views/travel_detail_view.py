@@ -47,11 +47,8 @@ def _norm_digits(s: str) -> str:
     if not s:
         return ""
     digits = "".join(ch for ch in s if ch.isdigit())
-    if len(digits) == 12 and digits.startswith("91"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+91{digits}"
-    return f"+{digits}"
+    # WaSendMap stores raw 12-digit format: 91XXXXXXXXXX
+    return digits[-12:]  # no '+' ever
 
 
 def _resolve_reg_by_wa(wa_id: str):
