@@ -10,6 +10,7 @@ Responsibilities:
 Choice steps use button IDs like: "tc|<step>|<value>"
 """
 
+import logging
 import re
 from datetime import datetime, time
 from typing import Tuple, Optional, Dict, Any
@@ -261,27 +262,39 @@ def resume_or_start(reg: EventRegistration) -> None:
 @transaction.atomic
 def send_next_prompt(reg: EventRegistration) -> None:
     """
-    Chooses buttons for choice steps; otherwise sends text prompt.
-    Uses last_prompt_step to avoid repeating the same question accidentally.
-    Wrapped in a transaction to avoid races.
+    SAFE version:
+    - never crashes if WhatsApp fails
+    - never interrupts Django response
+    - logs WA errors
     """
+    logger = logging.getLogger("travel")
     sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
-    step = _next_step(sess, td) if sess.step != "done" else None
+    try:
+        step = _next_step(sess, td)
+    except Exception:
+        logger.exception("NEXT STEP FAILED")
+        return
+
+    # DONE CASE
     if not step or step == "done":
-        send_freeform_text(reg.guest.phone, PROMPTS["done"])
+        try:
+            send_freeform_text(reg.guest.phone, PROMPTS["done"])
+        except Exception:
+            logger.exception("FAILED SENDING DONE MESSAGE")
+
         sess.step = "done"
-        sess.is_complete = True
         sess.last_prompt_step = "done"
+        sess.is_complete = True
         sess.last_msg_at = dj_tz.now()
         sess.save(
-            update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
+            update_fields=["step", "last_prompt_step", "is_complete", "last_msg_at"]
         )
         return
 
+    # Prevent duplicate prompts
     if sess.last_prompt_step == step:
-        # Avoid resending the exact same prompt.
         return
 
     sess.step = step
@@ -289,53 +302,64 @@ def send_next_prompt(reg: EventRegistration) -> None:
     sess.last_msg_at = dj_tz.now()
     sess.save(update_fields=["step", "last_prompt_step", "last_msg_at"])
 
-    # Buttons for choice steps
-    if step == "travel_type":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How are you traveling?",
-            [
-                {"id": "tc|travel_type|Air", "title": "Air"},
-                {"id": "tc|travel_type|Train", "title": "Train"},
-                {"id": "tc|travel_type|Car", "title": "Car"},
-            ],
-        )
-        return
-    if step == "arrival":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How will you arrive?",
-            [
-                {"id": "tc|arrival|commercial", "title": "Commercial"},
-                {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
-                {"id": "tc|arrival|self", "title": "Self"},
-            ],
-        )
-        return
-    if step == "return_travel":
-        send_choice_buttons(
-            reg.guest.phone,
-            "Do you have a return journey?",
-            [
-                {"id": "tc|return_travel|yes", "title": "Yes"},
-                {"id": "tc|return_travel|no", "title": "No"},
-            ],
-        )
-        return
-    if step == "departure":
-        send_choice_buttons(
-            reg.guest.phone,
-            "How will you depart?",
-            [
-                {"id": "tc|departure|commercial", "title": "Commercial"},
-                {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
-                {"id": "tc|departure|self", "title": "Self"},
-            ],
-        )
-        return
+    # BUTTON STEPS (WRAPPED WITH SAFETY)
+    try:
+        if step == "travel_type":
+            send_choice_buttons(
+                reg.guest.phone,
+                "How are you traveling?",
+                [
+                    {"id": "tc|travel_type|Air", "title": "Air"},
+                    {"id": "tc|travel_type|Train", "title": "Train"},
+                    {"id": "tc|travel_type|Car", "title": "Car"},
+                ],
+            )
+            return
 
-    # Free-form prompts for the rest
-    send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
+        if step == "arrival":
+            send_choice_buttons(
+                reg.guest.phone,
+                "How will you arrive?",
+                [
+                    {"id": "tc|arrival|commercial", "title": "Commercial"},
+                    {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
+                    {"id": "tc|arrival|self", "title": "Self"},
+                ],
+            )
+            return
+
+        if step == "return_travel":
+            send_choice_buttons(
+                reg.guest.phone,
+                "Do you have a return journey?",
+                [
+                    {"id": "tc|return_travel|yes", "title": "Yes"},
+                    {"id": "tc|return_travel|no", "title": "No"},
+                ],
+            )
+            return
+
+        if step == "departure":
+            send_choice_buttons(
+                reg.guest.phone,
+                "How will you depart?",
+                [
+                    {"id": "tc|departure|commercial", "title": "Commercial"},
+                    {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
+                    {"id": "tc|departure|self", "title": "Self"},
+                ],
+            )
+            return
+
+    except Exception:
+        logger.exception("WHATSAPP BUTTON SEND FAILED")
+        return  # don't break the flow
+
+    # FREEFORM PROMPT
+    try:
+        send_freeform_text(reg.guest.phone, PROMPTS.get(step, "OK."))
+    except Exception:
+        logger.exception("WHATSAPP FREEFORM SEND FAILED")
 
 
 @transaction.atomic

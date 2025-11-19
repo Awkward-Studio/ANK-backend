@@ -67,117 +67,95 @@ def _resolve_reg_by_wa(wa_id: str):
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
-    logger.warning("WEBHOOK HIT")
-    logger.warning(request.body)
+    logger = logging.getLogger("travel_webhook")
+
+    # -------- SAFE JSON LOAD --------
     try:
         body = json.loads(request.body.decode("utf-8"))
     except Exception:
-        return JsonResponse({"ok": False, "error": "invalid_json"}, status=400)
+        logger.exception("INVALID JSON RECEIVED")
+        return JsonResponse({"ok": True}, status=200)
+
+    logger.warning("WEBHOOK HIT")
+    logger.warning(request.body)
 
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
 
     if not wa_id or kind not in {"resume", "button", "wake", "text"}:
-        return JsonResponse({"ok": False, "error": "bad_request"}, status=400)
+        return JsonResponse({"ok": True}, status=200)
 
-    # --- kind: resume (payload = "resume|<reg_uuid>")
+    # ------ RESUME case ------
     if kind == "resume":
-        p = body.get("payload") or ""
-        reg_id = p.split("|", 1)[1] if p.startswith("resume|") else ""
-        if not reg_id:
-            return JsonResponse(
-                {"ok": False, "error": "bad_resume_payload"}, status=400
-            )
         try:
-            reg = EventRegistration.objects.select_related("guest").get(pk=reg_id)
-        except EventRegistration.DoesNotExist:
-            # nothing to resume, but don't error to WA
-            return JsonResponse({"ok": True}, status=200)
-
-        # Resume from saved step (or start if new) and immediately prompt
-        resume_or_start(reg)
-        return JsonResponse({"ok": True}, status=200)
-
-    # For the rest, resolve by wa_id mapping
-    reg = _resolve_reg_by_wa(wa_id)
-    if not reg:
-        # Not fatal; just ignore
-        return JsonResponse({"ok": True}, status=200)
-
-    # ---- basic dedupe: ignore very-fast duplicate inbound events (WA retries)
-    now = dj_tz.now()
-    last = getattr(reg, "responded_on", None)
-    if isinstance(last, datetime):
-        try:
-            delta = now - last
-            if delta.total_seconds() < 1.0:
-                return JsonResponse({"ok": True}, status=200)
+            payload = body.get("payload") or ""
+            reg_id = payload.split("|", 1)[1]
+            reg = EventRegistration.objects.get(pk=reg_id)
+            resume_or_start(reg)
         except Exception:
-            # If subtraction ever misbehaves, just skip dedupe instead of crashing
-            pass
-
-    # Out-of-window? Send the resume template *before* doing anything else.
-    # If your within_24h_window() is stubbed to always True, this is a no-op.
-    if not within_24h_window(last):
-        send_resume_opener(reg.guest.phone, str(reg.id))
-        reg.responded_on = now
-        reg.save(update_fields=["responded_on"])
+            logger.exception("RESUME FAILED")
         return JsonResponse({"ok": True}, status=200)
 
-    # Update "last responded" timestamp AFTER passing window check
-    reg.responded_on = now
+    # ------ RESOLVE REGISTRATION ------
+    try:
+        reg = _resolve_reg_by_wa(wa_id)
+    except Exception:
+        logger.exception("WA RESOLUTION FAILED")
+        return JsonResponse({"ok": True}, status=200)
+
+    if not reg:
+        return JsonResponse({"ok": True}, status=200)
+
+    # update timestamp
+    reg.responded_on = dj_tz.now()
     reg.save(update_fields=["responded_on"])
 
-    # --- kind: button (interactive button pressed in-session)
+    # ------ BUTTON INTERACTION ------
     if kind == "button":
-        btn_id = (body.get("button_id") or "").strip()  # e.g., "tc|arrival|self"
-        parts = btn_id.split("|", 2)
-
-        # Validate button format: tc|<step>|<value>
-        if len(parts) == 3 and parts[0] == "tc":
-            step, value = parts[1], parts[2]
-            if (
-                step in {"travel_type", "arrival", "return_travel", "departure"}
-                and value
-            ):
+        try:
+            button_id = body.get("button_id") or ""
+            parts = button_id.split("|", 2)
+            if len(parts) == 3 and parts[0] == "tc":
+                step, value = parts[1], parts[2]
                 apply_button_choice(reg, step, value)
-        # Always ack to WA
+        except Exception:
+            logger.exception("BUTTON HANDLING FAILED")
+
         return JsonResponse({"ok": True}, status=200)
 
-    # --- kind: wake (guest typed "travel"/"resume"/"continue")
+    # ------ WAKE FLOW ------
     if kind == "wake":
-        # Resume and send the next appropriate prompt (buttons for choice, text otherwise)
-        resume_or_start(reg)
+        try:
+            resume_or_start(reg)
+        except Exception:
+            logger.exception("WAKE FAILED")
         return JsonResponse({"ok": True}, status=200)
 
-    # --- kind: text (free-text reply)
+    # ------ TEXT FLOW ------
     if kind == "text":
         text = (body.get("text") or "").strip()
-        if not text:
-            return JsonResponse({"ok": True}, status=200)
 
-        # writes field + advances internal step
-        reply_text, done = handle_inbound_answer(reg, text)
+        try:
+            reply_text, done = handle_inbound_answer(reg, text)
+        except Exception:
+            logger.exception("TEXT PARSE FAILED")
+            reply_text = None
+            done = False
 
-        # contract with your current orchestrator:
-        # - if done: reply_text = final "done" message
-        # - if not done and reply_text == "": next step is a BUTTON step
-        # - if not done and reply_text != "": send that text as the next prompt
-        if done:
-            if reply_text:
+        try:
+            if done:
+                if reply_text:
+                    send_freeform_text(reg.guest.phone, reply_text)
+            elif reply_text:
                 send_freeform_text(reg.guest.phone, reply_text)
-            return JsonResponse({"ok": True}, status=200)
-
-        if reply_text:
-            # free-form next prompt
-            send_freeform_text(reg.guest.phone, reply_text)
-        else:
-            # next step is a button step; let orchestrator send buttons
-            send_next_prompt(reg)
+            else:
+                send_next_prompt(reg)
+        except Exception:
+            logger.exception("TEXT SEND FAILED")
 
         return JsonResponse({"ok": True}, status=200)
 
-    # Fallback (should not happen)
+    # fallback
     return JsonResponse({"ok": True}, status=200)
 
 
