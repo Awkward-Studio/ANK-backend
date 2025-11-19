@@ -16,6 +16,7 @@ Accepted POST payloads from Next.js:
 """
 
 import json
+from datetime import datetime
 
 from django.http import JsonResponse
 from django.utils import timezone as dj_tz
@@ -83,7 +84,9 @@ def whatsapp_travel_webhook(request):
         try:
             reg = EventRegistration.objects.select_related("guest").get(pk=reg_id)
         except EventRegistration.DoesNotExist:
+            # nothing to resume, but don't error to WA
             return JsonResponse({"ok": True}, status=200)
+
         # Resume from saved step (or start if new) and immediately prompt
         resume_or_start(reg)
         return JsonResponse({"ok": True}, status=200)
@@ -91,20 +94,30 @@ def whatsapp_travel_webhook(request):
     # For the rest, resolve by wa_id mapping
     reg = _resolve_reg_by_wa(wa_id)
     if not reg:
+        # Not fatal; just ignore
         return JsonResponse({"ok": True}, status=200)
 
-    # ---- Hard dedupe: ignore very-fast duplicate inbound events (WA retries)
+    # ---- basic dedupe: ignore very-fast duplicate inbound events (WA retries)
     now = dj_tz.now()
-    if getattr(reg, "responded_on", None):
-        delta = now - reg.responded_on
-        if delta.total_seconds() < 1.0:
-            return JsonResponse({"ok": True}, status=200)
+    last = getattr(reg, "responded_on", None)
+    if isinstance(last, datetime):
+        try:
+            delta = now - last
+            if delta.total_seconds() < 1.0:
+                return JsonResponse({"ok": True}, status=200)
+        except Exception:
+            # If subtraction ever misbehaves, just skip dedupe instead of crashing
+            pass
 
-    # Out-of-window? Send the resume template *before* doing anything else
-    if not within_24h_window(reg.responded_on):
+    # Out-of-window? Send the resume template *before* doing anything else.
+    # If your within_24h_window() is stubbed to always True, this is a no-op.
+    if not within_24h_window(last):
         send_resume_opener(reg.guest.phone, str(reg.id))
+        reg.responded_on = now
+        reg.save(update_fields=["responded_on"])
         return JsonResponse({"ok": True}, status=200)
 
+    # Update "last responded" timestamp AFTER passing window check
     reg.responded_on = now
     reg.save(update_fields=["responded_on"])
 
@@ -112,15 +125,16 @@ def whatsapp_travel_webhook(request):
     if kind == "button":
         btn_id = (body.get("button_id") or "").strip()  # e.g., "tc|arrival|self"
         parts = btn_id.split("|", 2)
-        # basic validation of button id shape
+
+        # Validate button format: tc|<step>|<value>
         if len(parts) == 3 and parts[0] == "tc":
             step, value = parts[1], parts[2]
-            # only allow known step ids
             if (
                 step in {"travel_type", "arrival", "return_travel", "departure"}
                 and value
             ):
                 apply_button_choice(reg, step, value)
+        # Always ack to WA
         return JsonResponse({"ok": True}, status=200)
 
     # --- kind: wake (guest typed "travel"/"resume"/"continue")
@@ -138,16 +152,25 @@ def whatsapp_travel_webhook(request):
         # writes field + advances internal step
         reply_text, done = handle_inbound_answer(reg, text)
 
-        # If reply_text is empty and we're not done, next step is a button step.
-        # Let the orchestrator send the interactive buttons.
-        if not done and not reply_text:
-            send_next_prompt(reg)
-        elif reply_text:
-            # Normal case: send textual prompt / final "done" message
+        # contract with your current orchestrator:
+        # - if done: reply_text = final "done" message
+        # - if not done and reply_text == "": next step is a BUTTON step
+        # - if not done and reply_text != "": send that text as the next prompt
+        if done:
+            if reply_text:
+                send_freeform_text(reg.guest.phone, reply_text)
+            return JsonResponse({"ok": True}, status=200)
+
+        if reply_text:
+            # free-form next prompt
             send_freeform_text(reg.guest.phone, reply_text)
+        else:
+            # next step is a button step; let orchestrator send buttons
+            send_next_prompt(reg)
 
         return JsonResponse({"ok": True}, status=200)
 
+    # Fallback (should not happen)
     return JsonResponse({"ok": True}, status=200)
 
 
