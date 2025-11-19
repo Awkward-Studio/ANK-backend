@@ -3,8 +3,8 @@ import os
 import re
 import requests
 from typing import Dict, Any, List, Optional
-from django.utils import timezone as dj_tz
-from django.utils import timezone
+import datetime
+
 
 WABA_API_BASE = "https://graph.facebook.com/v21.0"
 
@@ -136,7 +136,7 @@ def send_resume_opener(
     return (data.get("messages") or [{}])[0].get("id", "")
 
 
-def within_24h_window(last_inbound: Optional[timezone.datetime]) -> bool:
+def within_24h_window(last_inbound) -> bool:
     """
     Very light window check:
     Returns True if last_inbound is within 24 hours.
