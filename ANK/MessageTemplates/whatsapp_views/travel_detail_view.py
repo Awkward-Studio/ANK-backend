@@ -20,6 +20,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from ANK.Logistics.models.travel_detail_capture_session import TravelCaptureSession
 from Events.models.event_registration_model import EventRegistration
 from MessageTemplates.services.whatsapp import (
     within_24h_window,
@@ -72,7 +73,7 @@ def whatsapp_travel_webhook(request):
 
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
-    reg_id = body.get("registration_id")  # ALWAYS provided now
+    reg_id = body.get("registration_id")  # ALWAYS provided
 
     if kind not in {"resume", "button", "wake", "text"}:
         logger.error(f"[WEBHOOK] Invalid kind '{kind}'")
@@ -85,12 +86,17 @@ def whatsapp_travel_webhook(request):
         return JsonResponse({"ok": True}, status=200)
 
     # If session is completed → don't re-open it
-    if reg.travelcapturesession.is_complete:
+    # Ensure capture session exists
+    try:
+        sess = reg.travel_capture
+    except TravelCaptureSession.DoesNotExist:
+        sess = TravelCaptureSession.objects.create(registration=reg)
+
+    # If session already completed, do nothing
+    if sess.is_complete:
         logger.warning(
             f"[RESUME] Registration={reg.id} session already complete; doing nothing."
         )
-        # Your frontend will later show "flow completed" UI.
-        # For now we simply return ok.
         return JsonResponse({"ok": True}, status=200)
 
     # If outside 24h → send auto "resume" template request (RCS)
