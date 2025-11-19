@@ -13,6 +13,7 @@ Choice steps use button IDs like: "tc|<step>|<value>"
 import re
 from datetime import datetime, time
 from typing import Tuple, Optional, Dict, Any
+from venv import logger
 
 from django.utils import timezone as dj_tz
 from django.db import transaction
@@ -245,6 +246,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
     td = _get_or_create_detail(reg)
 
     step = _next_step(sess, td) if sess.step != "done" else None
+    logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
     if not step or step == "done":
         send_freeform_text(reg.guest.phone, PROMPTS["done"])
         sess.step = "done"

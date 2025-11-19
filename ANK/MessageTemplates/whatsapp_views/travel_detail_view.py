@@ -25,6 +25,7 @@ This view:
 """
 
 import json
+from venv import logger
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -68,8 +69,10 @@ def _resolve_reg_by_wa(wa_id: str):
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
+
     try:
         body = json.loads(request.body.decode("utf-8"))
+        logger.warning(f"[WEBHOOK] INCOMING WA PAYLOAD: {body}")
     except Exception:
         return JsonResponse({"ok": False, "error": "invalid_json"}, status=400)
 
@@ -119,6 +122,7 @@ def whatsapp_travel_webhook(request):
     # --- kind: wake (guest typed "travel"/"resume"/"continue")
     if kind == "wake":
         # Resume and send the next appropriate prompt (buttons for choice, text otherwise)
+        logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
         resume_or_start(reg)
         return JsonResponse({"ok": True}, status=200)
 
