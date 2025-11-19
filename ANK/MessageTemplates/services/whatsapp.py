@@ -31,24 +31,33 @@ def _ensure_creds():
 _digits = re.compile(r"\D+")  # -c add global regex for phone normalization
 
 
-def _norm_digits(s: str) -> str:  # -c new helper
+def _norm_digits(s: str) -> str:
     if not s:
         return ""
-    return _digits.sub("", s)[-15:]  # keep last 10–15 digits
+    digits = _digits.sub("", s)[-15:]
+    if not digits.startswith("+"):
+        digits = "+" + digits
+    return digits
 
 
 def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_creds()
     url = f"{WABA_API_BASE}/{WABA_PHONE_ID}/{path}"
+    logger.warning(f"[WA-POST] URL={url}")
+    logger.warning(f"[WA-POST-PAYLOAD] {payload}")
+
     headers = {
         "Authorization": f"Bearer {WABA_TOKEN}",
         "Content-Type": "application/json",
     }
-    logger.warning(f"[WA-SEND] URL={url}")
-    logger.warning(f"[WA-SEND] PAYLOAD={payload}")
+
     r = requests.post(url, headers=headers, json=payload, timeout=15)
+    logger.warning(f"[WA-POST-STATUS] {r.status_code}")
+    logger.warning(f"[WA-POST-BODY] {r.text}")
+
     data = r.json() if r.content else {}
     if r.status_code >= 300:
+        logger.exception(f"[WA-POST] ERROR {r.status_code}: {data}")
         raise WhatsAppError(f"WABA error {r.status_code}: {data}")
     return data
 
@@ -85,7 +94,8 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
     Sends a free-form WhatsApp text (must be within 24h window).
     Returns provider message id (if any).
     """
-
+    logger.warning(f"[WA-SEND-FREEFORM] TO={to_wa_id} TEXT={text}")
+    logger.warning(f"[WA-FREEFORM-PAYLOAD] {text}")
     data = _post(
         "messages",
         {
@@ -95,6 +105,7 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
             "text": {"body": text or ""},
         },
     )
+    logger.warning(f"[WA-FREEFORM-RESPONSE] {data}")
     return (data.get("messages") or [{}])[0].get("id", "")
 
 
@@ -163,6 +174,8 @@ def send_choice_buttons(
     Send interactive 'button' message with up to 3 choices.
     choices = [{ "id": "tc|step|value", "title": "Air" }, ...]
     """
+    logger.warning(f"[WA-SEND-BUTTONS] TO={to_wa_id} TEXT={body}")
+
     buttons = [
         {
             "type": "reply",
@@ -171,6 +184,7 @@ def send_choice_buttons(
         for c in (choices or [])
     ][:3]
 
+    logger.warning(f"[WA-BUTTONS-LIST] {buttons}")
     if not buttons:
 
         return send_freeform_text(to_wa_id, body)
@@ -185,6 +199,8 @@ def send_choice_buttons(
     if footer:
         interactive["footer"] = {"text": footer[:60]}
 
+    logger.warning(f"[WA-BUTTON-PAYLOAD] {interactive}")
+
     data = _post(
         "messages",
         {
@@ -194,5 +210,6 @@ def send_choice_buttons(
             "interactive": interactive,
         },
     )
+    logger.warning(f"[WA-BUTTON-RESPONSE] {data}")
 
     return (data.get("messages") or [{}])[0].get("id", "")
