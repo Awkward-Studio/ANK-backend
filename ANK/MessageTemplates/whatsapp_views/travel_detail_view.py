@@ -25,7 +25,10 @@ This view:
 """
 
 import json
-from venv import logger
+import logging
+
+logger = logging.getLogger("whatsapp")
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -72,7 +75,7 @@ def whatsapp_travel_webhook(request):
 
     try:
         body = json.loads(request.body.decode("utf-8"))
-        logger.warning(f"[WEBHOOK] INCOMING WA PAYLOAD: {body}")
+        logger.warning(f"[WEBHOOK] INcCOMING WA PAYLOAD: {body}")
     except Exception:
         return JsonResponse({"ok": False, "error": "invalid_json"}, status=400)
 

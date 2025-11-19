@@ -1,10 +1,11 @@
-from datetime import timedelta
 import os
 import re
-from venv import logger
+import logging
+
+logger = logging.getLogger("whatsapp")
+
 import requests
 from typing import Dict, Any, List, Optional
-import datetime
 
 
 WABA_API_BASE = "https://graph.facebook.com/v21.0"
