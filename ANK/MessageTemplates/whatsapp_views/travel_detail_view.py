@@ -44,8 +44,14 @@ from MessageTemplates.services.travel_info_capture import (
 
 
 def _norm_digits(s: str) -> str:
-    """Keep last 10–15 digits for resilience."""
-    return "".join(ch for ch in (s or "") if ch.isdigit())[-15:]
+    if not s:
+        return ""
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) == 12 and digits.startswith("91"):
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+91{digits}"
+    return f"+{digits}"
 
 
 def _resolve_reg_by_wa(wa_id: str):
