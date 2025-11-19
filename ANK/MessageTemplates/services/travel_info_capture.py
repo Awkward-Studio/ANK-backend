@@ -107,18 +107,16 @@ def _set_optional_text(v):
 
 
 def _get_or_create_session(reg):
-    """
-    Standard get_or_create WITHOUT locking to prevent 504 Timeouts.
-    Includes fallback for race conditions.
-    """
+    # Standard Django get_or_create. No locking. Safe.
     try:
         sess, _ = TravelCaptureSession.objects.get_or_create(
             registration=reg, defaults={"step": "travel_type"}
         )
     except IntegrityError:
-        # If a race condition happens, just fetch the one that won
+        # Fallback if two requests hit exactly at the same time
         sess = TravelCaptureSession.objects.get(registration=reg)
 
+    # Safety check for 502s caused by uninitialized JSON
     if sess.state is None:
         sess.state = {}
 
@@ -126,7 +124,6 @@ def _get_or_create_session(reg):
 
 
 def _get_or_create_detail(reg):
-    # Simple fetch/create logic
     td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
     if not td:
         td = TravelDetail.objects.create(event=reg.event)
@@ -198,11 +195,10 @@ def _next_step(sess, td):
 
 @transaction.atomic
 def resume_or_start(reg: EventRegistration) -> None:
-    # No locks here. Just get objects.
     sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
-    # Force recalculation of step in case we are restarting
+    # Recalculate step - fixes the restart bug
     real_next = _next_step(sess, td)
 
     if real_next and real_next != "done":
@@ -226,7 +222,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
 def send_next_prompt_internal(reg, sess, td):
     step = _next_step(sess, td) or "done"
 
-    # Prevents double sending if we are already on this step
+    # Spam prevention: Don't resend if we just sent this step
     if sess.last_prompt_step == step and step != "done":
         return
 
@@ -304,10 +300,12 @@ def apply_button_choice(reg, step, raw_value):
 
 
 @transaction.atomic
-def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
+# FIX: The return type must be a Tuple of length 3 to match the calling view logic.
+def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool, bool]:
     """
-    Returns (reply_text, done_flag).
-    Standard Django call - NO LOCKS to prevent 504s.
+    Returns (reply_text, done_flag, is_button_step).
+    The last parameter is needed for the view to decide whether to reply with text
+    or call send_next_prompt for buttons.
     """
     sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
@@ -320,15 +318,18 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if val:
             td.travel_type = val
         else:
-            return ("Please tap a button or reply: Air / Train / Car", False)
+            # FIX: Returns 3 values now
+            return ("Please tap a button or reply: Air / Train / Car", False, False)
 
     elif step == "arrival":
         val = _choice(t, ARRIVAL_CHOICES)
         if val:
             td.arrival = val
         else:
+            # FIX: Returns 3 values now
             return (
                 "Please tap a button or reply: Commercial / Local Pickup / Self",
+                False,
                 False,
             )
 
@@ -337,14 +338,16 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if dt:
             td.arrival_date = dt
         else:
-            return ("Please use DD-MM-YYYY format (e.g., 03-10-2025)", False)
+            # FIX: Returns 3 values now
+            return ("Please use DD-MM-YYYY format (e.g., 03-10-2025)", False, False)
 
     elif step == "arrival_time":
         tm = _parse_time(t)
         if tm:
             td.arrival_time = tm
         else:
-            return ("Please use time format like 14:30 or 2:30pm", False)
+            # FIX: Returns 3 values now
+            return ("Please use time format like 14:30 or 2:30pm", False, False)
 
     elif step == "airline":
         td.airline = t
@@ -362,7 +365,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         else:
             tm = _parse_time(t)
             if not tm:
-                return ("Time looks off. Example: 13:45", False)
+                # FIX: Returns 3 values now
+                return ("Time looks off. Example: 13:45", False, False)
             td.hotel_arrival_time = tm
             if "hat_skip" in sess.state:
                 del sess.state["hat_skip"]
@@ -374,7 +378,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         else:
             tm = _parse_time(t)
             if not tm:
-                return ("Time looks off. Example: 10:00", False)
+                # FIX: Returns 3 values now
+                return ("Time looks off. Example: 10:00", False, False)
             td.hotel_departure_time = tm
             if "hdt_skip" in sess.state:
                 del sess.state["hdt_skip"]
@@ -382,7 +387,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     elif step == "return_travel":
         b = _yn(t)
         if b is None:
-            return ("Please tap Yes or No.", False)
+            # FIX: Returns 3 values now
+            return ("Please tap Yes or No.", False, False)
         td.return_travel = b
         sess.state["return_travel"] = b
 
@@ -391,8 +397,10 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if val:
             td.departure = val
         else:
+            # FIX: Returns 3 values now
             return (
                 "Please tap a button or reply: Commercial / Local Pickup / Self",
+                False,
                 False,
             )
 
@@ -401,14 +409,16 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if dt:
             td.departure_date = dt
         else:
-            return ("Please use DD-MM-YYYY", False)
+            # FIX: Returns 3 values now
+            return ("Please use DD-MM-YYYY", False, False)
 
     elif step == "departure_time":
         tm = _parse_time(t)
         if tm:
             td.departure_time = tm
         else:
-            return ("Please use HH:MM format", False)
+            # FIX: Returns 3 values now
+            return ("Please use HH:MM format", False, False)
 
     elif step == "departure_airline":
         td.departure_airline = _set_optional_text(t)
@@ -427,15 +437,15 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     sess.step = next_step
     sess.save()
 
-    # [LOGIC FIX] Return empty string for buttons.
-    # The view will see empty string + False and call send_next_prompt()
+    # FIX: Correct return signature logic to return 3 values.
     if next_step in BUTTON_STEPS:
-        return ("", False)
+        # Return empty string to trigger send_next_prompt in the view
+        return ("", False, True)
 
     if next_step == "done":
-        return (PROMPTS["done"], True)
+        return (PROMPTS["done"], True, False)
 
-    return (PROMPTS.get(next_step, "OK."), False)
+    return (PROMPTS.get(next_step, "OK."), False, False)
 
 
 # """
