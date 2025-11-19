@@ -36,6 +36,20 @@ def _norm_digits(s: str) -> str:  # -c new helper
     return _digits.sub("", s)[-15:]  # keep last 10–15 digits
 
 
+# def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+#     _ensure_creds()
+#     url = f"{WABA_API_BASE}/{WABA_PHONE_ID}/{path}"
+#     headers = {
+#         "Authorization": f"Bearer {WABA_TOKEN}",
+#         "Content-Type": "application/json",
+#     }
+#     r = requests.post(url, headers=headers, json=payload, timeout=15)
+#     data = r.json() if r.content else {}
+#     if r.status_code >= 300:
+#         raise WhatsAppError(f"WABA error {r.status_code}: {data}")
+#     return data
+
+
 def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_creds()
     url = f"{WABA_API_BASE}/{WABA_PHONE_ID}/{path}"
@@ -43,10 +57,23 @@ def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "Authorization": f"Bearer {WABA_TOKEN}",
         "Content-Type": "application/json",
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=15)
-    data = r.json() if r.content else {}
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+    except Exception as e:
+        raise WhatsAppError(f"Network error sending to WABA: {e}")
+
+    # Handle non-JSON responses safely
+    try:
+        data = r.json() if r.content else {}
+    except Exception:
+        raise WhatsAppError(
+            f"WABA returned non-JSON response (status={r.status_code}): {r.text[:200]}"
+        )
+
     if r.status_code >= 300:
         raise WhatsAppError(f"WABA error {r.status_code}: {data}")
+
     return data
 
 
