@@ -13,7 +13,9 @@ Choice steps use button IDs like: "tc|<step>|<value>"
 import re
 from datetime import datetime, time
 from typing import Tuple, Optional, Dict, Any
-from venv import logger
+import logging
+
+logger = logging.getLogger("whatsapp")
 
 from django.utils import timezone as dj_tz
 from django.db import transaction
@@ -249,7 +251,11 @@ def send_next_prompt(reg: EventRegistration) -> None:
     logger.warning(f"[STEP-DEBUG] raw step = {step}")
     logger.warning(f"[STEP-DEBUG] repr(step) = {repr(step)}")
     logger.warning(f"[STEP-DEBUG] type(step) = {type(step)}")
+    logger.warning("[CHECKPOINT-1] reached after step debug")
+
     if not step or step == "done":
+        logger.warning("[CHECKPOINT-2] reached before PROMPT")
+
         send_freeform_text(reg.guest.phone, PROMPTS["done"])
         sess.step = "done"
         sess.is_complete = True
@@ -272,6 +278,9 @@ def send_next_prompt(reg: EventRegistration) -> None:
     # Buttons for choice steps
     logger.warning("[CHECKPOINT] reached send_next_prompt branching point")
     if step == "travel_type":
+        logger.warning("[CHECKPOINT-3] before send_choice_buttons")
+        logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
+
         send_choice_buttons(
             reg.guest.phone,
             PROMPTS["travel_type"],
@@ -283,6 +292,8 @@ def send_next_prompt(reg: EventRegistration) -> None:
         )
         return
     if step == "arrival":
+        logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
+
         send_choice_buttons(
             reg.guest.phone,
             PROMPTS["arrival"],
@@ -294,6 +305,8 @@ def send_next_prompt(reg: EventRegistration) -> None:
         )
         return
     if step == "return_travel":
+        logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
+
         send_choice_buttons(
             reg.guest.phone,
             PROMPTS["return_travel"],
