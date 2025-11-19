@@ -15,6 +15,11 @@ Accepted POST payloads from Next.js:
   }
 """
 
+import logging
+
+logger = logging.getLogger("travel_debug")
+
+
 import json
 from datetime import datetime
 
@@ -62,6 +67,8 @@ def _resolve_reg_by_wa(wa_id: str):
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
+    logger.warning("WEBHOOK HIT")
+    logger.warning(request.body)
     try:
         body = json.loads(request.body.decode("utf-8"))
     except Exception:
