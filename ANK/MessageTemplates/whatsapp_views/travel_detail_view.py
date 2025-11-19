@@ -20,7 +20,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from ANK.Logistics.models.travel_detail_capture_session import TravelCaptureSession
+from Logistics.models.travel_detail_capture_session import TravelCaptureSession
 from Events.models.event_registration_model import EventRegistration
 from MessageTemplates.services.whatsapp import (
     within_24h_window,
