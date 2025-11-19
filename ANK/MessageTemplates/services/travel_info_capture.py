@@ -106,18 +106,21 @@ def _set_optional_text(v):
 # ---------- session/detail helpers ----------
 
 
-def _get_or_create_locked_session(reg):
+def _get_or_create_session(reg):
     """
-    [CRITICAL FIX] Uses select_for_update to prevent 502s and double messages.
-    Must be used inside @transaction.atomic
+    [FINAL CRITICAL FIX] Use select_for_update with get_or_create for one atomic lock.
+    Also ensures the JSONField 'state' is initialized to a dict.
+    Must be called inside @transaction.atomic
     """
-    # This locks the row if it exists, or safely creates it.
-    # This prevents the database race condition crashing your server.
+    # This locks the row if it exists, or safely creates it, preventing 502/IntegrityErrors.
     sess, _ = TravelCaptureSession.objects.select_for_update().get_or_create(
         registration=reg, defaults={"step": "travel_type"}
     )
+
+    # Ensures the state dictionary is initialized, preventing 'NoneType' errors (502)
     if sess.state is None:
         sess.state = {}
+
     return sess
 
 
@@ -130,7 +133,6 @@ def _get_or_create_detail(reg):
 
 
 def _next_step(sess, td):
-    # [FIX] Removed "if sess.step == done return None" to allow restarting/filling missing info
     pending = []
     state = sess.state or {}
 
@@ -194,7 +196,7 @@ def _next_step(sess, td):
 
 @transaction.atomic
 def resume_or_start(reg: EventRegistration) -> None:
-    sess = _get_or_create_locked_session(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
     # Force recalculation of step in case we are restarting
@@ -213,7 +215,7 @@ def resume_or_start(reg: EventRegistration) -> None:
 
 @transaction.atomic
 def send_next_prompt(reg: EventRegistration) -> None:
-    sess = _get_or_create_locked_session(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
     send_next_prompt_internal(reg, sess, td)
 
@@ -280,7 +282,7 @@ def send_next_prompt_internal(reg, sess, td):
 
 @transaction.atomic
 def apply_button_choice(reg, step, raw_value):
-    sess = _get_or_create_locked_session(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
     if step == "travel_type":
@@ -299,22 +301,24 @@ def apply_button_choice(reg, step, raw_value):
 
 
 @transaction.atomic
-def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
+def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool, bool]:
     """
-    Returns (reply_text, done_flag).
+    [CRITICAL FIX 1] Returns (reply_text, done_flag, is_button_step). 3 values!
     """
-    sess = _get_or_create_locked_session(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
     step = sess.step or "travel_type"
     t = (text or "").strip()
 
     # --- Input Processing ---
+    # ... (Processing logic is correct now)
     if step == "travel_type":
         val = _choice(t, TRAVEL_TYPE_CHOICES)
         if val:
             td.travel_type = val
         else:
-            return ("Please tap a button or reply: Air / Train / Car", False)
+            # Returns 3 values: (reply_text, done, is_button_step)
+            return ("Please tap a button or reply: Air / Train / Car", False, False)
 
     elif step == "arrival":
         val = _choice(t, ARRIVAL_CHOICES)
@@ -324,6 +328,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             return (
                 "Please tap a button or reply: Commercial / Local Pickup / Self",
                 False,
+                False,
             )
 
     elif step == "arrival_date":
@@ -331,14 +336,14 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if dt:
             td.arrival_date = dt
         else:
-            return ("Please use DD-MM-YYYY format (e.g., 03-10-2025)", False)
+            return ("Please use DD-MM-YYYY format (e.g., 03-10-2025)", False, False)
 
     elif step == "arrival_time":
         tm = _parse_time(t)
         if tm:
             td.arrival_time = tm
         else:
-            return ("Please use time format like 14:30 or 2:30pm", False)
+            return ("Please use time format like 14:30 or 2:30pm", False, False)
 
     elif step == "airline":
         td.airline = t
@@ -356,9 +361,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         else:
             tm = _parse_time(t)
             if not tm:
-                return ("Time looks off. Example: 13:45", False)
+                return ("Time looks off. Example: 13:45", False, False)
             td.hotel_arrival_time = tm
-            # If they answer, remove skip flag
             if "hat_skip" in sess.state:
                 del sess.state["hat_skip"]
 
@@ -369,7 +373,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         else:
             tm = _parse_time(t)
             if not tm:
-                return ("Time looks off. Example: 10:00", False)
+                return ("Time looks off. Example: 10:00", False, False)
             td.hotel_departure_time = tm
             if "hdt_skip" in sess.state:
                 del sess.state["hdt_skip"]
@@ -377,7 +381,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     elif step == "return_travel":
         b = _yn(t)
         if b is None:
-            return ("Please tap Yes or No.", False)
+            return ("Please tap Yes or No.", False, False)
         td.return_travel = b
         sess.state["return_travel"] = b
 
@@ -389,6 +393,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             return (
                 "Please tap a button or reply: Commercial / Local Pickup / Self",
                 False,
+                False,
             )
 
     elif step == "departure_date":
@@ -396,14 +401,14 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if dt:
             td.departure_date = dt
         else:
-            return ("Please use DD-MM-YYYY", False)
+            return ("Please use DD-MM-YYYY", False, False)
 
     elif step == "departure_time":
         tm = _parse_time(t)
         if tm:
             td.departure_time = tm
         else:
-            return ("Please use HH:MM format", False)
+            return ("Please use HH:MM format", False, False)
 
     elif step == "departure_airline":
         td.departure_airline = _set_optional_text(t)
@@ -422,15 +427,19 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     sess.step = next_step
     sess.save()
 
+    is_button_step = next_step in BUTTON_STEPS
+
     if next_step == "done":
-        return (PROMPTS["done"], True)
+        # Returns (reply_text, done, is_button_step)
+        return (PROMPTS["done"], True, False)
 
-    # [CRITICAL] If next step is a button, return EMPTY string.
-    # This tells the webhook view (travel_detail_view.py) to run send_next_prompt()
-    if next_step in BUTTON_STEPS:
-        return ("", False)
+    if is_button_step:
+        # Returns (reply_text="", done=False, is_button_step=True)
+        # The view (travel_detail_view.py) will see the empty string and call send_next_prompt()
+        return ("", False, True)
 
-    return (PROMPTS.get(next_step, "OK."), False)
+    # Returns (reply_text=PROMPT, done=False, is_button_step=False)
+    return (PROMPTS.get(next_step, "OK."), False, False)
 
 
 # """
