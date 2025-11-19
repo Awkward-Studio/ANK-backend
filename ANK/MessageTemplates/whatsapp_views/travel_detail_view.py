@@ -56,6 +56,9 @@ def _norm_digits(s: str) -> str:
 
 def _resolve_reg_by_wa(wa_id: str):
     """Resolve the most recent registration mapped to this wa_id."""
+    print("DEBUG WA_ID =", wa_id)
+    print("DEBUG DB =", list(WaSendMap.objects.values_list("wa_id", flat=True)[:20]))
+
     rid = (
         WaSendMap.objects.filter(wa_id=wa_id)
         .order_by("-created_at")
