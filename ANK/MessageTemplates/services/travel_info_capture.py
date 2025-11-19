@@ -83,7 +83,7 @@ def _set_optional_text(v: str) -> Optional[str]:
     Optional text fields:
     - Treat empty / 'skip' / 'none' / 'na' / 'n/a' / '-' as *skipped* → store "".
     - Anything else: trimmed string.
-    This ensures td.<field> is NOT None once answered/skipped, so _next_step won't re-ask.
+    We use session state flags to know if we already asked this field.
     """
     if v is None:
         return ""
@@ -147,13 +147,17 @@ def _get_or_create_detail(reg: EventRegistration) -> TravelDetail:
 
 # ---------- next step logic ----------
 def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
+    """
+    Decide the next logical step based on what is already stored.
+    We rely on TravelDetail fields + session.state flags to know what has been asked.
+    """
     if sess.step == "done":
         return None
 
-    pending = []
     state = sess.state or {}
+    pending = []
 
-    # core
+    # --- core arrival stuff ---
     if not td.travel_type:
         pending.append("travel_type")
     if not td.arrival:
@@ -163,43 +167,47 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
     if not td.arrival_time:
         pending.append("arrival_time")
 
-    # commercial air specifics
+    # --- inbound commercial air specifics ---
     if td.travel_type == "Air" and td.arrival == "commercial":
         if not td.airline:
             pending.append("airline")
         if not td.flight_number:
             pending.append("flight_number")
-        if td.pnr is None:
+        # pnr: optional but we want to ask once per flow
+        if not state.get("pnr_done"):
             pending.append("pnr")
 
-    # optional arrival note, hotel times
-    if td.arrival_details is None:
+    # --- arrival details; ask once per flow, may be skipped ---
+    if not state.get("arrival_details_done"):
         pending.append("arrival_details")
 
-    # Hotel times: allow skip via state flags so we don't keep re-asking
+    # --- Hotel times: allow skipping via flags so we don't re-ask ---
     if td.hotel_arrival_time is None and not state.get("hat_skip"):
         pending.append("hotel_arrival_time")
     if td.hotel_departure_time is None and not state.get("hdt_skip"):
         pending.append("hotel_departure_time")
 
-    # return branch (only td.return_travel, no jank with sess.state)
-    if td.return_travel is None:
+    # --- Return travel decision; ask once per flow ---
+    if not state.get("return_travel_done"):
         pending.append("return_travel")
-    elif td.return_travel is True:
+    elif td.return_travel:
+        # Departure only if user said they have return travel
         if not td.departure:
             pending.append("departure")
         if not td.departure_date:
             pending.append("departure_date")
         if not td.departure_time:
             pending.append("departure_time")
+
         if td.travel_type == "Air" and td.departure == "commercial":
-            if td.departure_airline is None:
+            if not state.get("departure_airline_done"):
                 pending.append("departure_airline")
-            if td.departure_flight_number is None:
+            if not state.get("departure_flight_number_done"):
                 pending.append("departure_flight_number")
-            if td.departure_pnr is None:
+            if not state.get("departure_pnr_done"):
                 pending.append("departure_pnr")
-        if td.departure_details is None:
+
+        if not state.get("departure_details_done"):
             pending.append("departure_details")
 
     if not pending:
@@ -233,25 +241,35 @@ def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False)
 def resume_or_start(reg: EventRegistration) -> None:
     """
     Called on WAKE.
-    If no step is set or step is opt_in/blank → start from travel_type.
-    Otherwise: resume from pending step (and resend if unanswered).
+
+    If the flow is already complete, do nothing.
+    (You can wire a response later.)
     """
     sess = _get_or_create_session(reg)
+
+    if sess.is_complete or sess.step == "done":
+        logger.warning(
+            f"[RESUME] Registration={reg.pk} session already complete; not sending more prompts."
+        )
+        # TODO: later you can return something like:
+        # return {"status": "completed"}
+        return
+
     if not sess.step or sess.step in {"opt_in", ""}:
         start_capture_after_opt_in(reg, restart=False)
         return
+
     send_next_prompt(reg)
 
 
 def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
     """
     Internal helper: send exactly ONE WA message for this step.
-    Raises exceptions from send_* so caller can decide what to do.
     """
     phone = reg.guest.phone
     logger.warning(f"[PROMPT] Sending step '{step}' to {phone}")
 
-    # Choice/button steps
+    # Buttons for choice steps
     if step == "travel_type":
         send_choice_buttons(
             phone,
@@ -299,13 +317,13 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
         )
         return
 
-    # Free-form steps
+    # Free-form for the rest
     send_freeform_text(phone, PROMPTS.get(step, "OK."))
 
 
 def send_next_prompt(reg: EventRegistration) -> None:
     """
-    Decides next step from TravelDetail + session.
+    Decide next step from TravelDetail + session.
     Sends exactly one WA message for that step.
     If message send fails, we log & DO NOT advance step,
     so next resume can retry.
@@ -337,15 +355,15 @@ def send_next_prompt(reg: EventRegistration) -> None:
         )
         return
 
-    # We DO NOT skip based on last_prompt_step.
-    # If step is still pending (unanswered), and flow is resumed,
+    # We DO NOT block on last_prompt_step anymore.
+    # If the same step is still pending (unanswered) and flow is resumed,
     # we want to resend it.
 
     try:
         _send_whatsapp_prompt(reg, step)
     except Exception:
         logger.exception(f"[ERROR] Failed to send WA prompt for step={step}")
-        # Do NOT advance step/last_prompt_step; let next WAKE retry.
+        # Do NOT advance; let the next WAKE try again
         return
 
     # Only if send succeeded do we record that we prompted this step
@@ -361,24 +379,32 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
     Applies a button value to the appropriate TravelDetail field and advances to the next prompt.
     """
     td = _get_or_create_detail(reg)
-    _get_or_create_session(reg)  # in case we need it later
+    sess = _get_or_create_session(reg)
 
     try:
         if step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             td.travel_type = raw_value
             td.save(update_fields=["travel_type"])
+
         elif step == "arrival" and raw_value in ARRIVAL_CHOICES:
             td.arrival = raw_value
             td.save(update_fields=["arrival"])
+
         elif step == "return_travel":
+            # mark answered in state, and store boolean in td
+            sess.state = sess.state or {}
+            sess.state["return_travel_done"] = True
             td.return_travel = raw_value == "yes"
             td.save(update_fields=["return_travel"])
+            sess.save(update_fields=["state"])
+
         elif step == "departure" and raw_value in ARRIVAL_CHOICES:
             td.departure = raw_value
             td.save(update_fields=["departure"])
+
         else:
             logger.warning(
-                f"[BUTTON] Unknown or invalid step/value: {step=} {raw_value=}"
+                f"[BUTTON] Unknown or invalid step/value: step={step!r} value={raw_value!r}"
             )
     except Exception:
         logger.exception(f"[ERROR] Failed to apply button choice for step={step}")
@@ -406,6 +432,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     step = sess.step or "travel_type"
     t = (text or "").strip()
     logger.warning(f"[ANSWER] step={step!r} text={t!r}")
+
+    state_changed = False
 
     try:
         if step == "travel_type":
@@ -449,40 +477,46 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
         elif step == "pnr":
             td.pnr = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["pnr_done"] = True
+            state_changed = True
             td.save(update_fields=["pnr"])
 
         elif step == "arrival_details":
             td.arrival_details = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["arrival_details_done"] = True
+            state_changed = True
             td.save(update_fields=["arrival_details"])
 
         elif step == "hotel_arrival_time":
             key = t.strip().lower()
+            sess.state = sess.state or {}
             if key in {"skip", "none", "na", "n/a", ""}:
                 td.hotel_arrival_time = None
-                sess.state = sess.state or {}
                 sess.state["hat_skip"] = True
             else:
                 tm = _parse_time(t)
                 if not tm:
                     return ("Time looks off. Example: 13:45", False)
                 td.hotel_arrival_time = tm
-                if sess.state and "hat_skip" in sess.state:
-                    sess.state.pop("hat_skip", None)
+                sess.state.pop("hat_skip", None)
+            state_changed = True
             td.save(update_fields=["hotel_arrival_time"])
 
         elif step == "hotel_departure_time":
             key = t.strip().lower()
+            sess.state = sess.state or {}
             if key in {"skip", "none", "na", "n/a", ""}:
                 td.hotel_departure_time = None
-                sess.state = sess.state or {}
                 sess.state["hdt_skip"] = True
             else:
                 tm = _parse_time(t)
                 if not tm:
                     return ("Time looks off. Example: 10:00", False)
                 td.hotel_departure_time = tm
-                if sess.state and "hdt_skip" in sess.state:
-                    sess.state.pop("hdt_skip", None)
+                sess.state.pop("hdt_skip", None)
+            state_changed = True
             td.save(update_fields=["hotel_departure_time"])
 
         elif step == "return_travel":
@@ -490,6 +524,9 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             if b is None:
                 return ("Please tap Yes/No.", False)
             td.return_travel = b
+            sess.state = sess.state or {}
+            sess.state["return_travel_done"] = True
+            state_changed = True
             td.save(update_fields=["return_travel"])
 
         elif step == "departure":
@@ -518,22 +555,33 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
         elif step == "departure_airline":
             td.departure_airline = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["departure_airline_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_airline"])
 
         elif step == "departure_flight_number":
             td.departure_flight_number = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["departure_flight_number_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_flight_number"])
 
         elif step == "departure_pnr":
             td.departure_pnr = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["departure_pnr_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_pnr"])
 
         elif step == "departure_details":
             td.departure_details = _set_optional_text(t)
+            sess.state = sess.state or {}
+            sess.state["departure_details_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_details"])
 
         else:
-            # Unknown step; don't blow up, just log
             logger.warning(f"[ANSWER] Unknown step={step!r}, text={t!r}")
             return ("Sorry, I didn't understand that. Please try again.", False)
 
@@ -544,17 +592,25 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             False,
         )
 
-    # advance step
+    # advance
     sess.step = _next_step(sess, td) or "done"
     sess.last_msg_at = dj_tz.now()
     if sess.step == "done":
         sess.is_complete = True
 
-    # Save session (including state)
-    try:
-        sess.save(update_fields=["step", "last_msg_at", "is_complete", "state"])
-    except Exception:
-        logger.exception("[ERROR] Failed to save session after inbound answer")
+    if state_changed:
+        # save step + state
+        try:
+            sess.save(update_fields=["step", "last_msg_at", "is_complete", "state"])
+        except Exception:
+            logger.exception("[ERROR] Failed to save session after inbound answer")
+    else:
+        try:
+            sess.save(update_fields=["step", "last_msg_at", "is_complete"])
+        except Exception:
+            logger.exception(
+                "[ERROR] Failed to save session after inbound answer (no state change)"
+            )
 
     done = sess.step == "done"
     if done:
