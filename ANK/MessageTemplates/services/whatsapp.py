@@ -1,6 +1,7 @@
 from datetime import timedelta
 import os
 import re
+from venv import logger
 import requests
 from typing import Dict, Any, List, Optional
 import datetime
@@ -43,6 +44,8 @@ def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "Authorization": f"Bearer {WABA_TOKEN}",
         "Content-Type": "application/json",
     }
+    logger.warning(f"[WA-SEND] URL={url}")
+    logger.warning(f"[WA-SEND] PAYLOAD={payload}")
     r = requests.post(url, headers=headers, json=payload, timeout=15)
     data = r.json() if r.content else {}
     if r.status_code >= 300:
@@ -82,6 +85,9 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
     Sends a free-form WhatsApp text (must be within 24h window).
     Returns provider message id (if any).
     """
+    logger.warning(f"[WA] RESPONSE STATUS: {r.status_code}")
+    logger.warning(f"[WA] RESPONSE BODY: {r.text}")
+
     data = _post(
         "messages",
         {
@@ -190,4 +196,5 @@ def send_choice_buttons(
             "interactive": interactive,
         },
     )
+
     return (data.get("messages") or [{}])[0].get("id", "")
