@@ -60,6 +60,34 @@ def _safe_get_registration(reg_id: str):
         return None
 
 
+def _resolve_travel_reg(wa_id: str, event_id: str):
+    from Events.models.wa_send_map import WaSendMap
+    from django.utils import timezone
+
+    if not wa_id or not event_id:
+        return None
+
+    qs = (
+        WaSendMap.objects.filter(
+            wa_id=wa_id,
+            event_id=event_id,
+            template_wamid__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+        .order_by("-created_at")
+        .values_list("event_registration", flat=True)
+        .first()
+    )
+
+    if not qs:
+        return None
+
+    try:
+        return EventRegistration.objects.select_related("guest").get(pk=qs)
+    except EventRegistration.DoesNotExist:
+        return None
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
@@ -73,14 +101,15 @@ def whatsapp_travel_webhook(request):
 
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
-    reg_id = body.get("registration_id")  # ALWAYS provided
+    reg = _resolve_travel_reg(wa_id, body.get("event_id"))
 
     if kind not in {"resume", "button", "wake", "text"}:
         logger.error(f"[WEBHOOK] Invalid kind '{kind}'")
         return JsonResponse({"ok": False, "error": "invalid_kind"}, status=400)
 
     # Load the registration (safe)
-    reg = _safe_get_registration(reg_id)
+    reg = _resolve_travel_reg(wa_id, body.get("event_id"))
+
     if not reg:
         # If no reg, no action, but return ok to avoid retries
         return JsonResponse({"ok": True}, status=200)
