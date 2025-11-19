@@ -4,7 +4,7 @@ from datetime import datetime, time
 from typing import Tuple, Optional, Dict
 
 from django.utils import timezone as dj_tz
-from django.db import transaction, DatabaseError
+from django.db import transaction, IntegrityError
 
 from Logistics.models.travel_details_models import TravelDetail
 from Logistics.models.travel_detail_capture_session import TravelCaptureSession
@@ -106,18 +106,19 @@ def _set_optional_text(v):
 # ---------- session/detail helpers ----------
 
 
-def _get_or_create_session_internal(reg):
+def _get_or_create_session(reg):
     """
-    [Internal Function] Assumes the transaction/lock is already applied on `reg`.
+    Standard get_or_create WITHOUT locking to prevent 504 Timeouts.
+    Includes fallback for race conditions.
     """
     try:
-        # Tries to get the session normally (safe because `reg` is locked)
+        sess, _ = TravelCaptureSession.objects.get_or_create(
+            registration=reg, defaults={"step": "travel_type"}
+        )
+    except IntegrityError:
+        # If a race condition happens, just fetch the one that won
         sess = TravelCaptureSession.objects.get(registration=reg)
-    except TravelCaptureSession.DoesNotExist:
-        # Creates the session (safe because `reg` is locked)
-        sess = TravelCaptureSession.objects.create(registration=reg, step="travel_type")
 
-    # Ensures the state dictionary is initialized
     if sess.state is None:
         sess.state = {}
 
@@ -125,6 +126,7 @@ def _get_or_create_session_internal(reg):
 
 
 def _get_or_create_detail(reg):
+    # Simple fetch/create logic
     td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
     if not td:
         td = TravelDetail.objects.create(event=reg.event)
@@ -191,16 +193,13 @@ def _next_step(sess, td):
     return pending[0] if pending else "done"
 
 
-# ---------- Public API (All must start with locking the EventRegistration) ----------
+# ---------- Public API ----------
 
 
 @transaction.atomic
 def resume_or_start(reg: EventRegistration) -> None:
-    # 1. LOCK THE PARENT (EventRegistration) to prevent 502s on creation
-    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
-
-    # 2. Get/Create the session safely
-    sess = _get_or_create_session_internal(reg)
+    # No locks here. Just get objects.
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
     # Force recalculation of step in case we are restarting
@@ -219,11 +218,7 @@ def resume_or_start(reg: EventRegistration) -> None:
 
 @transaction.atomic
 def send_next_prompt(reg: EventRegistration) -> None:
-    # 1. LOCK THE PARENT (EventRegistration)
-    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
-
-    # 2. Get the session safely
-    sess = _get_or_create_session_internal(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
     send_next_prompt_internal(reg, sess, td)
 
@@ -290,11 +285,7 @@ def send_next_prompt_internal(reg, sess, td):
 
 @transaction.atomic
 def apply_button_choice(reg, step, raw_value):
-    # 1. LOCK THE PARENT (EventRegistration)
-    reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
-
-    # 2. Get the session safely
-    sess = _get_or_create_session_internal(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
     if step == "travel_type":
@@ -316,17 +307,9 @@ def apply_button_choice(reg, step, raw_value):
 def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
     """
     Returns (reply_text, done_flag).
-    RETURNS 2 VALUES TO MATCH YOUR VIEW FILE.
+    Standard Django call - NO LOCKS to prevent 504s.
     """
-    # 1. LOCK THE PARENT (EventRegistration) - Prevents 502
-    try:
-        reg = EventRegistration.objects.select_for_update().get(pk=reg.pk)
-    except DatabaseError as e:
-        logger.error(f"Failed to lock EventRegistration {reg.pk}: {e}")
-        raise
-
-    # 2. Get the session safely
-    sess = _get_or_create_session_internal(reg)
+    sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
     step = sess.step or "travel_type"
     t = (text or "").strip()
@@ -444,9 +427,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     sess.step = next_step
     sess.save()
 
-    # [CRITICAL FIX] - Match the view's logic
-    # If next step is buttons, return EMPTY string ("").
-    # The view checks 'if not reply_text' and triggers send_next_prompt()
+    # [LOGIC FIX] Return empty string for buttons.
+    # The view will see empty string + False and call send_next_prompt()
     if next_step in BUTTON_STEPS:
         return ("", False)
 
