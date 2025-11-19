@@ -246,7 +246,9 @@ def send_next_prompt(reg: EventRegistration) -> None:
     td = _get_or_create_detail(reg)
 
     step = _next_step(sess, td) if sess.step != "done" else None
-    logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
+    logger.warning(f"[STEP-DEBUG] raw step = {step}")
+    logger.warning(f"[STEP-DEBUG] repr(step) = {repr(step)}")
+    logger.warning(f"[STEP-DEBUG] type(step) = {type(step)}")
     if not step or step == "done":
         send_freeform_text(reg.guest.phone, PROMPTS["done"])
         sess.step = "done"
@@ -268,6 +270,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
     sess.save(update_fields=["step", "last_prompt_step", "last_msg_at"])
 
     # Buttons for choice steps
+    logger.warning("[CHECKPOINT] reached send_next_prompt branching point")
     if step == "travel_type":
         send_choice_buttons(
             reg.guest.phone,
