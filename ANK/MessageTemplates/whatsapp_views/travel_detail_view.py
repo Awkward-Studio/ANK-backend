@@ -99,13 +99,14 @@ def whatsapp_travel_webhook(request):
         delta = now - reg.responded_on
         if delta.total_seconds() < 1.0:
             return JsonResponse({"ok": True}, status=200)
-    reg.responded_on = now
-    reg.save(update_fields=["responded_on"])
 
     # Out-of-window? Send the resume template *before* doing anything else
     if not within_24h_window(reg.responded_on):
         send_resume_opener(reg.guest.phone, str(reg.id))
         return JsonResponse({"ok": True}, status=200)
+
+    reg.responded_on = now
+    reg.save(update_fields=["responded_on"])
 
     # --- kind: button (interactive button pressed in-session)
     if kind == "button":
