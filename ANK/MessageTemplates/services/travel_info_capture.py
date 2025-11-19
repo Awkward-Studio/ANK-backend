@@ -25,7 +25,7 @@ ARRIVAL_CHOICES = {
 }
 TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
 
-# [CRITICAL FIX] Defined steps that require buttons
+# Steps that require buttons.
 BUTTON_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
 
 PROMPTS = {
@@ -50,7 +50,7 @@ PROMPTS = {
     "done": "Thanks! We’ve recorded your travel details. Reply if you need to change anything.",
 }
 
-# ---------- parsing helpers (kept compact) ----------
+# ---------- parsing helpers ----------
 _date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
 _time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
 
@@ -106,8 +106,16 @@ def _set_optional_text(v):
 # ---------- session/detail helpers ----------
 
 
-def _get_or_create_session(reg):
-    sess, _ = TravelCaptureSession.objects.get_or_create(registration=reg)
+def _get_or_create_locked_session(reg):
+    """
+    [CRITICAL FIX] Uses select_for_update to prevent 502s and double messages.
+    Must be used inside @transaction.atomic
+    """
+    # This locks the row if it exists, or safely creates it.
+    # This prevents the database race condition crashing your server.
+    sess, _ = TravelCaptureSession.objects.select_for_update().get_or_create(
+        registration=reg, defaults={"step": "travel_type"}
+    )
     if sess.state is None:
         sess.state = {}
     return sess
@@ -122,8 +130,7 @@ def _get_or_create_detail(reg):
 
 
 def _next_step(sess, td):
-    if sess.step == "done":
-        return None
+    # [FIX] Removed "if sess.step == done return None" to allow restarting/filling missing info
     pending = []
     state = sess.state or {}
 
@@ -148,13 +155,17 @@ def _next_step(sess, td):
 
     if td.arrival_details is None:
         pending.append("arrival_details")
+
+    # Hotel Times (Allow Skip)
     if td.hotel_arrival_time is None and not state.get("hat_skip"):
         pending.append("hotel_arrival_time")
     if td.hotel_departure_time is None and not state.get("hdt_skip"):
         pending.append("hotel_departure_time")
 
     # Return Travel
-    if td.return_travel is False and "return_travel" not in state:
+    if td.return_travel is None or (
+        td.return_travel is False and "return_travel" not in state
+    ):
         pending.append("return_travel")
     elif td.return_travel is True:
         if not td.departure:
@@ -163,6 +174,7 @@ def _next_step(sess, td):
             pending.append("departure_date")
         if not td.departure_time:
             pending.append("departure_time")
+
         if td.travel_type == "Air" and td.departure == "commercial":
             if td.departure_airline is None:
                 pending.append("departure_airline")
@@ -170,6 +182,7 @@ def _next_step(sess, td):
                 pending.append("departure_flight_number")
             if td.departure_pnr is None:
                 pending.append("departure_pnr")
+
         if td.departure_details is None:
             pending.append("departure_details")
 
@@ -179,22 +192,36 @@ def _next_step(sess, td):
 # ---------- Public API ----------
 
 
+@transaction.atomic
 def resume_or_start(reg: EventRegistration) -> None:
-    sess = _get_or_create_session(reg)
-    if not sess.step or sess.step in {"opt_in", ""}:
-        sess.step = "travel_type"
-        sess.save()
-    send_next_prompt(reg)
+    sess = _get_or_create_locked_session(reg)
+    td = _get_or_create_detail(reg)
+
+    # Force recalculation of step in case we are restarting
+    real_next = _next_step(sess, td)
+
+    if real_next and real_next != "done":
+        sess.step = real_next
+        sess.is_complete = False
+    elif not real_next or real_next == "done":
+        sess.step = "done"
+        sess.is_complete = True
+
+    sess.save()
+    send_next_prompt_internal(reg, sess, td)
 
 
 @transaction.atomic
 def send_next_prompt(reg: EventRegistration) -> None:
-    sess = _get_or_create_session(reg)
+    sess = _get_or_create_locked_session(reg)
     td = _get_or_create_detail(reg)
+    send_next_prompt_internal(reg, sess, td)
 
+
+def send_next_prompt_internal(reg, sess, td):
     step = _next_step(sess, td) or "done"
 
-    # Check for duplicate send
+    # [FIX] Prevents double sending if we are already on this step
     if sess.last_prompt_step == step and step != "done":
         return
 
@@ -253,8 +280,8 @@ def send_next_prompt(reg: EventRegistration) -> None:
 
 @transaction.atomic
 def apply_button_choice(reg, step, raw_value):
+    sess = _get_or_create_locked_session(reg)
     td = _get_or_create_detail(reg)
-    sess = _get_or_create_session(reg)
 
     if step == "travel_type":
         td.travel_type = raw_value
@@ -268,16 +295,15 @@ def apply_button_choice(reg, step, raw_value):
 
     td.save()
     sess.save()
-    send_next_prompt(reg)
+    send_next_prompt_internal(reg, sess, td)
 
 
 @transaction.atomic
 def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
     """
     Returns (reply_text, done_flag).
-    If next step is a button, returns ("", False) so webhook knows to call send_next_prompt.
     """
-    sess = _get_or_create_session(reg)
+    sess = _get_or_create_locked_session(reg)
     td = _get_or_create_detail(reg)
     step = sess.step or "travel_type"
     t = (text or "").strip()
@@ -324,7 +350,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         td.arrival_details = _set_optional_text(t)
 
     elif step == "hotel_arrival_time":
-        if t.lower() in {"skip", ""}:
+        if t.lower() in {"skip", "none", "na", ""}:
             sess.state["hat_skip"] = True
             td.hotel_arrival_time = None
         else:
@@ -332,9 +358,12 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             if not tm:
                 return ("Time looks off. Example: 13:45", False)
             td.hotel_arrival_time = tm
+            # If they answer, remove skip flag
+            if "hat_skip" in sess.state:
+                del sess.state["hat_skip"]
 
     elif step == "hotel_departure_time":
-        if t.lower() in {"skip", ""}:
+        if t.lower() in {"skip", "none", "na", ""}:
             sess.state["hdt_skip"] = True
             td.hotel_departure_time = None
         else:
@@ -342,6 +371,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             if not tm:
                 return ("Time looks off. Example: 10:00", False)
             td.hotel_departure_time = tm
+            if "hdt_skip" in sess.state:
+                del sess.state["hdt_skip"]
 
     elif step == "return_travel":
         b = _yn(t)
@@ -389,16 +420,13 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     # --- Calculate Next Step ---
     next_step = _next_step(sess, td) or "done"
     sess.step = next_step
-
-    # [CRITICAL FIX] Do NOT save last_prompt_step here.
-    # Leave that to send_next_prompt so it knows it's a fresh step.
     sess.save()
 
     if next_step == "done":
         return (PROMPTS["done"], True)
 
-    # [CRITICAL FIX] If next step is a button, return EMPTY string.
-    # This tells the webhook view to run send_next_prompt()
+    # [CRITICAL] If next step is a button, return EMPTY string.
+    # This tells the webhook view (travel_detail_view.py) to run send_next_prompt()
     if next_step in BUTTON_STEPS:
         return ("", False)
 
