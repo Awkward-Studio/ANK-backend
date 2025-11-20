@@ -171,7 +171,7 @@ ARRIVAL_CHOICES = {
 TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
 
 # Steps that should always be rendered as WhatsApp buttons
-CHOICE_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
+CHOICE_STEPS = {"travel_type", "arrival", "return_travel", "departure", "extra_attendees_count"}
 
 # Optional steps that can be skipped - will show a Skip button
 OPTIONAL_STEPS = {
@@ -289,10 +289,26 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
 
     state = sess.state or {}
     pending = []
+    reg = sess.registration
 
     # --- core arrival stuff ---
     if not td.travel_type:
         pending.append("travel_type")
+    
+    # --- Extra Guests Check ---
+    # Ask this immediately after travel type
+    if td.travel_type and not state.get("extra_attendees_count_done"):
+        # Only ask if they actually have extra attendees
+        if reg.extra_attendees.exists():
+            pending.append("extra_attendees_count")
+        else:
+            # Auto-mark as done if no extras
+            state["extra_attendees_count_done"] = True
+            state["extra_attendees_count"] = 0
+            # Ensure state is assigned back to session before saving
+            sess.state = state
+            sess.save(update_fields=["state"])
+
     # SKIP arrival question - default to 'commercial'
     if not td.arrival_date:
         pending.append("arrival_date")
@@ -450,6 +466,39 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
         )
         return
 
+    if step == "extra_attendees_count":
+        total_extras = reg.extra_attendees.count()
+        buttons = []
+        # Offer buttons for 0 up to min(total, 2) to keep it simple, or maybe up to 3
+        # WhatsApp allows max 3 buttons usually in some templates, but list messages allow more.
+        # send_choice_buttons uses interactive buttons (max 3).
+        
+        # If they have 1 extra: [0, 1]
+        # If they have 2 extras: [0, 1, 2]
+        # If they have 3+ extras: [0, All(N), Type] -> actually let's just give common options
+        
+        if total_extras == 1:
+            buttons = [
+                {"id": "tc|extra_attendees_count|1", "title": "Yes, 1 Guest"},
+                {"id": "tc|extra_attendees_count|0", "title": "No, just me"},
+            ]
+        else:
+            buttons.append({"id": f"tc|extra_attendees_count|{total_extras}", "title": f"All {total_extras} Guests"})
+            if total_extras > 1:
+                buttons.append({"id": "tc|extra_attendees_count|0", "title": "Just me"})
+            # Add a 'Type' option? Or just let them type. 
+            # If we have space for a 3rd button and total > 1, maybe "Some..."?
+            # For now, let's stick to "All" and "Just me" as quick options. 
+            # If they want a specific number, they can type it (we'll mention it in text).
+        
+        msg = (
+            f"You have {total_extras} extra guests registered with you. 👥\n\n"
+            "How many of them are traveling with you on this journey?"
+        )
+        
+        send_choice_buttons(phone, msg, buttons)
+        return
+
     # Optional steps with Skip button
     if step in OPTIONAL_STEPS:
         td = _get_or_create_detail(reg)
@@ -501,6 +550,19 @@ def send_next_prompt(reg: EventRegistration) -> None:
         sess.save(
             update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
         )
+        
+        # --- POST-COMPLETION ACTIONS ---
+        # Link extra attendees if count > 0
+        try:
+            count = (sess.state or {}).get("extra_attendees_count", 0)
+            if count > 0:
+                extras = list(reg.extra_attendees.all()[:count])
+                if extras:
+                    td.extra_attendees.add(*extras)
+                    logger.warning(f"[DONE] Linked {len(extras)} extra attendees to TravelDetail {td.id}")
+        except Exception as exc:
+            logger.exception(f"[DONE-ERR] Failed to link extra attendees: {exc}")
+            
         return
 
     # If the same step is still pending (unanswered) and flow is resumed,
@@ -623,6 +685,16 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
         elif step == "departure" and raw_value in ARRIVAL_CHOICES:
             td.departure = raw_value
             td.save(update_fields=["departure"])
+            
+        elif step == "extra_attendees_count":
+            try:
+                count = int(raw_value)
+                sess.state = sess.state or {}
+                sess.state["extra_attendees_count"] = count
+                sess.state["extra_attendees_count_done"] = True
+                sess.save(update_fields=["state"])
+            except ValueError:
+                pass
 
         else:
             logger.warning(
