@@ -634,6 +634,11 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 td.save(update_fields=["departure_details"])
             sess.save(update_fields=["state"])
 
+        elif step == "start_travel":
+            # Explicitly start the travel capture flow from the beginning
+            start_capture_after_opt_in(reg, restart=True)
+            return
+
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
@@ -724,19 +729,24 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
 
                 # Send appropriate response based on status
                 if status == "yes":
-                    # Ask for guest count
+                    # Send confirmation with travel details button
                     try:
-                        send_freeform_text(
-                            reg.guest.phone,
-                            "Great! How many people will be attending (including you)? 👥\n\n"
-                            "Please reply with a number (e.g., 2, 3, 4)"
+                        event_name = reg.event.name if reg.event else "the event"
+                        msg_body = (
+                            f"✅ Perfect! Your RSVP has been updated:\n"
+                            f"• Event: {event_name}\n"
+                            f"• Status: Confirmed\n\n"
+                            "We're looking forward to seeing you! 🎉"
                         )
-                        # Set flag to expect guest count
-                        sess.state = sess.state or {}
-                        sess.state["awaiting_guest_count"] = True
-                        sess.save(update_fields=["state"])
+                        send_choice_buttons(
+                            reg.guest.phone,
+                            msg_body,
+                            [
+                                {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Provide Travel Details"}
+                            ]
+                        )
                     except Exception as exc:
-                        logger.exception(f"[RSVP-BUTTON] Failed to send guest count prompt: {exc}")
+                        logger.exception(f"[RSVP-BUTTON] Failed to send confirmation: {exc}")
                 
                 elif status == "no":
                     try:
