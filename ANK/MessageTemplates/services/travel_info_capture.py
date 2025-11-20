@@ -519,18 +519,29 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.flight_number = t.upper()
             td.save(update_fields=["flight_number"])
 
+        # --- OPTIONAL FIELDS FIX: Only set *_done flag if a value was provided ---
         elif step == "pnr":
-            td.pnr = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.pnr = val
             sess.state = sess.state or {}
-            sess.state["pnr_done"] = True
-            state_changed = True
+            if val:
+                sess.state["pnr_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("pnr_done", None)
+                state_changed = True
             td.save(update_fields=["pnr"])
 
         elif step == "arrival_details":
-            td.arrival_details = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.arrival_details = val
             sess.state = sess.state or {}
-            sess.state["arrival_details_done"] = True
-            state_changed = True
+            if val:
+                sess.state["arrival_details_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("arrival_details_done", None)
+                state_changed = True
             td.save(update_fields=["arrival_details"])
 
         elif step == "hotel_arrival_time":
@@ -578,31 +589,51 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.save(update_fields=["departure_time"])
 
         elif step == "departure_airline":
-            td.departure_airline = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.departure_airline = val
             sess.state = sess.state or {}
-            sess.state["departure_airline_done"] = True
-            state_changed = True
+            if val:
+                sess.state["departure_airline_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("departure_airline_done", None)
+                state_changed = True
             td.save(update_fields=["departure_airline"])
 
         elif step == "departure_flight_number":
-            td.departure_flight_number = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.departure_flight_number = val
             sess.state = sess.state or {}
-            sess.state["departure_flight_number_done"] = True
-            state_changed = True
+            if val:
+                sess.state["departure_flight_number_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("departure_flight_number_done", None)
+                state_changed = True
             td.save(update_fields=["departure_flight_number"])
 
         elif step == "departure_pnr":
-            td.departure_pnr = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.departure_pnr = val
             sess.state = sess.state or {}
-            sess.state["departure_pnr_done"] = True
-            state_changed = True
+            if val:
+                sess.state["departure_pnr_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("departure_pnr_done", None)
+                state_changed = True
             td.save(update_fields=["departure_pnr"])
 
         elif step == "departure_details":
-            td.departure_details = _set_optional_text(t)
+            val = _set_optional_text(t)
+            td.departure_details = val
             sess.state = sess.state or {}
-            sess.state["departure_details_done"] = True
-            state_changed = True
+            if val:
+                sess.state["departure_details_done"] = True
+                state_changed = True
+            else:
+                sess.state.pop("departure_details_done", None)
+                state_changed = True
             td.save(update_fields=["departure_details"])
 
         else:
@@ -616,7 +647,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             False,
         )
 
-    # Persist session meta (but NOT step/is_complete; send_next_prompt will decide next step)
+    # Persist session meta and updated state
     sess.last_msg_at = dj_tz.now()
     if state_changed:
         try:
@@ -633,23 +664,243 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                 "[ERROR] Failed to save session after inbound answer (no state change)"
             )
 
-    # We successfully stored the answer → now send whatever the *next* prompt is.
+    # We successfully stored the answer -> now send whatever the *next* prompt is.
     try:
         send_next_prompt(reg)
     except Exception:
         logger.exception("[ERROR] Failed in send_next_prompt after inbound answer")
+        # Return an error message but keep flow state advanced (as data was saved successfully)
         return (
             "Something went wrong while sending the next question. Please try again.",
             False,
         )
 
-    # Refresh to know if we're done
+    # Refresh to know if we're done (send_next_prompt updates step/is_complete)
     sess.refresh_from_db()
     done = bool(sess.is_complete)
 
     # We already sent the next prompt (or DONE) inside send_next_prompt,
-    # so we return empty reply_text here.
+    # so we return an empty reply_text for the inbound message handler.
     return ("", done)
+
+
+# @transaction.atomic
+# def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
+#     """
+#     Handles typed (free-text) answers for the *current* step.
+
+#     Returns:
+#       - reply_text: only for validation errors or "try again" messages.
+#                     On success, we return "" and let send_next_prompt() send the next WA message.
+#       - completed_flag: True if after this answer the flow is completed.
+#     """
+#     sess = _get_or_create_session(reg)
+#     td = _get_or_create_detail(reg)
+
+#     # If somehow we got text without an active step, start at travel_type
+#     if not sess.step or sess.step in {"opt_in", ""}:
+#         sess.step = "travel_type"
+#         sess.save(update_fields=["step"])
+
+#     step = sess.step or "travel_type"
+#     t = (text or "").strip()
+#     logger.warning(f"[ANSWER] step={step!r} text={t!r}")
+
+#     state_changed = False
+
+#     try:
+#         # --- Choice steps typed as text (we still support typing "Air", "Yes", etc.) ---
+#         if step == "travel_type":
+#             val = _choice(t, TRAVEL_TYPE_CHOICES)
+#             if not val:
+#                 return ("Please tap a button or reply: Air / Train / Car", False)
+#             td.travel_type = val
+#             td.save(update_fields=["travel_type"])
+
+#         elif step == "arrival":
+#             val = _choice(t, ARRIVAL_CHOICES)
+#             if not val:
+#                 return (
+#                     "Please tap a button or reply: Commercial / Local Pickup / Self",
+#                     False,
+#                 )
+#             td.arrival = val
+#             td.save(update_fields=["arrival"])
+
+#         elif step == "return_travel":
+#             b = _yn(t)
+#             if b is None:
+#                 return ("Please tap Yes/No.", False)
+#             td.return_travel = b
+#             sess.state = sess.state or {}
+#             sess.state["return_travel_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["return_travel"])
+
+#         elif step == "departure":
+#             val = _choice(t, ARRIVAL_CHOICES)
+#             if not val:
+#                 return (
+#                     "Please tap a button or reply: Commercial / Local Pickup / Self",
+#                     False,
+#                 )
+#             td.departure = val
+#             td.save(update_fields=["departure"])
+
+#         # --- Pure free-text / date / time steps ---
+#         elif step == "arrival_date":
+#             dt = _parse_date(t)
+#             if not dt:
+#                 return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
+#             td.arrival_date = dt
+#             td.save(update_fields=["arrival_date"])
+
+#         elif step == "arrival_time":
+#             tm = _parse_time(t)
+#             if not tm:
+#                 return ("Please send time like 14:30 or 2:30pm.", False)
+#             td.arrival_time = tm
+#             td.save(update_fields=["arrival_time"])
+
+#         elif step == "airline":
+#             td.airline = t
+#             td.save(update_fields=["airline"])
+
+#         elif step == "flight_number":
+#             td.flight_number = t.upper()
+#             td.save(update_fields=["flight_number"])
+
+#         elif step == "pnr":
+#             td.pnr = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["pnr_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["pnr"])
+
+#         elif step == "arrival_details":
+#             td.arrival_details = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["arrival_details_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["arrival_details"])
+
+#         elif step == "hotel_arrival_time":
+#             key = t.strip().lower()
+#             sess.state = sess.state or {}
+#             if key in {"skip", "none", "na", "n/a", ""}:
+#                 td.hotel_arrival_time = None
+#                 sess.state["hat_skip"] = True
+#             else:
+#                 tm = _parse_time(t)
+#                 if not tm:
+#                     return ("Time looks off. Example: 13:45", False)
+#                 td.hotel_arrival_time = tm
+#                 sess.state.pop("hat_skip", None)
+#             state_changed = True
+#             td.save(update_fields=["hotel_arrival_time"])
+
+#         elif step == "hotel_departure_time":
+#             key = t.strip().lower()
+#             sess.state = sess.state or {}
+#             if key in {"skip", "none", "na", "n/a", ""}:
+#                 td.hotel_departure_time = None
+#                 sess.state["hdt_skip"] = True
+#             else:
+#                 tm = _parse_time(t)
+#                 if not tm:
+#                     return ("Time looks off. Example: 10:00", False)
+#                 td.hotel_departure_time = tm
+#                 sess.state.pop("hdt_skip", None)
+#             state_changed = True
+#             td.save(update_fields=["hotel_departure_time"])
+
+#         elif step == "departure_date":
+#             dt = _parse_date(t)
+#             if not dt:
+#                 return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
+#             td.departure_date = dt
+#             td.save(update_fields=["departure_date"])
+
+#         elif step == "departure_time":
+#             tm = _parse_time(t)
+#             if not tm:
+#                 return ("Send time like 18:20 or 6:20pm", False)
+#             td.departure_time = tm
+#             td.save(update_fields=["departure_time"])
+
+#         elif step == "departure_airline":
+#             td.departure_airline = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["departure_airline_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["departure_airline"])
+
+#         elif step == "departure_flight_number":
+#             td.departure_flight_number = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["departure_flight_number_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["departure_flight_number"])
+
+#         elif step == "departure_pnr":
+#             td.departure_pnr = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["departure_pnr_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["departure_pnr"])
+
+#         elif step == "departure_details":
+#             td.departure_details = _set_optional_text(t)
+#             sess.state = sess.state or {}
+#             sess.state["departure_details_done"] = True
+#             state_changed = True
+#             td.save(update_fields=["departure_details"])
+
+#         else:
+#             logger.warning(f"[ANSWER] Unknown step={step!r}, text={t!r}")
+#             return ("Sorry, I didn't understand that. Please try again.", False)
+
+#     except Exception:
+#         logger.exception(f"[ERROR] Failed while handling inbound answer at step={step}")
+#         return (
+#             "Something went wrong while saving your answer. Please try again.",
+#             False,
+#         )
+
+#     # Persist session meta (but NOT step/is_complete; send_next_prompt will decide next step)
+#     sess.last_msg_at = dj_tz.now()
+#     if state_changed:
+#         try:
+#             sess.save(update_fields=["last_msg_at", "state"])
+#         except Exception:
+#             logger.exception(
+#                 "[ERROR] Failed to save session after inbound answer (state)"
+#             )
+#     else:
+#         try:
+#             sess.save(update_fields=["last_msg_at"])
+#         except Exception:
+#             logger.exception(
+#                 "[ERROR] Failed to save session after inbound answer (no state change)"
+#             )
+
+#     # We successfully stored the answer → now send whatever the *next* prompt is.
+#     try:
+#         send_next_prompt(reg)
+#     except Exception:
+#         logger.exception("[ERROR] Failed in send_next_prompt after inbound answer")
+#         return (
+#             "Something went wrong while sending the next question. Please try again.",
+#             False,
+#         )
+
+#     # Refresh to know if we're done
+#     sess.refresh_from_db()
+#     done = bool(sess.is_complete)
+
+#     # We already sent the next prompt (or DONE) inside send_next_prompt,
+#     # so we return empty reply_text here.
+#     return ("", done)
 
 
 # """
