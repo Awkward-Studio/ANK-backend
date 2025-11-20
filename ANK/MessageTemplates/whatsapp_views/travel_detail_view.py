@@ -114,6 +114,22 @@ def whatsapp_travel_webhook(request):
             apply_button_choice(
                 reg, step, value
             )  # applies + auto-advances via orchestrator
+        
+        # Handle RSVP update buttons (rsvp|yes, rsvp|no, rsvp|maybe)
+        if btn_id.startswith("rsvp|"):
+            # Format: rsvp|<status>
+            status = btn_id.split("|")[1]
+            if status in ["yes", "no", "maybe"]:
+                reg.rsvp_status = status
+                reg.responded_on = dj_tz.now()
+                reg.save(update_fields=["rsvp_status", "responded_on"])
+                
+                # Send confirmation
+                send_freeform_text(reg.guest.phone, f"Got it! Your RSVP has been updated to '{status.capitalize()}'.")
+                
+                # Optionally, trigger the channel layer update if needed (similar to webhooks.py)
+                # For now, just confirming to the user is enough.
+                
         return JsonResponse({"ok": True}, status=200)
 
     # --- kind: wake (guest typed "travel"/"resume"/"continue")

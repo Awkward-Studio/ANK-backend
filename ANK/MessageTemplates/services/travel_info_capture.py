@@ -225,13 +225,28 @@ def send_next_prompt(reg: EventRegistration) -> None:
 
     step = _next_step(sess, td) if sess.step != "done" else None
     if not step or step == "done":
-        send_freeform_text(reg.guest.phone, PROMPTS["done"])
+        # If we are "done", check if we should show the "Update" menu
+        # instead of just saying "Thanks".
+        # We only show buttons if RSVP is known (so we can offer "Update RSVP").
+        # If RSVP is pending, maybe we should just let them finish travel?
+        # For now, if done, we show the menu.
+
         sess.step = "done"
         sess.is_complete = True
         sess.last_prompt_step = "done"
         sess.last_msg_at = dj_tz.now()
         sess.save(
             update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
+        )
+
+        # Send the "Details Received" message with buttons
+        send_choice_buttons(
+            reg.guest.phone,
+            "We have received your details. What would you like to do?",
+            [
+                {"id": "tc|update|rsvp", "title": "Update RSVP"},
+                {"id": "tc|update|travel", "title": "Update Travel Details"},
+            ],
         )
         return
 
@@ -314,6 +329,26 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
     elif step == "departure" and raw_value in ARRIVAL_CHOICES:
         td.departure = raw_value
         td.save(update_fields=["departure"])
+
+    # --- New Update Handlers ---
+    elif step == "update":
+        if raw_value == "travel":
+            # Restart travel flow
+            start_capture_after_opt_in(reg, restart=True)
+            send_next_prompt(reg)
+            return
+        elif raw_value == "rsvp":
+            # Send RSVP choices
+            send_choice_buttons(
+                reg.guest.phone,
+                "Please select your new RSVP status:",
+                [
+                    {"id": "rsvp|yes", "title": "Yes"},
+                    {"id": "rsvp|no", "title": "No"},
+                    {"id": "rsvp|maybe", "title": "Maybe"},
+                ],
+            )
+            return
 
     send_next_prompt(reg)
 
@@ -457,5 +492,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
     done = sess.step == "done"
     if done:
-        return (PROMPTS["done"], True)
+        # If they type something after being done, re-send the menu buttons
+        send_next_prompt(reg)
+        return ("", True)
     return (PROMPTS.get(sess.step, "OK."), False)
