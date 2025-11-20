@@ -106,6 +106,9 @@ ARRIVAL_CHOICES = {
 }
 TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
 
+# Steps that should always be rendered as WhatsApp buttons
+CHOICE_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
+
 PROMPTS = {
     "travel_type": "How are you traveling?",
     "arrival": "How will you arrive?",
@@ -196,7 +199,7 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
     # --- Return travel decision; ask once per flow ---
     if not state.get("return_travel_done"):
         pending.append("return_travel")
-    elif state.get("return_travel_done") and td.return_travel is True:
+    elif state.get("return_travel_done") and td.return_travel:
         # Departure only if user said they have return travel
         if not td.departure:
             pending.append("departure")
@@ -248,9 +251,10 @@ def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False)
 
 def resume_or_start(reg: EventRegistration) -> None:
     """
-    Called on WAKE.
+    Called on WAKE/RESUME from WhatsApp.
 
-    If the flow is already complete, do nothing.
+    If the flow is already complete, we *do not* auto-restart here.
+    (Use start_capture_after_opt_in(restart=True) from your UI if you want a hard reset.)
     """
     sess = _get_or_create_session(reg)
 
@@ -350,6 +354,8 @@ def send_next_prompt(reg: EventRegistration) -> None:
             send_freeform_text(reg.guest.phone, PROMPTS["done"])
         except Exception:
             logger.exception("[ERROR] Failed to send DONE message on WhatsApp")
+            # Even if WA fails, mark as complete — data is there
+
         sess.step = "done"
         sess.is_complete = True
         sess.last_prompt_step = "done"
@@ -358,6 +364,9 @@ def send_next_prompt(reg: EventRegistration) -> None:
             update_fields=["step", "is_complete", "last_prompt_step", "last_msg_at"]
         )
         return
+
+    # If the same step is still pending (unanswered) and flow is resumed,
+    # we want to resend it. So we always send whatever _next_step says.
 
     try:
         _send_whatsapp_prompt(reg, step)
@@ -373,7 +382,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
     sess.save(update_fields=["step", "last_prompt_step", "last_msg_at"])
 
 
-# ---------- button handler ----------
+# ---------- button handling ----------
 
 
 @transaction.atomic
@@ -414,44 +423,81 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
         logger.exception(f"[ERROR] Failed to apply button choice for step={step}")
         return
 
-    # After applying choice, move to next step
+    # After applying choice, move to next step via centralized prompt logic
     try:
         send_next_prompt(reg)
     except Exception:
         logger.exception("[ERROR] Failed in send_next_prompt after button choice")
 
 
-# ---------- text handler ----------
+# ---------- free-text handling ----------
 
 
 @transaction.atomic
 def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
     """
-    Handles typed (free-text) answers for non-choice steps.
-    Returns (reply_text, completed_flag).
+    Handles typed (free-text) answers for the *current* step.
 
-    IMPORTANT:
-    - For choice steps (travel_type, arrival, return_travel, departure),
-      we DO NOT accept text answers anymore. User must tap buttons.
+    Returns:
+      - reply_text: only for validation errors or "try again" messages.
+                    On success, we return "" and let send_next_prompt() send the next WA message.
+      - completed_flag: True if after this answer the flow is completed.
     """
     sess = _get_or_create_session(reg)
     td = _get_or_create_detail(reg)
 
-    if sess.step in {"opt_in", ""}:
+    # If somehow we got text without an active step, start at travel_type
+    if not sess.step or sess.step in {"opt_in", ""}:
         sess.step = "travel_type"
+        sess.save(update_fields=["step"])
 
     step = sess.step or "travel_type"
     t = (text or "").strip()
     logger.warning(f"[ANSWER] step={step!r} text={t!r}")
 
-    # For these steps we rely on WhatsApp buttons only
-    if step in {"travel_type", "arrival", "return_travel", "departure"}:
-        return ("Please tap one of the buttons above.", False)
-
     state_changed = False
 
     try:
-        if step == "arrival_date":
+        # --- Choice steps typed as text (we still support typing "Air", "Yes", etc.) ---
+        if step == "travel_type":
+            val = _choice(t, TRAVEL_TYPE_CHOICES)
+            if not val:
+                return ("Please tap a button or reply: Air / Train / Car", False)
+            td.travel_type = val
+            td.save(update_fields=["travel_type"])
+
+        elif step == "arrival":
+            val = _choice(t, ARRIVAL_CHOICES)
+            if not val:
+                return (
+                    "Please tap a button or reply: Commercial / Local Pickup / Self",
+                    False,
+                )
+            td.arrival = val
+            td.save(update_fields=["arrival"])
+
+        elif step == "return_travel":
+            b = _yn(t)
+            if b is None:
+                return ("Please tap Yes/No.", False)
+            td.return_travel = b
+            sess.state = sess.state or {}
+            sess.state["return_travel_done"] = True
+            state_changed = True
+            td.save(update_fields=["return_travel"])
+
+        elif step == "departure":
+            val = _choice(t, ARRIVAL_CHOICES)
+            if not val:
+                return (
+                    "Please tap a button or reply: Commercial / Local Pickup / Self",
+                    False,
+                )
+            td.departure = val
+            td.save(update_fields=["departure"])
+
+        # --- Pure free-text / date / time steps ---
+        elif step == "arrival_date":
             dt = _parse_date(t)
             if not dt:
                 return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
@@ -570,29 +616,40 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             False,
         )
 
-    # advance
-    sess.step = _next_step(sess, td) or "done"
+    # Persist session meta (but NOT step/is_complete; send_next_prompt will decide next step)
     sess.last_msg_at = dj_tz.now()
-    if sess.step == "done":
-        sess.is_complete = True
-
     if state_changed:
         try:
-            sess.save(update_fields=["step", "last_msg_at", "is_complete", "state"])
+            sess.save(update_fields=["last_msg_at", "state"])
         except Exception:
-            logger.exception("[ERROR] Failed to save session after inbound answer")
+            logger.exception(
+                "[ERROR] Failed to save session after inbound answer (state)"
+            )
     else:
         try:
-            sess.save(update_fields=["step", "last_msg_at", "is_complete"])
+            sess.save(update_fields=["last_msg_at"])
         except Exception:
             logger.exception(
                 "[ERROR] Failed to save session after inbound answer (no state change)"
             )
 
-    done = sess.step == "done"
-    if done:
-        return (PROMPTS["done"], True)
-    return (PROMPTS.get(sess.step, "OK."), False)
+    # We successfully stored the answer → now send whatever the *next* prompt is.
+    try:
+        send_next_prompt(reg)
+    except Exception:
+        logger.exception("[ERROR] Failed in send_next_prompt after inbound answer")
+        return (
+            "Something went wrong while sending the next question. Please try again.",
+            False,
+        )
+
+    # Refresh to know if we're done
+    sess.refresh_from_db()
+    done = bool(sess.is_complete)
+
+    # We already sent the next prompt (or DONE) inside send_next_prompt,
+    # so we return empty reply_text here.
+    return ("", done)
 
 
 # """

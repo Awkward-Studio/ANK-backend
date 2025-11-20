@@ -148,22 +148,50 @@ def whatsapp_travel_webhook(request):
         return JsonResponse({"ok": True}, status=200)
 
     # === BUTTON ===============================================================
-    if kind == "button":
-        btn_id = (body.get("button_id") or "").strip()
-        step, value = None, None
+    # if kind == "button":
+    #     btn_id = (body.get("button_id") or "").strip()
+    #     step, value = None, None
 
-        try:
-            parts = btn_id.split("|", 2)
-            if len(parts) == 3 and parts[0] == "tc":
-                step, value = parts[1], parts[2]
-        except Exception:
-            logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
+    #     try:
+    #         parts = btn_id.split("|", 2)
+    #         if len(parts) == 3 and parts[0] == "tc":
+    #             step, value = parts[1], parts[2]
+    #     except Exception:
+    #         logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
+
+    #     if step and value:
+    #         try:
+    #             apply_button_choice(reg, step, value)
+    #         except Exception as exc:
+    #             logger.exception(f"[BUTTON-EXCEPTION] Failed for reg={reg.id}: {exc}")
+
+    #     return JsonResponse({"ok": True}, status=200)
+    if kind == "button":
+        # We now support two formats:
+        #  1) New: explicit {"step": "...", "value": "..."}
+        #  2) Old: {"button_id": "tc|step|value"}
+        step = (body.get("step") or "").strip()
+        value = (body.get("value") or "").strip()
+
+        if not (step and value):
+            btn_id = (body.get("button_id") or "").strip()
+            try:
+                parts = btn_id.split("|", 2)
+                if len(parts) == 3 and parts[0] == "tc":
+                    step, value = parts[1], parts[2]
+            except Exception:
+                logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
 
         if step and value:
             try:
+                logger.warning(
+                    f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
+                )
                 apply_button_choice(reg, step, value)
             except Exception as exc:
                 logger.exception(f"[BUTTON-EXCEPTION] Failed for reg={reg.id}: {exc}")
+        else:
+            logger.error(f"[BUTTON] Could not resolve step/value from payload: {body}")
 
         return JsonResponse({"ok": True}, status=200)
 
