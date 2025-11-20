@@ -199,6 +199,51 @@ def whatsapp_rsvp(request):
     er.responded_on = responded_on
     er.save(update_fields=["rsvp_status", "responded_on"])
 
+    # Send confirmation message to user
+    from MessageTemplates.services.whatsapp import send_freeform_text, send_choice_buttons
+    
+    phone = getattr(er.guest, 'phone', None)
+    if phone:
+        event_name = er.event.name if er.event else "the event"
+        
+        if rsvp == "yes":
+            # Send confirmation with interactive buttons
+            confirmation_msg = f"✅ Thank you! Your RSVP for {event_name} has been confirmed.\n\nWhat would you like to do next?"
+            try:
+                send_choice_buttons(
+                    phone,
+                    confirmation_msg,
+                    [
+                        {"id": f"tc|update_pax|{er.id}", "title": "👥 Update Guest Count"},
+                        {"id": f"tc|start_travel|{er.id}", "title": "✈️ Travel Details"},
+                    ]
+                )
+                log.info(f"Sent RSVP confirmation with buttons to {phone}")
+            except Exception as e:
+                log.exception(f"Failed to send RSVP confirmation buttons: {e}")
+        
+        elif rsvp == "no":
+            # Send simple text confirmation
+            try:
+                send_freeform_text(
+                    phone,
+                    f"Thank you for letting us know. We'll miss you at {event_name}! 💙"
+                )
+                log.info(f"Sent RSVP 'no' confirmation to {phone}")
+            except Exception as e:
+                log.exception(f"Failed to send RSVP 'no' confirmation: {e}")
+        
+        elif rsvp == "maybe":
+            # Send simple text confirmation
+            try:
+                send_freeform_text(
+                    phone,
+                    f"Thank you! We've noted your 'maybe' response for {event_name}. Please update us when you decide! 🤔"
+                )
+                log.info(f"Sent RSVP 'maybe' confirmation to {phone}")
+            except Exception as e:
+                log.exception(f"Failed to send RSVP 'maybe' confirmation: {e}")
+
     from channels.layers import get_channel_layer
     from asgiref.sync import async_to_sync
 

@@ -372,10 +372,16 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
 def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False) -> str:
     """
     Called when guest opts in / flow explicitly started.
-    If restart=True, we reset the session to the beginning.
+    If restart=True and there's existing data, show summary + update menu.
+    Otherwise, start/resume the flow normally.
     """
     sess = _get_or_create_session(reg)
-    _get_or_create_detail(reg)
+    td = _get_or_create_detail(reg)
+
+    # If restarting with existing data, show summary menu instead
+    if restart and (td.travel_type or td.arrival_date):
+        send_travel_update_menu(reg)
+        return sess.step or "travel_type"
 
     if restart or sess.is_complete:
         sess.step = "travel_type"
@@ -634,6 +640,23 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 td.save(update_fields=["departure_details"])
             sess.save(update_fields=["state"])
 
+        elif step == "update_pax":
+            # Prompt user to enter guest count
+            sess.step = "awaiting_pax_count"
+            sess.state = sess.state or {}
+            sess.save(update_fields=["step", "state"])
+            
+            try:
+                send_freeform_text(
+                    reg.guest.phone,
+                    "👥 How many people will be attending (including yourself)?\n\n"
+                    "Please reply with a number."
+                )
+                logger.info(f"Sent pax count prompt to {reg.guest.phone}")
+            except Exception as e:
+                logger.exception(f"Failed to send pax count prompt: {e}")
+            return
+        
         elif step == "start_travel":
             # Explicitly start the travel capture flow from the beginning
             start_capture_after_opt_in(reg, restart=True)
@@ -703,6 +726,13 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             except ValueError:
                 pass
 
+
+
+        elif step == "update_section":
+            # Handle section-specific update requests from the travel summary menu
+            # raw_value contains the section name: travel_type, arrival, hotel, departure, done
+            start_section_update(reg, raw_value)
+            return  # start_section_update handles sending the next prompt
 
 
         elif step.startswith("rsvp_"):
@@ -1046,6 +1076,54 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             state_changed = True
             td.save(update_fields=["departure_details"])
 
+        elif step == "awaiting_pax_count":
+            # Handle guest count input
+            try:
+                count = int(t)
+                if count < 1:
+                    return (
+                        "The number of attendees must be at least 1 (you). 🤔\n\n"
+                        "Please reply with a valid number (e.g., 1, 2, 3, etc.)",
+                        False
+                    )
+                
+                # Update estimated_pax
+                reg.estimated_pax = count
+                reg.save(update_fields=["estimated_pax"])
+                
+                # Clear the step so we don't loop back
+                sess.step = ""
+                sess.save(update_fields=["step"])
+                
+                # Send confirmation with travel details option
+                try:
+                    confirmation = (
+                        f"✅ Perfect! I've updated your guest count to *{count}* "
+                        f"{'person' if count == 1 else 'people'}.\n\n"
+                        "Would you like to provide travel details?"
+                    )
+                    send_choice_buttons(
+                        reg.guest.phone,
+                        confirmation,
+                        [
+                            {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Yes, Add Travel Info"}
+                        ]
+                    )
+                    logger.info(f"Updated estimated_pax to {count} for reg {reg.id}")
+                except Exception as e:
+                    logger.exception(f"Failed to send pax confirmation: {e}")
+                
+                return ("", False)
+                
+            except ValueError:
+                return (
+                    f"I couldn't understand '{t}' as a number. 🤔\n\n"
+                    "Please reply with just the number of people attending.\n\n"
+                    "Examples: 1, 2, 3, 4, etc.",
+                    False
+                )
+
+
         else:
             logger.warning(f"[ANSWER] Unknown step={step!r}, text={t!r}")
             return (
@@ -1136,4 +1214,261 @@ def get_fallback_message(scenario: str, reg=None) -> str:
         return (
             "Hi! I'm here to help with travel arrangements for your event.\n\n"
             "If you have questions or need assistance, please contact our support team. 📞"
+        )
+
+# ---------- travel summary and update menu ----------
+
+
+def generate_travel_summary(reg: EventRegistration) -> str:
+    """
+    Generate a formatted summary of all travel details for display.
+    Shows current values for all fields, including optional/skipped ones.
+    """
+    td = _get_or_create_detail(reg)
+    sess = _get_or_create_session(reg)
+    state = sess.state or {}
+    
+    lines = [" *Your Current Travel Details:*\\n"]
+    
+    # Travel Type
+    if td.travel_type:
+        icon = "" if td.travel_type == "Air" else "" if td.travel_type == "Train" else ""
+        lines.append(f"{icon} *Travel Type:* {td.travel_type}")
+    else:
+        lines.append(" *Travel Type:* Not set")
+    
+    # Extra Attendees
+    extra_count = state.get("extra_attendees_count", 0)
+    if reg.extra_attendees.exists():
+        total_extras = reg.extra_attendees.count()
+        lines.append(f" *Extra Guests Traveling:* {extra_count} of {total_extras}")
+    
+    lines.append("\\n* Arrival Details:*")
+    
+    # Arrival Date & Time
+    if td.arrival_date:
+        lines.append(f" Date: {td.arrival_date.strftime('%d-%m-%Y')}")
+    else:
+        lines.append(" Date: _Not provided_")
+        
+    if td.arrival_time:
+        lines.append(f" Time: {td.arrival_time.strftime('%I:%M %p')}")
+    else:
+        lines.append(" Time: _Not provided_")
+    
+    # Carrier details (airline/train/car)
+    if td.airline:
+        carrier_label = "Airline" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Car Company"
+        lines.append(f" {carrier_label}: {td.airline}")
+    else:
+        lines.append(" Carrier: _Not provided_")
+    
+    # Flight/Train/Car number
+    if td.flight_number:
+        number_label = "Flight" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Booking"
+        lines.append(f" {number_label} Number: {td.flight_number}")
+    else:
+        lines.append(" Number: _Not provided_")
+    
+    # PNR
+    if td.pnr:
+        lines.append(f" PNR: {td.pnr}")
+    elif state.get("pnr_done"):
+        lines.append(" PNR: _Skipped_")
+    else:
+        lines.append(" PNR: _Not provided_")
+    
+    # Arrival Details (optional notes)
+    if td.arrival_details:
+        lines.append(f" Notes: {td.arrival_details[:50]}{'...' if len(td.arrival_details) > 50 else ''}")
+    elif state.get("arrival_details_done"):
+        lines.append(" Notes: _Skipped_")
+    
+    # Hotel Times
+    lines.append("\\n* Hotel Details:*")
+    if td.hotel_arrival_time:
+        lines.append(f" Check-in: {td.hotel_arrival_time.strftime('%I:%M %p')}")
+    elif state.get("hat_skip"):
+        lines.append(" Check-in: _Skipped_")
+    else:
+        lines.append(" Check-in: _Not provided_")
+        
+    if td.hotel_departure_time:
+        lines.append(f" Check-out: {td.hotel_departure_time.strftime('%I:%M %p')}")
+    elif state.get("hdt_skip"):
+        lines.append(" Check-out: _Skipped_")
+    else:
+        lines.append(" Check-out: _Not provided_")
+    
+    # Return Travel
+    lines.append("\\n* Return Journey:*")
+    if state.get("return_travel_done"):
+        if td.return_travel:
+            lines.append(" Return travel: Yes")
+            
+            # Departure details
+            if td.departure_date:
+                lines.append(f" Date: {td.departure_date.strftime('%d-%m-%Y')}")
+            else:
+                lines.append(" Date: _Not provided_")
+                
+            if td.departure_time:
+                lines.append(f" Time: {td.departure_time.strftime('%I:%M %p')}")
+            else:
+                lines.append(" Time: _Not provided_")
+            
+            if td.departure_airline:
+                lines.append(f" Carrier: {td.departure_airline}")
+            elif state.get("departure_airline_done"):
+                lines.append(" Carrier: _Skipped_")
+                
+            if td.departure_flight_number:
+                lines.append(f" Number: {td.departure_flight_number}")
+            elif state.get("departure_flight_number_done"):
+                lines.append(" Number: _Skipped_")
+                
+            if td.departure_pnr:
+                lines.append(f" PNR: {td.departure_pnr}")
+            elif state.get("departure_pnr_done"):
+                lines.append(" PNR: _Skipped_")
+                
+            if td.departure_details:
+                lines.append(f" Notes: {td.departure_details[:50]}{'...' if len(td.departure_details) > 50 else ''}")
+            elif state.get("departure_details_done"):
+                lines.append(" Notes: _Skipped_")
+        else:
+            lines.append(" No return travel needed")
+    else:
+        lines.append(" Not specified")
+    
+    return "\\n".join(lines)
+
+
+def send_travel_update_menu(reg: EventRegistration) -> None:
+    """
+    Send a summary of travel details with interactive buttons to update specific sections.
+    """
+    summary = generate_travel_summary(reg)
+    
+    message = (
+        f"{summary}\\n\\n"
+        "\\n\\n"
+        " *What would you like to update?*\\n"
+        "Select a section below:"
+    )
+    
+    buttons = [
+        {"id": f"tc|update_section|travel_type|{reg.id}", "title": " Travel Type"},
+        {"id": f"tc|update_section|arrival|{reg.id}", "title": " Arrival Details"},
+        {"id": f"tc|update_section|hotel|{reg.id}", "title": " Hotel Times"},
+    ]
+    
+    # Only show return travel button if they previously indicated they have return travel
+    td = _get_or_create_detail(reg)
+    sess = _get_or_create_session(reg)
+    state = sess.state or {}
+    
+    if state.get("return_travel_done"):
+        buttons.append({"id": f"tc|update_section|departure|{reg.id}", "title": " Return Travel"})
+    
+    # Add "All Correct" option
+    buttons.append({"id": f"tc|update_section|done|{reg.id}", "title": " All Correct"})
+    
+    try:
+        send_choice_buttons(reg.guest.phone, message, buttons)
+        logger.warning(f"[UPDATE-MENU] Sent travel summary menu to {reg.guest.phone}")
+    except Exception as exc:
+        logger.exception(f"[UPDATE-MENU] Failed to send menu: {exc}")
+
+
+def start_section_update(reg: EventRegistration, section: str) -> None:
+    """
+    Reset session state for a specific section and start prompting for those fields.
+    
+    Sections:
+    - travel_type: Just the travel type
+    - arrival: arrival date, time, airline, flight number, PNR, arrival details
+    - hotel: hotel arrival/departure times
+    - departure: all departure/return travel fields
+    """
+    sess = _get_or_create_session(reg)
+    td = _get_or_create_detail(reg)
+    
+    if section == "done":
+        # User confirmed all details are correct
+        send_freeform_text(
+            reg.guest.phone,
+            " Perfect! Your travel details have been saved.\\n\\n"
+            "If you need to make changes later, just type *travel* anytime."
+        )
+        return
+    
+    elif section == "travel_type":
+        # Reset travel type and related fields
+        td.travel_type = ""
+        td.save(update_fields=["travel_type"])
+        sess.step = "travel_type"
+        sess.save(update_fields=["step"])
+        send_next_prompt(reg)
+        
+    elif section == "arrival":
+        # Reset all arrival-related fields
+        td.arrival_date = None
+        td.arrival_time = None
+        td.airline = ""
+        td.flight_number = ""
+        td.pnr = ""
+        td.arrival_details = ""
+        td.save(update_fields=["arrival_date", "arrival_time", "airline", "flight_number", "pnr", "arrival_details"])
+        
+        # Clear arrival state flags
+        sess.state = sess.state or {}
+        sess.state.pop("pnr_done", None)
+        sess.state.pop("arrival_details_done", None)
+        sess.step = "arrival_date"
+        sess.save(update_fields=["step", "state"])
+        send_next_prompt(reg)
+        
+    elif section == "hotel":
+        # Reset hotel times
+        td.hotel_arrival_time = None
+        td.hotel_departure_time = None
+        td.save(update_fields=["hotel_arrival_time", "hotel_departure_time"])
+        
+        sess.state = sess.state or {}
+        sess.state.pop("hat_skip", None)
+        sess.state.pop("hdt_skip", None)
+        sess.step = "hotel_arrival_time"
+        sess.save(update_fields=["step", "state"])
+        send_next_prompt(reg)
+        
+    elif section == "departure":
+        # Reset return travel question and all departure fields
+        td.return_travel = False
+        td.departure_date = None
+        td.departure_time = None
+        td.departure_airline = ""
+        td.departure_flight_number = ""
+        td.departure_pnr = ""
+        td.departure_details = ""
+        td.save(update_fields=[
+            "return_travel", "departure_date", "departure_time",
+            "departure_airline", "departure_flight_number", "departure_pnr", "departure_details"
+        ])
+        
+        sess.state = sess.state or {}
+        sess.state.pop("return_travel_done", None)
+        sess.state.pop("departure_airline_done", None)
+        sess.state.pop("departure_flight_number_done", None)
+        sess.state.pop("departure_pnr_done", None)
+        sess.state.pop("departure_details_done", None)
+        sess.step = "return_travel"
+        sess.save(update_fields=["step", "state"])
+        send_next_prompt(reg)
+        
+    else:
+        logger.error(f"[SECTION-UPDATE] Unknown section: {section}")
+        send_freeform_text(
+            reg.guest.phone,
+            "Sorry, I couldn't understand which section to update. Please try again."
         )
