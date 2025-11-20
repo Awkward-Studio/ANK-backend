@@ -87,27 +87,6 @@ def _resolve_travel_reg(wa_id: str, event_id: str):
     except EventRegistration.DoesNotExist:
         return None
 
-
-@csrf_exempt
-@require_http_methods(["POST"])
-def whatsapp_travel_webhook(request):
-    """Main handler. 100% registration_id based."""
-    try:
-        body = json.loads(request.body.decode("utf-8"))
-        logger.warning(f"[WEBHOOK] INCOMING: {body}")
-    except Exception:
-        logger.error("[WEBHOOK] Invalid JSON received")
-        return JsonResponse({"ok": False, "error": "invalid_json"}, status=400)
-
-    kind = (body.get("kind") or "").strip()
-    wa_id = _norm_digits(body.get("wa_id") or "")
-    reg_id = body.get("registration_id")
-    reg = _safe_get_registration(reg_id)
-
-    if not reg:
-        reg = _resolve_travel_reg(wa_id, body.get("event_id"))
-
-    if not reg:
         logger.warning(f"[WEBHOOK] No registration resolved (id={reg_id}, wa={wa_id})")
         # Send helpful fallback message instead of silent return
         from MessageTemplates.services.travel_info_capture import get_fallback_message
@@ -206,15 +185,29 @@ def whatsapp_travel_webhook(request):
 
         if not (step and value):
             btn_id = (body.get("button_id") or "").strip()
+            
+            # DIAGNOSTIC: Send test message to confirm button click received
+            logger.warning(f"[BUTTON-DEBUG] Received button_id: {btn_id!r}")
+            
             try:
                 parts = btn_id.split("|", 2)
+                logger.warning(f"[BUTTON-DEBUG] Split into parts: {parts}")
                 
                 # Handle "update" buttons (e.g., "update|rsvp|uuid" or "update|travel|uuid")
-                if len(parts) == 3 and parts[0] == "update":
-                    action = parts[1]  # "rsvp" or "travel"
-                    reg_id_from_btn = parts[2]
+                if len(parts) >= 2 and parts[0] == "update":
+                    action = parts[1] if len(parts) > 1 else "unknown"  # "rsvp" or "travel"
+                    reg_id_from_btn = parts[2] if len(parts) > 2 else "missing"
                     
                     logger.warning(f"[WEBHOOK-UPDATE-BUTTON] action={action!r} reg={reg.id}")
+                    
+                    # DIAGNOSTIC: Send WhatsApp message to confirm button was received
+                    try:
+                        send_freeform_text(
+                            reg.guest.phone,
+                            f"🔧 DEBUG: Update button clicked! Action={action}, Button ID={btn_id}"
+                        )
+                    except:
+                        pass
                     
                     if action == "travel":
                         # Restart travel capture flow
