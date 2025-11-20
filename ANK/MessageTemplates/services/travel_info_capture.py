@@ -97,6 +97,70 @@ def _set_optional_text(v: str) -> Optional[str]:
     return s
 
 
+def _validate_optional_pnr(v: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Validates PNR input. Returns (value, error_message).
+    - If skip keyword: returns ("", None)
+    - If valid PNR: returns (pnr, None)
+    - If invalid: returns (None, error_message)
+    """
+    if v is None:
+        return "", None
+    s = v.strip()
+    if not s:
+        return "", None
+    sl = s.lower()
+    if sl in {"skip", "none", "na", "n/a", "-"}:
+        return "", None
+    
+    # PNR should be alphanumeric and have reasonable length (typically 4-10 chars)
+    if len(s) < 3:
+        return None, (
+            f"I couldn't understand '{s}' as a valid PNR. 🤔\n\n"
+            "PNR is usually a combination of letters and numbers (e.g., ABC123, XYZ456).\n\n"
+            "Please reply with:\n"
+            "• Your PNR code, OR\n"
+            "• *skip* if you don't have it right now"
+        )
+    
+    if not s.replace(" ", "").replace("-", "").isalnum():
+        return None, (
+            f"I couldn't understand '{s}' as a valid PNR. 🤔\n\n"
+            "PNR should contain only letters and numbers.\n\n"
+            "Please reply with:\n"
+            "• Your PNR code (e.g., ABC123), OR\n"
+            "• *skip* if you don't have it right now"
+        )
+    
+    return s.upper(), None
+
+
+def _validate_optional_text(v: str, field_name: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Validates optional text input. Returns (value, error_message).
+    - If skip keyword: returns ("", None)
+    - If valid text: returns (text, None)
+    - If invalid (too short/garbage): returns (None, error_message)
+    """
+    if v is None:
+        return "", None
+    s = v.strip()
+    if not s:
+        return "", None
+    sl = s.lower()
+    if sl in {"skip", "none", "na", "n/a", "-"}:
+        return "", None
+    
+    # Reject single character or very short inputs that look like garbage
+    if len(s) < 2:
+        return None, (
+            f"I couldn't understand '{s}'. 🤔\n\n"
+            f"Please provide more details for {field_name}, or reply *skip* if you don't have any."
+        )
+    
+    return s, None
+
+
 # ---------- constants ----------
 
 ARRIVAL_CHOICES = {
@@ -644,29 +708,25 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.flight_number = t.upper()
             td.save(update_fields=["flight_number"])
 
-        # --- OPTIONAL FIELDS FIX: Only set *_done flag if a value was provided ---
+        # --- OPTIONAL FIELDS: Validate, then mark as done after receiving an answer ---
         elif step == "pnr":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_pnr(t)
+            if error:
+                return (error, False)
             td.pnr = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["pnr_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("pnr_done", None)
-                state_changed = True
+            sess.state["pnr_done"] = True
+            state_changed = True
             td.save(update_fields=["pnr"])
 
         elif step == "arrival_details":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_text(t, "arrival details")
+            if error:
+                return (error, False)
             td.arrival_details = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["arrival_details_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("arrival_details_done", None)
-                state_changed = True
+            sess.state["arrival_details_done"] = True
+            state_changed = True
             td.save(update_fields=["arrival_details"])
 
         elif step == "hotel_arrival_time":
@@ -746,51 +806,43 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.save(update_fields=["departure_time"])
 
         elif step == "departure_airline":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_text(t, "airline/carrier name")
+            if error:
+                return (error, False)
             td.departure_airline = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["departure_airline_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("departure_airline_done", None)
-                state_changed = True
+            sess.state["departure_airline_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_airline"])
 
         elif step == "departure_flight_number":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_text(t, "flight/train/car number")
+            if error:
+                return (error, False)
             td.departure_flight_number = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["departure_flight_number_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("departure_flight_number_done", None)
-                state_changed = True
+            sess.state["departure_flight_number_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_flight_number"])
 
         elif step == "departure_pnr":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_pnr(t)
+            if error:
+                return (error, False)
             td.departure_pnr = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["departure_pnr_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("departure_pnr_done", None)
-                state_changed = True
+            sess.state["departure_pnr_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_pnr"])
 
         elif step == "departure_details":
-            val = _set_optional_text(t)
+            val, error = _validate_optional_text(t, "departure details")
+            if error:
+                return (error, False)
             td.departure_details = val
             sess.state = sess.state or {}
-            if val:
-                sess.state["departure_details_done"] = True
-                state_changed = True
-            else:
-                sess.state.pop("departure_details_done", None)
-                state_changed = True
+            sess.state["departure_details_done"] = True
+            state_changed = True
             td.save(update_fields=["departure_details"])
 
         else:
@@ -843,3 +895,44 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
     # We already sent the next prompt (or DONE) inside send_next_prompt,
     # so we return an empty reply_text for the inbound message handler.
     return ("", done)
+
+
+# ---------- fallback messages ----------
+
+
+def get_fallback_message(scenario: str, reg=None) -> str:
+    """
+    Returns appropriate fallback message for users messaging outside of active flows.
+    
+    Args:
+        scenario: One of 'no_registration', 'completed', 'unknown'
+        reg: Optional EventRegistration for context
+    
+    Returns:
+        str: User-friendly message to send via WhatsApp
+    """
+    if scenario == "no_registration":
+        return (
+            "👋 Hello! I don't have an active travel registration for you.\n\n"
+            "If you're a guest for an upcoming event, you should have received "
+            "an invitation to share your travel details.\n\n"
+            "If you need assistance, please contact our support team. 📞"
+        )
+    
+    elif scenario == "completed":
+        event_name = ""
+        if reg and hasattr(reg, 'event') and reg.event:
+            event_name = f" for {reg.event.name}"
+        
+        return (
+            f"✅ Thank you! We've already received your travel details{event_name}.\n\n"
+            "If you need to update any information, please contact our support team "
+            "and we'll be happy to help. 📞"
+        )
+    
+    else:
+        # Generic unknown scenario
+        return (
+            "Hi! I'm here to help with travel arrangements for your event.\n\n"
+            "If you have questions or need assistance, please contact our support team. 📞"
+        )

@@ -109,6 +109,16 @@ def whatsapp_travel_webhook(request):
 
     if not reg:
         logger.warning(f"[WEBHOOK] No registration resolved (id={reg_id}, wa={wa_id})")
+        # Send helpful fallback message instead of silent return
+        from MessageTemplates.services.travel_info_capture import get_fallback_message
+        try:
+            wa_phone = wa_id if wa_id else body.get("wa_id", "")
+            if wa_phone:
+                fallback_msg = get_fallback_message("no_registration")
+                send_freeform_text(wa_phone, fallback_msg)
+                logger.warning(f"[FALLBACK] Sent no_registration message to {wa_phone}")
+        except Exception as exc:
+            logger.exception(f"[FALLBACK-ERR] Failed sending fallback for wa_id={wa_id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
 
     if kind not in {"resume", "button", "wake", "text"}:
@@ -121,11 +131,19 @@ def whatsapp_travel_webhook(request):
     except TravelCaptureSession.DoesNotExist:
         sess = TravelCaptureSession.objects.create(registration=reg)
 
-    # If session already completed, do nothing
+    # If session already completed, send acknowledgment
     if sess.is_complete:
         logger.warning(
-            f"[RESUME] Registration={reg.id} session already complete; doing nothing."
+            f"[RESUME] Registration={reg.id} session already complete; sending acknowledgment."
         )
+        # Send acknowledgment message
+        from MessageTemplates.services.travel_info_capture import get_fallback_message
+        try:
+            fallback_msg = get_fallback_message("completed", reg)
+            send_freeform_text(reg.guest.phone, fallback_msg)
+            logger.warning(f"[FALLBACK] Sent completion acknowledgment to {reg.guest.phone}")
+        except Exception as exc:
+            logger.exception(f"[FALLBACK-ERR] Failed sending completion msg to {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
 
     # If outside 24h → send auto "resume" template request (RCS)
