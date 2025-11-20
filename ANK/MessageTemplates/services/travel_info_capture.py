@@ -197,7 +197,7 @@ PROMPTS = {
     "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (DD-MM-YYYY format)",
     "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30 or 6:30pm)",
     "departure_details": "📝 ⬅️ Any departure details we should know? (e.g., drop-off location, notes)",
-    "done": "Perfect! We've saved your travel details. ✅\n\nIf anything changes, just reply here to update us. Safe travels! 🌟",
+    "done": "Perfect! We've saved your travel details. ✅\n\nIf you need to update anything:\n• Reply *rsvp* to change your RSVP status\n• Reply *travel* to update travel details\n\nSafe travels! 🌟",
 }
 
 
@@ -698,23 +698,7 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             except ValueError:
                 pass
 
-        elif step == "update_travel":
-            # Restart flow
-            start_capture_after_opt_in(reg, restart=True)
-            return
 
-        elif step == "update_rsvp":
-            event_name = reg.event.name if reg.event else "the event"
-            send_choice_buttons(
-                reg.guest.phone,
-                f"Will you be attending {event_name}? 🎉",
-                [
-                    {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
-                    {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
-                    {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
-                ]
-            )
-            return
 
         elif step.startswith("rsvp_"):
             status = step.replace("rsvp_", "")

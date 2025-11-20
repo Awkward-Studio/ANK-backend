@@ -136,30 +136,23 @@ def whatsapp_travel_webhook(request):
     except TravelCaptureSession.DoesNotExist:
         sess = TravelCaptureSession.objects.create(registration=reg)
 
-    # If session already completed AND not a button click, offer update options
-    # (button clicks need to be processed even for completed sessions)
+    # If session already completed AND not a button click, offer update options via text
     if sess.is_complete and kind != "button":
         logger.warning(
             f"[RESUME] Registration={reg.id} session already complete; offering update options."
         )
-        # Send message with update buttons
         try:
             event_name = f" for {reg.event.name}" if reg.event else ""
             message = (
                 f"✅ Thank you! We've already received your details{event_name}.\n\n"
-                "What would you like to update?"
+                "If you need to update anything:\n"
+                "• Reply *rsvp* to change your RSVP status\n"
+                "• Reply *travel* to update travel details"
             )
-            send_choice_buttons(
-                reg.guest.phone,
-                message,
-                [
-                    {"id": f"update|rsvp|{reg.id}", "title": "📝 Update RSVP"},
-                    {"id": f"update|travel|{reg.id}", "title": "✈️ Update Travel Details"},
-                ]
-            )
-            logger.warning(f"[FALLBACK] Sent update options to {reg.guest.phone}")
+            send_freeform_text(reg.guest.phone, message)
+            logger.warning(f"[FALLBACK] Sent update instructions to {reg.guest.phone}")
         except Exception as exc:
-            logger.exception(f"[FALLBACK-ERR] Failed sending update options to {reg.id}: {exc}")
+            logger.exception(f"[FALLBACK-ERR] Failed sending update instructions to {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
 
     # If outside 24h → send auto "resume" template request (RCS)
@@ -259,17 +252,39 @@ def whatsapp_travel_webhook(request):
 
         # Check if we're awaiting guest count for RSVP
         try:
-            # 0. Check for explicit "update" command
-            if text.lower() in ["update", "change", "modify", "menu"]:
-                logger.warning(f"[TEXT-TRIGGER] User triggered update flow via text: '{text}'")
+            # 0. Check for explicit commands
+            text_lower = text.lower()
+            
+            # "update" / "menu" - shows instructions
+            if text_lower in ["update", "change", "modify", "menu"]:
+                logger.warning(f"[TEXT-TRIGGER] User asked for update menu: '{text}'")
+                send_freeform_text(
+                    reg.guest.phone,
+                    "To make changes, please reply with:\n\n"
+                    "• *rsvp* - to update your RSVP status\n"
+                    "• *travel* - to update your travel details"
+                )
+                return JsonResponse({"ok": True}, status=200)
+            
+            # "rsvp" - triggers RSVP flow
+            if text_lower in ["rsvp", "update rsvp", "change rsvp"]:
+                logger.warning(f"[TEXT-TRIGGER] User triggered RSVP update: '{text}'")
+                event_name = reg.event.name if reg.event else "the event"
                 send_choice_buttons(
                     reg.guest.phone,
-                    "What would you like to update?",
+                    f"Will you be attending {event_name}? 🎉",
                     [
-                        {"id": f"tc|update_rsvp|{reg.id}", "title": "📝 Update RSVP"},
-                        {"id": f"tc|update_travel|{reg.id}", "title": "✈️ Update Travel"},
+                        {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
+                        {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
+                        {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
                     ]
                 )
+                return JsonResponse({"ok": True}, status=200)
+            
+            # "travel" - triggers Travel flow restart
+            if text_lower in ["travel", "update travel", "change travel"]:
+                logger.warning(f"[TEXT-TRIGGER] User triggered Travel update: '{text}'")
+                start_capture_after_opt_in(reg, restart=True)
                 return JsonResponse({"ok": True}, status=200)
 
             sess = reg.travel_capture
