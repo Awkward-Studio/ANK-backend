@@ -173,22 +173,28 @@ TRAVEL_TYPE_CHOICES = {"Air": "Air", "Train": "Train", "Car": "Car"}
 # Steps that should always be rendered as WhatsApp buttons
 CHOICE_STEPS = {"travel_type", "arrival", "return_travel", "departure"}
 
+# Optional steps that can be skipped - will show a Skip button
+OPTIONAL_STEPS = {
+    "pnr", "arrival_details", "hotel_arrival_time", "hotel_departure_time",
+    "departure_airline", "departure_flight_number", "departure_pnr", "departure_details"
+}
+
 PROMPTS = {
     "travel_type": "How will you be traveling to the event? ✈️🚆🚗",
     "arrival": "Great! How will you be arriving at the venue?",
-    "arrival_date": "Please reply with your *Arrival Date* in DD-MM-YYYY format (e.g., 03-10-2025). 📅",
-    "arrival_time": "And the *Arrival Time*? (e.g., 14:30 or 2:30pm) 🕒",
+    "arrival_date": "📅 ➡️ ARRIVAL: What's your *Arrival Date*? Please reply in DD-MM-YYYY format (e.g., 03-10-2025).",
+    "arrival_time": "🕒 🛬 What time will you be arriving? (e.g., 14:30 or 2:30pm)",
     "airline": "Which *Airline* are you flying with? ✈️",
     "flight_number": "Could you share the *Flight Number*?",
     "pnr": "Do you have the *PNR* handy? (Reply 'skip' if you don't have it right now)",
-    "arrival_details": "Any other arrival details we should know? (e.g., pickup location, notes). Reply 'skip' if none.",
-    "hotel_arrival_time": "What time do you expect to reach the hotel? (HH:MM, or reply 'skip') 🏨",
-    "hotel_departure_time": "What time will you be checking out/departing the hotel? (HH:MM, or reply 'skip') 🏨",
+    "arrival_details": "📝 ➡️ Any other arrival details we should know? (e.g., pickup location, special requirements)",
+    "hotel_arrival_time": "🏨 ⬇️ CHECK-IN: What time do you expect to *arrive at the hotel*? (e.g., 15:00 or 3pm)",
+    "hotel_departure_time": "🏨 ⬆️ CHECK-OUT: What time will you be *leaving the hotel*? (e.g., 11:00 or 11am)",
     "return_travel": "Do you have a return journey planned? 🔙",
     "departure": "How will you be departing?",
-    "departure_date": "What is your *Departure Date*? (DD-MM-YYYY) 📅",
-    "departure_time": "And the *Departure Time*? (HH:MM) 🕒",
-    "departure_details": "Any departure details? (pickup spot/notes). Reply 'skip' if none.",
+    "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (DD-MM-YYYY format)",
+    "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30 or 6:30pm)",
+    "departure_details": "📝 ⬅️ Any departure details we should know? (e.g., drop-off location, notes)",
     "done": "Perfect! We've saved your travel details. ✅\n\nIf anything changes, just reply here to update us. Safe travels! 🌟",
 }
 
@@ -223,24 +229,24 @@ def _get_prompt_text(step: str, travel_type: str = "Air") -> str:
     # Departure variants
     if step == "departure_airline":
         if tt == "train":
-            return "For your return, which *Train* are you taking? (or 'skip') 🚆"
+            return "🚆 ⬅️ RETURN JOURNEY: Which *Train* are you taking back?"
         if tt == "car":
-            return "For your return, which *Car Company*? (or 'skip') 🚗"
-        return "For your return, which *Airline*? (or 'skip') ✈️"
+            return "🚗 ⬅️ RETURN JOURNEY: Which *Car Company* for the return trip?"
+        return "✈️ ⬅️ RETURN JOURNEY: Which *Airline* are you flying back with?"
 
     if step == "departure_flight_number":
         if tt == "train":
-            return "Return *Train Number*? (or 'skip')"
+            return "🚆 ⬅️ What's your return *Train Number*?"
         if tt == "car":
-            return "Return *Car Number*? (or 'skip')"
-        return "Return *Flight Number*? (or 'skip')"
+            return "🚗 ⬅️ What's your return *Car Number* or booking reference?"
+        return "✈️ ⬅️ What's your return *Flight Number*?"
 
     if step == "departure_pnr":
         if tt == "train":
-            return "Return *PNR*? (or 'skip')"
+            return "🚆 ⬅️ Do you have the return journey *PNR*?"
         if tt == "car":
-            return "Return *Driver Number*? (or 'skip')"
-        return "Return *PNR*? (or 'skip')"
+            return "🚗 ⬅️ Do you have the *Driver Number* for the return trip?"
+        return "✈️ ⬅️ Do you have the return flight *PNR*?"
 
     return PROMPTS.get(step, "OK.")
 
@@ -444,6 +450,17 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
         )
         return
 
+    # Optional steps with Skip button
+    if step in OPTIONAL_STEPS:
+        td = _get_or_create_detail(reg)
+        text = _get_prompt_text(step, td.travel_type)
+        send_choice_buttons(
+            phone,
+            text,
+            [{"id": f"tc|{step}|__skip__", "title": "⏭️ Skip"}],
+        )
+        return
+
     # Free-form for the rest
     # Use dynamic prompt text
     td = _get_or_create_detail(reg)
@@ -515,7 +532,45 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
     sess = _get_or_create_session(reg)
 
     try:
-        if step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
+        # Handle skip button for optional fields
+        if raw_value == "__skip__" and step in OPTIONAL_STEPS:
+            sess.state = sess.state or {}
+            # Mark the field as done (skipped)
+            if step == "pnr":
+                td.pnr = ""
+                sess.state["pnr_done"] = True
+                td.save(update_fields=["pnr"])
+            elif step == "arrival_details":
+                td.arrival_details = ""
+                sess.state["arrival_details_done"] = True
+                td.save(update_fields=["arrival_details"])
+            elif step == "hotel_arrival_time":
+                td.hotel_arrival_time = None
+                sess.state["hat_skip"] = True
+                td.save(update_fields=["hotel_arrival_time"])
+            elif step == "hotel_departure_time":
+                td.hotel_departure_time = None
+                sess.state["hdt_skip"] = True
+                td.save(update_fields=["hotel_departure_time"])
+            elif step == "departure_airline":
+                td.departure_airline = ""
+                sess.state["departure_airline_done"] = True
+                td.save(update_fields=["departure_airline"])
+            elif step == "departure_flight_number":
+                td.departure_flight_number = ""
+                sess.state["departure_flight_number_done"] = True
+                td.save(update_fields=["departure_flight_number"])
+            elif step == "departure_pnr":
+                td.departure_pnr = ""
+                sess.state["departure_pnr_done"] = True
+                td.save(update_fields=["departure_pnr"])
+            elif step == "departure_details":
+                td.departure_details = ""
+                sess.state["departure_details_done"] = True
+                td.save(update_fields=["departure_details"])
+            sess.save(update_fields=["state"])
+
+        elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
                 td.travel_type = raw_value

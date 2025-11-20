@@ -131,19 +131,31 @@ def whatsapp_travel_webhook(request):
     except TravelCaptureSession.DoesNotExist:
         sess = TravelCaptureSession.objects.create(registration=reg)
 
-    # If session already completed, send acknowledgment
-    if sess.is_complete:
+    # If session already completed AND not a button click, offer update options
+    # (button clicks need to be processed even for completed sessions)
+    if sess.is_complete and kind != "button":
         logger.warning(
-            f"[RESUME] Registration={reg.id} session already complete; sending acknowledgment."
+            f"[RESUME] Registration={reg.id} session already complete; offering update options."
         )
-        # Send acknowledgment message
-        from MessageTemplates.services.travel_info_capture import get_fallback_message
+        # Send message with update buttons
+        from MessageTemplates.services.whatsapp import send_choice_buttons
         try:
-            fallback_msg = get_fallback_message("completed", reg)
-            send_freeform_text(reg.guest.phone, fallback_msg)
-            logger.warning(f"[FALLBACK] Sent completion acknowledgment to {reg.guest.phone}")
+            event_name = f" for {reg.event.name}" if reg.event else ""
+            message = (
+                f"✅ Thank you! We've already received your details{event_name}.\n\n"
+                "What would you like to update?"
+            )
+            send_choice_buttons(
+                reg.guest.phone,
+                message,
+                [
+                    {"id": f"update|rsvp|{reg.id}", "title": "📝 Update RSVP"},
+                    {"id": f"update|travel|{reg.id}", "title": "✈️ Update Travel Details"},
+                ]
+            )
+            logger.warning(f"[FALLBACK] Sent update options to {reg.guest.phone}")
         except Exception as exc:
-            logger.exception(f"[FALLBACK-ERR] Failed sending completion msg to {reg.id}: {exc}")
+            logger.exception(f"[FALLBACK-ERR] Failed sending update options to {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
 
     # If outside 24h → send auto "resume" template request (RCS)
@@ -185,9 +197,10 @@ def whatsapp_travel_webhook(request):
 
     #     return JsonResponse({"ok": True}, status=200)
     if kind == "button":
-        # We now support two formats:
+        # We now support multiple formats:
         #  1) New: explicit {"step": "...", "value": "..."}
         #  2) Old: {"button_id": "tc|step|value"}
+        #  3) Update: {"button_id": "update|action|reg_id"}
         step = (body.get("step") or "").strip()
         value = (body.get("value") or "").strip()
 
@@ -195,7 +208,38 @@ def whatsapp_travel_webhook(request):
             btn_id = (body.get("button_id") or "").strip()
             try:
                 parts = btn_id.split("|", 2)
-                if len(parts) == 3 and parts[0] == "tc":
+                
+                # Handle "update" buttons (e.g., "update|rsvp|uuid" or "update|travel|uuid")
+                if len(parts) == 3 and parts[0] == "update":
+                    action = parts[1]  # "rsvp" or "travel"
+                    reg_id_from_btn = parts[2]
+                    
+                    logger.warning(f"[WEBHOOK-UPDATE-BUTTON] action={action!r} reg={reg.id}")
+                    
+                    if action == "travel":
+                        # Restart travel capture flow
+                        from MessageTemplates.services.travel_info_capture import start_capture_after_opt_in
+                        try:
+                            start_capture_after_opt_in(reg, restart=True)
+                            logger.warning(f"[UPDATE-TRAVEL] Restarted travel capture for {reg.id}")
+                        except Exception as exc:
+                            logger.exception(f"[UPDATE-TRAVEL-ERR] Failed for {reg.id}: {exc}")
+                    
+                    elif action == "rsvp":
+                        # Send message directing to RSVP update (or trigger RSVP flow if available)
+                        try:
+                            send_freeform_text(
+                                reg.guest.phone,
+                                "To update your RSVP, please visit your event dashboard or contact our support team. 📞"
+                            )
+                            logger.warning(f"[UPDATE-RSVP] Sent RSVP update instructions to {reg.id}")
+                        except Exception as exc:
+                            logger.exception(f"[UPDATE-RSVP-ERR] Failed for {reg.id}: {exc}")
+                    
+                    return JsonResponse({"ok": True}, status=200)
+                
+                # Handle travel capture buttons (e.g., "tc|step|value")
+                elif len(parts) == 3 and parts[0] == "tc":
                     step, value = parts[1], parts[2]
             except Exception:
                 logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
