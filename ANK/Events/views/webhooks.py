@@ -44,6 +44,7 @@ def _ensure_aware(dt: datetime) -> datetime:
 @require_http_methods(["POST"])
 def track_send(request):
     hdr = (_get_header_token(request) or "").strip()
+    log.warning(f"[SECRET] {hdr}")
     secret = _get_secret().strip()
     if not secret or hdr != secret:
         return HttpResponseForbidden("invalid token")
