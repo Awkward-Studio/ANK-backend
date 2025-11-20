@@ -25,7 +25,7 @@ from drf_spectacular.views import (
 )
 from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
 from ANK.csrf import csrf
-from Events.views.webhooks import track_send, whatsapp_rsvp
+from Events.views.webhooks import resolve_wa, track_send, whatsapp_rsvp
 
 
 def healthz(_):
@@ -67,4 +67,5 @@ urlpatterns = [
     path("api/webhooks/track-send/", track_send, name="track_send"),
     path("api/webhooks/whatsapp-travel/", whatsapp_travel_webhook),
     path("healthz", healthz),
+    path("api/internal/resolve-wa/<str:wa_id>/", resolve_wa, name="resolve_wa"),
 ]

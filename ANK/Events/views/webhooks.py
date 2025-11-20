@@ -252,3 +252,35 @@ def whatsapp_rsvp(request):
             "responded_on": er.responded_on.isoformat() if er.responded_on else None,
         }
     )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def resolve_wa(request, wa_id):
+    token = request.headers.get("X-Webhook-Token", "")
+    if token != os.getenv("DJANGO_RSVP_SECRET"):
+        return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+
+    from Events.models.wa_send_map import WaSendMap
+    from django.utils import timezone
+
+    wa_digits = "".join(c for c in wa_id if c.isdigit())[-15:]
+
+    row = (
+        WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=timezone.now())
+        .order_by("-created_at")
+        .values("event_id", "event_registration_id")
+        .first()
+    )
+
+    if not row:
+        return JsonResponse({"ok": False, "found": False})
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "found": True,
+            "event_id": row["event_id"],
+            "registration_id": row["event_registration_id"],
+        }
+    )
