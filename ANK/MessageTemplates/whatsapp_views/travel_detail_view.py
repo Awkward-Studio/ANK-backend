@@ -101,20 +101,20 @@ def whatsapp_travel_webhook(request):
 
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
-    reg = _resolve_travel_reg(wa_id, body.get("event_id"))
+    reg_id = body.get("registration_id")
+    reg = _safe_get_registration(reg_id)
+
+    if not reg:
+        reg = _resolve_travel_reg(wa_id, body.get("event_id"))
+
+    if not reg:
+        logger.warning(f"[WEBHOOK] No registration resolved (id={reg_id}, wa={wa_id})")
+        return JsonResponse({"ok": True}, status=200)
 
     if kind not in {"resume", "button", "wake", "text"}:
         logger.error(f"[WEBHOOK] Invalid kind '{kind}'")
         return JsonResponse({"ok": False, "error": "invalid_kind"}, status=400)
 
-    # Load the registration (safe)
-    reg = _resolve_travel_reg(wa_id, body.get("event_id"))
-
-    if not reg:
-        # If no reg, no action, but return ok to avoid retries
-        return JsonResponse({"ok": True}, status=200)
-
-    # If session is completed → don't re-open it
     # Ensure capture session exists
     try:
         sess = reg.travel_capture
