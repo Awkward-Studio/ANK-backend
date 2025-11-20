@@ -196,7 +196,12 @@ def _get_or_create_detail(reg: EventRegistration) -> TravelDetail:
     td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
     if td:
         return td
-    td = TravelDetail.objects.create(event=reg.event)
+    # Create with default arrival and departure set to 'commercial'
+    td = TravelDetail.objects.create(
+        event=reg.event,
+        arrival="commercial",
+        departure="commercial"
+    )
     td.event_registrations.add(reg)
     return td
 
@@ -218,8 +223,7 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
     # --- core arrival stuff ---
     if not td.travel_type:
         pending.append("travel_type")
-    if not td.arrival:
-        pending.append("arrival")
+    # SKIP arrival question - default to 'commercial'
     if not td.arrival_date:
         pending.append("arrival_date")
     if not td.arrival_time:
@@ -251,8 +255,7 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
         pending.append("return_travel")
     elif state.get("return_travel_done") and td.return_travel:
         # Departure only if user said they have return travel
-        if not td.departure:
-            pending.append("departure")
+        # SKIP departure question - default to 'commercial'
         if not td.departure_date:
             pending.append("departure_date")
         if not td.departure_time:
@@ -550,7 +553,13 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         if step == "travel_type":
             val = _choice(t, TRAVEL_TYPE_CHOICES)
             if not val:
-                return ("Please tap a button or reply: Air / Train / Car", False)
+                return (
+                    f"I didn't understand '{t}' as a travel type. 🤔\n\n"
+                    "Please choose one of these options:\n"
+                    "• Tap a button above, OR\n"
+                    "• Reply with: *Air*, *Train*, or *Car*",
+                    False
+                )
             td.travel_type = val
             td.save(update_fields=["travel_type"])
 
@@ -558,7 +567,10 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             val = _choice(t, ARRIVAL_CHOICES)
             if not val:
                 return (
-                    "Please tap a button or reply: Commercial / Local Pickup / Self",
+                    f"I didn't understand '{t}' as an arrival option. 🤔\n\n"
+                    "Please choose one of these:\n"
+                    "• Tap a button above, OR\n"
+                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*",
                     False,
                 )
             td.arrival = val
@@ -567,7 +579,13 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         elif step == "return_travel":
             b = _yn(t)
             if b is None:
-                return ("Please tap Yes/No.", False)
+                return (
+                    f"I didn't understand '{t}' as a yes/no answer. 🤔\n\n"
+                    "Please let me know:\n"
+                    "• Tap a button above, OR\n"
+                    "• Reply with: *Yes* or *No*",
+                    False
+                )
             td.return_travel = b
             sess.state = sess.state or {}
             sess.state["return_travel_done"] = True
@@ -578,7 +596,10 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             val = _choice(t, ARRIVAL_CHOICES)
             if not val:
                 return (
-                    "Please tap a button or reply: Commercial / Local Pickup / Self",
+                    f"I didn't understand '{t}' as a departure option. 🤔\n\n"
+                    "Please choose one of these:\n"
+                    "• Tap a button above, OR\n"
+                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*",
                     False,
                 )
             td.departure = val
@@ -588,14 +609,30 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         elif step == "arrival_date":
             dt = _parse_date(t)
             if not dt:
-                return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
+                return (
+                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
+                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
+                    "Examples:\n"
+                    "• 03-10-2025\n"
+                    "• 15/12/2025\n"
+                    "• 01-01-2026",
+                    False
+                )
             td.arrival_date = dt
             td.save(update_fields=["arrival_date"])
 
         elif step == "arrival_time":
             tm = _parse_time(t)
             if not tm:
-                return ("Please send time like 14:30 or 2:30pm.", False)
+                return (
+                    f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
+                    "Please reply with the time in one of these formats:\n\n"
+                    "Examples:\n"
+                    "• 14:30 (24-hour format)\n"
+                    "• 2:30pm (12-hour format)\n"
+                    "• 09:15am",
+                    False
+                )
             td.arrival_time = tm
             td.save(update_fields=["arrival_time"])
 
@@ -633,30 +670,46 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.save(update_fields=["arrival_details"])
 
         elif step == "hotel_arrival_time":
-            key = t.strip().lower()
+            val = _set_optional_text(t)
             sess.state = sess.state or {}
-            if key in {"skip", "none", "na", "n/a", ""}:
+            if not val:  # User wants to skip
                 td.hotel_arrival_time = None
                 sess.state["hat_skip"] = True
             else:
-                tm = _parse_time(t)
+                tm = _parse_time(val)
                 if not tm:
-                    return ("Time looks off. Example: 13:45", False)
+                    return (
+                        f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
+                        "Please reply with the time format:\n\n"
+                        "Examples:\n"
+                        "• 13:45 (24-hour)\n"
+                        "• 1:45pm (12-hour)\n\n"
+                        "Or reply *skip* if you don't have this info yet.",
+                        False
+                    )
                 td.hotel_arrival_time = tm
                 sess.state.pop("hat_skip", None)
             state_changed = True
             td.save(update_fields=["hotel_arrival_time"])
 
         elif step == "hotel_departure_time":
-            key = t.strip().lower()
+            val = _set_optional_text(t)
             sess.state = sess.state or {}
-            if key in {"skip", "none", "na", "n/a", ""}:
+            if not val:  # User wants to skip
                 td.hotel_departure_time = None
                 sess.state["hdt_skip"] = True
             else:
-                tm = _parse_time(t)
+                tm = _parse_time(val)
                 if not tm:
-                    return ("Time looks off. Example: 10:00", False)
+                    return (
+                        f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
+                        "Please reply with the time format:\n\n"
+                        "Examples:\n"
+                        "• 10:00 (24-hour)\n"
+                        "• 10:00am (12-hour)\n\n"
+                        "Or reply *skip* if you don't have this info yet.",
+                        False
+                    )
                 td.hotel_departure_time = tm
                 sess.state.pop("hdt_skip", None)
             state_changed = True
@@ -665,14 +718,30 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
         elif step == "departure_date":
             dt = _parse_date(t)
             if not dt:
-                return ("Please send date as DD-MM-YYYY (e.g., 03-10-2025).", False)
+                return (
+                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
+                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
+                    "Examples:\n"
+                    "• 05-10-2025\n"
+                    "• 20/12/2025\n"
+                    "• 03-01-2026",
+                    False
+                )
             td.departure_date = dt
             td.save(update_fields=["departure_date"])
 
         elif step == "departure_time":
             tm = _parse_time(t)
             if not tm:
-                return ("Send time like 18:20 or 6:20pm", False)
+                return (
+                    f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
+                    "Please reply with the time in one of these formats:\n\n"
+                    "Examples:\n"
+                    "• 18:20 (24-hour format)\n"
+                    "• 6:20pm (12-hour format)\n"
+                    "• 11:30am",
+                    False
+                )
             td.departure_time = tm
             td.save(update_fields=["departure_time"])
 
@@ -726,7 +795,11 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
         else:
             logger.warning(f"[ANSWER] Unknown step={step!r}, text={t!r}")
-            return ("Sorry, I didn't understand that. Please try again.", False)
+            return (
+                "Hmm, I'm not sure how to handle that response right now. 🤔\n\n"
+                "Let me ask the question again - please follow the format mentioned in the prompt above.",
+                False
+            )
 
     except Exception:
         logger.exception(f"[ERROR] Failed while handling inbound answer at step={step}")
