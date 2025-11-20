@@ -58,13 +58,15 @@ def track_send(request):
     event_id = body.get("event_id")
     reg_id = body.get("event_registration_id")
     template_wamid = body.get("template_wamid") or None
+    flow_type = (body.get("flow_type") or "").strip() or None
 
     log.info(
-        "track_send body=%s wa_id=%s event_id=%s reg_id=%s",
+        "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s",
         body,
         wa_id,
         event_id,
         reg_id,
+        flow_type,
     )
 
     if not wa_id or not event_id:
@@ -94,15 +96,30 @@ def track_send(request):
             "event": er.event,
             "event_registration": er,
             "expires_at": dj_tz.now() + timedelta(days=30),
+            "flow_type": flow_type,
         }
         if template_wamid:
             obj, _ = WaSendMap.objects.update_or_create(
                 template_wamid=template_wamid, defaults=defaults
             )
         else:
-            obj, _ = WaSendMap.objects.update_or_create(
-                wa_id=wa_id, event=er.event, defaults=defaults
-            )
+            if not flow_type:
+                # If flow_type is missing for a generic message, log an error or default
+                # to creating a new, non-reusable map to avoid conflicts.
+                log.warning(
+                    f"track_send: Missing flow_type for generic map for reg={er.id}. Creating new map."
+                )
+                obj = WaSendMap.objects.create(**defaults)
+            else:
+                # This uses the new unique constraint:
+                # (wa_id, event_registration, flow_type, template_wamid=NULL)
+                obj, _ = WaSendMap.objects.update_or_create(
+                    wa_id=wa_id,
+                    event_registration=er,
+                    flow_type=flow_type,
+                    template_wamid__isnull=True,
+                    defaults=defaults,
+                )
     except Exception as e:
         log.exception("track_send failed")
         return HttpResponseBadRequest(f"track_send error: {e}")
@@ -154,6 +171,7 @@ def whatsapp_rsvp(request):
         wa_id = _norm_digits(body.get("wa_id", ""))
         template_wamid = body.get("template_wamid") or None
         event_id = body.get("event_id") or None
+        flow_type_expected = "rsvp"
 
         if not wa_id:
             return HttpResponseBadRequest("missing wa_id")
@@ -173,7 +191,7 @@ def whatsapp_rsvp(request):
         # Priority 2: wa_id + event_id (campaign scoped)
         if not er and event_id:
             rid = (
-                base_qs.filter(event_id=event_id)
+                base_qs.filter(event_id=event_id, flow_type=flow_type_expected)
                 .order_by("-created_at")
                 .values_list("event_registration", flat=True)
                 .first()
