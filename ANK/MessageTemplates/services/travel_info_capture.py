@@ -12,6 +12,8 @@ Responsibilities:
 
 import re
 import logging
+import requests
+import os
 from datetime import datetime, time
 from typing import Tuple, Optional, Dict
 
@@ -696,6 +698,84 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             except ValueError:
                 pass
 
+        elif step == "update_travel":
+            # Restart flow
+            start_capture_after_opt_in(reg, restart=True)
+            return
+
+        elif step == "update_rsvp":
+            event_name = reg.event.name if reg.event else "the event"
+            send_choice_buttons(
+                reg.guest.phone,
+                f"Will you be attending {event_name}? 🎉",
+                [
+                    {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
+                    {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
+                    {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
+                ]
+            )
+            return
+
+        elif step.startswith("rsvp_"):
+            status = step.replace("rsvp_", "")
+            if status in ["yes", "no", "maybe"]:
+                # Call existing RSVP webhook to trigger WebSocket broadcasts
+                try:
+                    # We use localhost because we are calling our own API
+                    webhook_url = "http://127.0.0.1:8000/api/webhooks/whatsapp-rsvp/"
+                    response = requests.post(
+                        webhook_url,
+                        json={
+                            "rsvp_status": status,
+                            "event_registration_id": str(reg.id),
+                            "responded_on": dj_tz.now().isoformat()
+                        },
+                        headers={"X-Webhook-Token": os.getenv("DJANGO_RSVP_SECRET", "")},
+                        timeout=5
+                    )
+                    if response.status_code != 200:
+                        logger.error(f"[RSVP-BUTTON] Webhook returned {response.status_code}")
+                except Exception as exc:
+                    logger.exception(f"[RSVP-BUTTON] Failed to call webhook: {exc}")
+
+                # Send appropriate response based on status
+                if status == "yes":
+                    # Ask for guest count
+                    try:
+                        send_freeform_text(
+                            reg.guest.phone,
+                            "Great! How many people will be attending (including you)? 👥\n\n"
+                            "Please reply with a number (e.g., 2, 3, 4)"
+                        )
+                        # Set flag to expect guest count
+                        sess.state = sess.state or {}
+                        sess.state["awaiting_guest_count"] = True
+                        sess.save(update_fields=["state"])
+                    except Exception as exc:
+                        logger.exception(f"[RSVP-BUTTON] Failed to send guest count prompt: {exc}")
+                
+                elif status == "no":
+                    try:
+                        send_freeform_text(
+                            reg.guest.phone,
+                            "Thank you for letting us know.\n\n"
+                            "Your RSVP has been updated to: Not Attending ❌\n\n"
+                            "We hope to see you at future events!"
+                        )
+                    except Exception as exc:
+                        logger.exception(f"[RSVP-BUTTON] Failed to send decline confirmation: {exc}")
+                
+                elif status == "maybe":
+                    try:
+                        send_freeform_text(
+                            reg.guest.phone,
+                            "No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
+                            "Please let us know when you decide!"
+                        )
+                    except Exception as exc:
+                        logger.exception(f"[RSVP-BUTTON] Failed to send maybe confirmation: {exc}")
+            return
+
         else:
             logger.warning(
                 f"[BUTTON] Unknown or invalid step/value: step={step!r} value={raw_value!r}"
@@ -1053,8 +1133,8 @@ def get_fallback_message(scenario: str, reg=None) -> str:
         
         return (
             f"✅ Thank you! We've already received your travel details{event_name}.\n\n"
-            "If you need to update any information, please contact our support team "
-            "and we'll be happy to help. 📞"
+            "If you need to change anything, simply reply with *update* to see your options.\n\n"
+            "Or contact our support team for assistance. 📞"
         )
     
     else:

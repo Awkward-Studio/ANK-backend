@@ -183,10 +183,9 @@ def whatsapp_travel_webhook(request):
 
     # === BUTTON ===============================================================
     if kind == "button":
-        # We now support multiple formats:
+        # We support:
         #  1) New: explicit {"step": "...", "value": "..."}
-        #  2) Old: {"button_id": "tc|step|value"}
-        #  3) Update: {"button_id": "update|action|reg_id"}
+        #  2) Standard: {"button_id": "tc|step|value"}
         step = (body.get("step") or "").strip()
         value = (body.get("value") or "").strip()
 
@@ -200,127 +199,31 @@ def whatsapp_travel_webhook(request):
                 parts = btn_id.split("|", 2)
                 logger.warning(f"[BUTTON-DEBUG] Split into parts: {parts}")
                 
-                # Handle "update" buttons (e.g., "update|rsvp|uuid" or "update|travel|uuid")
-                if len(parts) >= 2 and parts[0] == "update":
-                    action = parts[1] if len(parts) > 1 else "unknown"  # "rsvp" or "travel"
-                    reg_id_from_btn = parts[2] if len(parts) > 2 else "missing"
-                    
-                    logger.warning(f"[WEBHOOK-UPDATE-BUTTON] action={action!r} reg={reg.id}")
-                    
-                    # DIAGNOSTIC: Send WhatsApp message to confirm button was received
-                    try:
-                        send_freeform_text(
-                            reg.guest.phone,
-                            f"🔧 DEBUG: Update button clicked! Action={action}, Button ID={btn_id}"
-                        )
-                    except:
-                        pass
-                    
-                    if action == "travel":
-                        # Restart travel capture flow
-                        try:
-                            start_capture_after_opt_in(reg, restart=True)
-                            logger.warning(f"[UPDATE-TRAVEL] Restarted travel capture for {reg.id}")
-                        except Exception as exc:
-                            logger.exception(f"[UPDATE-TRAVEL-ERR] Failed for {reg.id}: {exc}")
-                    
-                    elif action == "rsvp":
-                        # Send RSVP status buttons
-                        try:
-                            event_name = reg.event.name if reg.event else "the event"
-                            send_choice_buttons(
-                                reg.guest.phone,
-                                f"Will you be attending {event_name}? 🎉",
-                                [
-                                    {"id": f"rsvp|yes|{reg.id}", "title": "✅ Yes"},
-                                    {"id": f"rsvp|no|{reg.id}", "title": "❌ No"},
-                                    {"id": f"rsvp|maybe|{reg.id}", "title": "🤔 Maybe"},
-                                ]
-                            )
-                            logger.warning(f"[UPDATE-RSVP] Sent RSVP status buttons to {reg.id}")
-                        except Exception as exc:
-                            logger.exception(f"[UPDATE-RSVP-ERR] Failed for {reg.id}: {exc}")
-                    
-                    return JsonResponse({"ok": True}, status=200)
+                # Check for "tc" prefix (standard Travel Capture format)
+                if len(parts) >= 2 and parts[0] == "tc":
+                    step = parts[1]
+                    value = parts[2] if len(parts) > 2 else ""
                 
-                # Handle "rsvp" buttons (e.g., "rsvp|yes|uuid", "rsvp|no|uuid", "rsvp|maybe|uuid")
-                if len(parts) == 3 and parts[0] == "rsvp":
-                    status = parts[1]  # "yes", "no", "maybe"
-                    reg_id_from_btn = parts[2]
-                    
-                    if status not in ["yes", "no", "maybe"]:
-                        logger.error(f"[RSVP-BUTTON] Invalid status: {status}")
-                        return JsonResponse({"ok": True}, status=200)
-                    
-                    logger.warning(f"[RSVP-BUTTON] status={status!r} reg={reg.id}")
-                    
-                    # Call existing RSVP webhook to trigger WebSocket broadcasts
-                    try:
-                        # Call the RSVP webhook
-                        webhook_url = request.build_absolute_uri("/api/webhooks/whatsapp-rsvp/")
-                        response = requests.post(
-                            webhook_url,
-                            json={
-                                "rsvp_status": status,
-                                "event_registration_id": str(reg.id),
-                                "responded_on": timezone.now().isoformat()
-                            },
-                            headers={"X-Webhook-Token": os.getenv("DJANGO_RSVP_SECRET", "")},
-                            timeout=5
-                        )
-                        
-                        if response.status_code == 200:
-                            logger.warning(f"[RSVP-BUTTON] Successfully updated RSVP to {status} for {reg.id}")
-                        else:
-                            logger.error(f"[RSVP-BUTTON] Webhook returned {response.status_code}")
-                    except Exception as exc:
-                        logger.exception(f"[RSVP-BUTTON] Failed to call webhook: {exc}")
-                    
-                    # Send appropriate response based on status
-                    if status == "yes":
-                        # Ask for guest count
-                        try:
-                            send_freeform_text(
-                                reg.guest.phone,
-                                "Great! How many people will be attending (including you)? 👥\n\n"
-                                "Please reply with a number (e.g., 2, 3, 4)"
-                            )
-                            # Set flag to expect guest count
-                            sess = reg.travel_capture
-                            sess.state = sess.state or {}
-                            sess.state["awaiting_guest_count"] = True
-                            sess.save(update_fields=["state"])
-                        except Exception as exc:
-                            logger.exception(f"[RSVP-BUTTON] Failed to send guest count prompt: {exc}")
-                    
-                    elif status == "no":
-                        # Send decline confirmation
-                        try:
-                            send_freeform_text(
-                                reg.guest.phone,
-                                "Thank you for letting us know.\n\n"
-                                "Your RSVP has been updated to: Not Attending ❌\n\n"
-                                "We hope to see you at future events!"
-                            )
-                        except Exception as exc:
-                            logger.exception(f"[RSVP-BUTTON] Failed to send decline confirmation: {exc}")
-                    
-                    elif status == "maybe":
-                        # Send maybe confirmation
-                        try:
-                            send_freeform_text(
-                                reg.guest.phone,
-                                "No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
-                                "Please let us know when you decide!"
-                            )
-                        except Exception as exc:
-                            logger.exception(f"[RSVP-BUTTON] Failed to send maybe confirmation: {exc}")
-                    
-                    return JsonResponse({"ok": True}, status=200)
-                
-                # Handle travel capture buttons (e.g., "tc|step|value")
-                elif len(parts) == 3 and parts[0] == "tc":
-                    step, value = parts[1], parts[2]
+                # --- BACKWARD COMPATIBILITY for legacy buttons ---
+                # Handle "update" buttons (e.g., "update|rsvp|uuid")
+                elif len(parts) >= 2 and parts[0] == "update":
+                    action = parts[1]
+                    # Map legacy action to new step name
+                    if action == "rsvp":
+                        step = "update_rsvp"
+                    elif action == "travel":
+                        step = "update_travel"
+                    value = parts[2] if len(parts) > 2 else ""
+                    logger.warning(f"[LEGACY-BUTTON] Mapped update|{action} to step={step}")
+
+                # Handle "rsvp" buttons (e.g., "rsvp|yes|uuid")
+                elif len(parts) >= 2 and parts[0] == "rsvp":
+                    status = parts[1]
+                    # Map legacy status to new step name
+                    if status in ["yes", "no", "maybe"]:
+                        step = f"rsvp_{status}"
+                    value = parts[2] if len(parts) > 2 else ""
+                    logger.warning(f"[LEGACY-BUTTON] Mapped rsvp|{status} to step={step}")
             except Exception:
                 logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
 
@@ -329,6 +232,7 @@ def whatsapp_travel_webhook(request):
                 logger.warning(
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
+                # Delegate EVERYTHING to the orchestrator
                 apply_button_choice(reg, step, value)
             except Exception as exc:
                 logger.exception(f"[BUTTON-EXCEPTION] Failed for reg={reg.id}: {exc}")
@@ -355,6 +259,19 @@ def whatsapp_travel_webhook(request):
 
         # Check if we're awaiting guest count for RSVP
         try:
+            # 0. Check for explicit "update" command
+            if text.lower() in ["update", "change", "modify", "menu"]:
+                logger.warning(f"[TEXT-TRIGGER] User triggered update flow via text: '{text}'")
+                send_choice_buttons(
+                    reg.guest.phone,
+                    "What would you like to update?",
+                    [
+                        {"id": f"tc|update_rsvp|{reg.id}", "title": "📝 Update RSVP"},
+                        {"id": f"tc|update_travel|{reg.id}", "title": "✈️ Update Travel"},
+                    ]
+                )
+                return JsonResponse({"ok": True}, status=200)
+
             sess = reg.travel_capture
             if sess.state and sess.state.get("awaiting_guest_count"):
                 logger.warning(f"[RSVP-GUEST-COUNT] Processing guest count for {reg.id}: '{text}'")
