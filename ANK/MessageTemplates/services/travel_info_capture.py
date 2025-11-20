@@ -728,6 +728,46 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
 
 
 
+        elif step == "restart_flow":
+            # User clicked "Edit Details" - Wipe everything and start fresh
+            td.travel_type = ""
+            td.arrival = None
+            td.arrival_date = None
+            td.arrival_time = None
+            td.airline = ""
+            td.flight_number = ""
+            td.pnr = ""
+            td.arrival_details = ""
+            td.hotel_arrival_time = None
+            td.hotel_departure_time = None
+            td.return_travel = False
+            td.departure_date = None
+            td.departure_time = None
+            td.departure_airline = ""
+            td.departure_flight_number = ""
+            td.departure_pnr = ""
+            td.departure_details = ""
+            
+            # Save all fields
+            td.save(update_fields=[
+                "travel_type", "arrival", "arrival_date", "arrival_time",
+                "airline", "flight_number", "pnr", "arrival_details",
+                "hotel_arrival_time", "hotel_departure_time",
+                "return_travel", "departure_date", "departure_time",
+                "departure_airline", "departure_flight_number",
+                "departure_pnr", "departure_details"
+            ])
+
+            # Reset session
+            sess.step = "travel_type"
+            sess.is_complete = False
+            sess.state = {}
+            sess.save(update_fields=["step", "is_complete", "state"])
+
+            # Start the flow
+            send_next_prompt(reg)
+            return
+
         elif step == "update_section":
             # Handle section-specific update requests from the travel summary menu
             # raw_value contains the section name: travel_type, arrival, hotel, departure, done
@@ -1228,151 +1268,107 @@ def generate_travel_summary(reg: EventRegistration) -> str:
     sess = _get_or_create_session(reg)
     state = sess.state or {}
     
-    lines = [" *Your Current Travel Details:*\\n"]
+    lines = ["📋 *Your Travel Summary*"]
+    lines.append("━━━━━━━━━━━━━━━━━━")
     
-    # Travel Type
+    # --- Travel Type ---
     if td.travel_type:
-        icon = "" if td.travel_type == "Air" else "" if td.travel_type == "Train" else ""
+        icon = "✈️" if td.travel_type == "Air" else "🚆" if td.travel_type == "Train" else "🚗"
         lines.append(f"{icon} *Travel Type:* {td.travel_type}")
     else:
-        lines.append(" *Travel Type:* Not set")
+        lines.append("❓ *Travel Type:* Not set")
     
-    # Extra Attendees
-    extra_count = state.get("extra_attendees_count", 0)
+    # --- Extra Attendees ---
     if reg.extra_attendees.exists():
+        extra_count = state.get("extra_attendees_count", 0)
         total_extras = reg.extra_attendees.count()
-        lines.append(f" *Extra Guests Traveling:* {extra_count} of {total_extras}")
+        lines.append(f"👥 *Guests:* {extra_count} (of {total_extras} registered)")
     
-    lines.append("\\n* Arrival Details:*")
+    lines.append("")
+    lines.append("📥 *Arrival*")
     
     # Arrival Date & Time
-    if td.arrival_date:
-        lines.append(f" Date: {td.arrival_date.strftime('%d-%m-%Y')}")
-    else:
-        lines.append(" Date: _Not provided_")
-        
-    if td.arrival_time:
-        lines.append(f" Time: {td.arrival_time.strftime('%I:%M %p')}")
-    else:
-        lines.append(" Time: _Not provided_")
+    date_str = td.arrival_date.strftime('%d-%m-%Y') if td.arrival_date else "_Not provided_"
+    time_str = td.arrival_time.strftime('%I:%M %p') if td.arrival_time else "_Not provided_"
+    lines.append(f"📅 Date: {date_str}")
+    lines.append(f"🕒 Time: {time_str}")
     
-    # Carrier details (airline/train/car)
+    # Carrier details
     if td.airline:
-        carrier_label = "Airline" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Car Company"
-        lines.append(f" {carrier_label}: {td.airline}")
-    else:
-        lines.append(" Carrier: _Not provided_")
+        carrier_label = "Airline" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Car"
+        lines.append(f"🚆 {carrier_label}: {td.airline}")
     
     # Flight/Train/Car number
     if td.flight_number:
-        number_label = "Flight" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Booking"
-        lines.append(f" {number_label} Number: {td.flight_number}")
-    else:
-        lines.append(" Number: _Not provided_")
+        number_label = "Flight" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Plate"
+        lines.append(f"🔢 {number_label}: {td.flight_number}")
     
     # PNR
     if td.pnr:
-        lines.append(f" PNR: {td.pnr}")
-    elif state.get("pnr_done"):
-        lines.append(" PNR: _Skipped_")
-    else:
-        lines.append(" PNR: _Not provided_")
+        lines.append(f"🎫 PNR: {td.pnr}")
     
-    # Arrival Details (optional notes)
+    # Arrival Details
     if td.arrival_details:
-        lines.append(f" Notes: {td.arrival_details[:50]}{'...' if len(td.arrival_details) > 50 else ''}")
-    elif state.get("arrival_details_done"):
-        lines.append(" Notes: _Skipped_")
+        lines.append(f"📝 Notes: {td.arrival_details}")
+    
+    lines.append("")
+    lines.append("🏨 *Hotel*")
     
     # Hotel Times
-    lines.append("\\n* Hotel Details:*")
-    if td.hotel_arrival_time:
-        lines.append(f" Check-in: {td.hotel_arrival_time.strftime('%I:%M %p')}")
-    elif state.get("hat_skip"):
-        lines.append(" Check-in: _Skipped_")
-    else:
-        lines.append(" Check-in: _Not provided_")
-        
-    if td.hotel_departure_time:
-        lines.append(f" Check-out: {td.hotel_departure_time.strftime('%I:%M %p')}")
-    elif state.get("hdt_skip"):
-        lines.append(" Check-out: _Skipped_")
-    else:
-        lines.append(" Check-out: _Not provided_")
+    checkin_str = td.hotel_arrival_time.strftime('%I:%M %p') if td.hotel_arrival_time else "_Skipped_" if state.get("hat_skip") else "_Not provided_"
+    checkout_str = td.hotel_departure_time.strftime('%I:%M %p') if td.hotel_departure_time else "_Skipped_" if state.get("hdt_skip") else "_Not provided_"
+    
+    lines.append(f"Check-in: {checkin_str}")
+    lines.append(f"Check-out: {checkout_str}")
+    
+    lines.append("")
+    lines.append("📤 *Return Journey*")
     
     # Return Travel
-    lines.append("\\n* Return Journey:*")
     if state.get("return_travel_done"):
         if td.return_travel:
-            lines.append(" Return travel: Yes")
+            lines.append("✅ Return travel: Yes")
             
-            # Departure details
-            if td.departure_date:
-                lines.append(f" Date: {td.departure_date.strftime('%d-%m-%Y')}")
-            else:
-                lines.append(" Date: _Not provided_")
-                
-            if td.departure_time:
-                lines.append(f" Time: {td.departure_time.strftime('%I:%M %p')}")
-            else:
-                lines.append(" Time: _Not provided_")
+            dep_date_str = td.departure_date.strftime('%d-%m-%Y') if td.departure_date else "_Not provided_"
+            dep_time_str = td.departure_time.strftime('%I:%M %p') if td.departure_time else "_Not provided_"
+            lines.append(f"📅 Date: {dep_date_str}")
+            lines.append(f"🕒 Time: {dep_time_str}")
             
             if td.departure_airline:
-                lines.append(f" Carrier: {td.departure_airline}")
-            elif state.get("departure_airline_done"):
-                lines.append(" Carrier: _Skipped_")
+                lines.append(f"🚆 Carrier: {td.departure_airline}")
                 
             if td.departure_flight_number:
-                lines.append(f" Number: {td.departure_flight_number}")
-            elif state.get("departure_flight_number_done"):
-                lines.append(" Number: _Skipped_")
+                lines.append(f"🔢 Number: {td.departure_flight_number}")
                 
             if td.departure_pnr:
-                lines.append(f" PNR: {td.departure_pnr}")
-            elif state.get("departure_pnr_done"):
-                lines.append(" PNR: _Skipped_")
+                lines.append(f"🎫 PNR: {td.departure_pnr}")
                 
             if td.departure_details:
-                lines.append(f" Notes: {td.departure_details[:50]}{'...' if len(td.departure_details) > 50 else ''}")
-            elif state.get("departure_details_done"):
-                lines.append(" Notes: _Skipped_")
+                lines.append(f"📝 Notes: {td.departure_details}")
         else:
-            lines.append(" No return travel needed")
+            lines.append("❌ Return travel: No")
     else:
-        lines.append(" Not specified")
+        lines.append("❓ Not specified")
     
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def send_travel_update_menu(reg: EventRegistration) -> None:
     """
-    Send a summary of travel details with interactive buttons to update specific sections.
+    Send a summary of travel details with a single edit button to restart the flow.
     """
     summary = generate_travel_summary(reg)
     
     message = (
-        f"{summary}\\n\\n"
-        "\\n\\n"
-        " *What would you like to update?*\\n"
-        "Select a section below:"
+        f"{summary}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "Does everything look correct?"
     )
     
     buttons = [
-        {"id": f"tc|update_section|travel_type|{reg.id}", "title": " Travel Type"},
-        {"id": f"tc|update_section|arrival|{reg.id}", "title": " Arrival Details"},
-        {"id": f"tc|update_section|hotel|{reg.id}", "title": " Hotel Times"},
+        {"id": f"tc|restart_flow|{reg.id}", "title": "✏️ Edit Details"},
+        {"id": f"tc|update_section|done|{reg.id}", "title": "✅ Confirm"},
     ]
-    
-    # Only show return travel button if they previously indicated they have return travel
-    td = _get_or_create_detail(reg)
-    sess = _get_or_create_session(reg)
-    state = sess.state or {}
-    
-    if state.get("return_travel_done"):
-        buttons.append({"id": f"tc|update_section|departure|{reg.id}", "title": " Return Travel"})
-    
-    # Add "All Correct" option
-    buttons.append({"id": f"tc|update_section|done|{reg.id}", "title": " All Correct"})
     
     try:
         send_choice_buttons(reg.guest.phone, message, buttons)
@@ -1383,92 +1379,18 @@ def send_travel_update_menu(reg: EventRegistration) -> None:
 
 def start_section_update(reg: EventRegistration, section: str) -> None:
     """
-    Reset session state for a specific section and start prompting for those fields.
-    
-    Sections:
-    - travel_type: Just the travel type
-    - arrival: arrival date, time, airline, flight number, PNR, arrival details
-    - hotel: hotel arrival/departure times
-    - departure: all departure/return travel fields
+    Handle final confirmation or restart flow.
     """
-    sess = _get_or_create_session(reg)
-    td = _get_or_create_detail(reg)
-    
     if section == "done":
         # User confirmed all details are correct
         send_freeform_text(
             reg.guest.phone,
-            " Perfect! Your travel details have been saved.\\n\\n"
-            "If you need to make changes later, just type *travel* anytime."
+            "✅ Perfect! Your travel details have been saved.\n\n"
+            "We look forward to seeing you! 🎉"
         )
         return
     
-    elif section == "travel_type":
-        # Reset travel type and related fields
-        td.travel_type = ""
-        td.save(update_fields=["travel_type"])
-        sess.step = "travel_type"
-        sess.save(update_fields=["step"])
-        send_next_prompt(reg)
-        
-    elif section == "arrival":
-        # Reset all arrival-related fields
-        td.arrival_date = None
-        td.arrival_time = None
-        td.airline = ""
-        td.flight_number = ""
-        td.pnr = ""
-        td.arrival_details = ""
-        td.save(update_fields=["arrival_date", "arrival_time", "airline", "flight_number", "pnr", "arrival_details"])
-        
-        # Clear arrival state flags
-        sess.state = sess.state or {}
-        sess.state.pop("pnr_done", None)
-        sess.state.pop("arrival_details_done", None)
-        sess.step = "arrival_date"
-        sess.save(update_fields=["step", "state"])
-        send_next_prompt(reg)
-        
-    elif section == "hotel":
-        # Reset hotel times
-        td.hotel_arrival_time = None
-        td.hotel_departure_time = None
-        td.save(update_fields=["hotel_arrival_time", "hotel_departure_time"])
-        
-        sess.state = sess.state or {}
-        sess.state.pop("hat_skip", None)
-        sess.state.pop("hdt_skip", None)
-        sess.step = "hotel_arrival_time"
-        sess.save(update_fields=["step", "state"])
-        send_next_prompt(reg)
-        
-    elif section == "departure":
-        # Reset return travel question and all departure fields
-        td.return_travel = False
-        td.departure_date = None
-        td.departure_time = None
-        td.departure_airline = ""
-        td.departure_flight_number = ""
-        td.departure_pnr = ""
-        td.departure_details = ""
-        td.save(update_fields=[
-            "return_travel", "departure_date", "departure_time",
-            "departure_airline", "departure_flight_number", "departure_pnr", "departure_details"
-        ])
-        
-        sess.state = sess.state or {}
-        sess.state.pop("return_travel_done", None)
-        sess.state.pop("departure_airline_done", None)
-        sess.state.pop("departure_flight_number_done", None)
-        sess.state.pop("departure_pnr_done", None)
-        sess.state.pop("departure_details_done", None)
-        sess.step = "return_travel"
-        sess.save(update_fields=["step", "state"])
-        send_next_prompt(reg)
-        
-    else:
-        logger.error(f"[SECTION-UPDATE] Unknown section: {section}")
-        send_freeform_text(
-            reg.guest.phone,
-            "Sorry, I couldn't understand which section to update. Please try again."
-        )
+    # NOTE: We no longer support partial updates (travel_type, arrival, etc.)
+    # If we ever need them back, we can restore the logic here.
+    # For now, any other section value is unexpected in this new flow.
+    logger.warning(f"[SECTION-UPDATE] Unexpected section update requested: {section}")
