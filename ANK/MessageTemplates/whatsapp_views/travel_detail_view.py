@@ -226,15 +226,100 @@ def whatsapp_travel_webhook(request):
                             logger.exception(f"[UPDATE-TRAVEL-ERR] Failed for {reg.id}: {exc}")
                     
                     elif action == "rsvp":
-                        # Send message directing to RSVP update (or trigger RSVP flow if available)
+                        # Send RSVP status buttons
+                        try:
+                            event_name = reg.event.name if reg.event else "the event"
+                            send_choice_buttons(
+                                reg.guest.phone,
+                                f"Will you be attending {event_name}? 🎉",
+                                [
+                                    {"id": f"rsvp|yes|{reg.id}", "title": "✅ Yes"},
+                                    {"id": f"rsvp|no|{reg.id}", "title": "❌ No"},
+                                    {"id": f"rsvp|maybe|{reg.id}", "title": "🤔 Maybe"},
+                                ]
+                            )
+                            logger.warning(f"[UPDATE-RSVP] Sent RSVP status buttons to {reg.id}")
+                        except Exception as exc:
+                            logger.exception(f"[UPDATE-RSVP-ERR] Failed for {reg.id}: {exc}")
+                    
+                    return JsonResponse({"ok": True}, status=200)
+                
+                # Handle "rsvp" buttons (e.g., "rsvp|yes|uuid", "rsvp|no|uuid", "rsvp|maybe|uuid")
+                if len(parts) == 3 and parts[0] == "rsvp":
+                    status = parts[1]  # "yes", "no", "maybe"
+                    reg_id_from_btn = parts[2]
+                    
+                    if status not in ["yes", "no", "maybe"]:
+                        logger.error(f"[RSVP-BUTTON] Invalid status: {status}")
+                        return JsonResponse({"ok": True}, status=200)
+                    
+                    logger.warning(f"[RSVP-BUTTON] status={status!r} reg={reg.id}")
+                    
+                    # Call existing RSVP webhook to trigger WebSocket broadcasts
+                    import requests
+                    import os
+                    from django.utils import timezone
+                    
+                    try:
+                        # Call the RSVP webhook
+                        webhook_url = request.build_absolute_uri("/api/webhooks/whatsapp-rsvp/")
+                        response = requests.post(
+                            webhook_url,
+                            json={
+                                "rsvp_status": status,
+                                "event_registration_id": str(reg.id),
+                                "responded_on": timezone.now().isoformat()
+                            },
+                            headers={"X-Webhook-Token": os.getenv("DJANGO_RSVP_SECRET", "")},
+                            timeout=5
+                        )
+                        
+                        if response.status_code == 200:
+                            logger.warning(f"[RSVP-BUTTON] Successfully updated RSVP to {status} for {reg.id}")
+                        else:
+                            logger.error(f"[RSVP-BUTTON] Webhook returned {response.status_code}")
+                    except Exception as exc:
+                        logger.exception(f"[RSVP-BUTTON] Failed to call webhook: {exc}")
+                    
+                    # Send appropriate response based on status
+                    if status == "yes":
+                        # Ask for guest count
                         try:
                             send_freeform_text(
                                 reg.guest.phone,
-                                "To update your RSVP, please visit your event dashboard or contact our support team. 📞"
+                                "Great! How many people will be attending (including you)? 👥\n\n"
+                                "Please reply with a number (e.g., 2, 3, 4)"
                             )
-                            logger.warning(f"[UPDATE-RSVP] Sent RSVP update instructions to {reg.id}")
+                            # Set flag to expect guest count
+                            sess = reg.travel_capture
+                            sess.state = sess.state or {}
+                            sess.state["awaiting_guest_count"] = True
+                            sess.save(update_fields=["state"])
                         except Exception as exc:
-                            logger.exception(f"[UPDATE-RSVP-ERR] Failed for {reg.id}: {exc}")
+                            logger.exception(f"[RSVP-BUTTON] Failed to send guest count prompt: {exc}")
+                    
+                    elif status == "no":
+                        # Send decline confirmation
+                        try:
+                            send_freeform_text(
+                                reg.guest.phone,
+                                "Thank you for letting us know.\n\n"
+                                "Your RSVP has been updated to: Not Attending ❌\n\n"
+                                "We hope to see you at future events!"
+                            )
+                        except Exception as exc:
+                            logger.exception(f"[RSVP-BUTTON] Failed to send decline confirmation: {exc}")
+                    
+                    elif status == "maybe":
+                        # Send maybe confirmation
+                        try:
+                            send_freeform_text(
+                                reg.guest.phone,
+                                "No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
+                                "Please let us know when you decide!"
+                            )
+                        except Exception as exc:
+                            logger.exception(f"[RSVP-BUTTON] Failed to send maybe confirmation: {exc}")
                     
                     return JsonResponse({"ok": True}, status=200)
                 
@@ -272,6 +357,50 @@ def whatsapp_travel_webhook(request):
         if not text:
             logger.warning(f"[TEXT] Empty text for reg={reg.id}")
             return JsonResponse({"ok": True}, status=200)
+
+        # Check if we're awaiting guest count for RSVP
+        try:
+            sess = reg.travel_capture
+            if sess.state and sess.state.get("awaiting_guest_count"):
+                logger.warning(f"[RSVP-GUEST-COUNT] Processing guest count for {reg.id}: '{text}'")
+                
+                # Parse guest count
+                try:
+                    count = int(text)
+                    if count < 1 or count > 50:
+                        raise ValueError("Out of range")
+                    
+                    # Update registration
+                    reg.estimated_pax = count
+                    reg.save(update_fields=["estimated_pax"])
+                    
+                    # Clear flag
+                    sess.state.pop("awaiting_guest_count", None)
+                    sess.save(update_fields=["state"])
+                    
+                    # Send confirmation
+                    event_name = reg.event.name if reg.event else "the event"
+                    send_freeform_text(
+                        reg.guest.phone,
+                        f"✅ Perfect! Your RSVP has been updated:\n"
+                        f"• Event: {event_name}\n"
+                        f"• Status: Confirmed\n"
+                        f"• Total Guests: {count}\n\n"
+                        "We're looking forward to seeing you! 🎉"
+                    )
+                    logger.warning(f"[RSVP-GUEST-COUNT] Successfully updated guest count to {count} for {reg.id}")
+                    return JsonResponse({"ok": True}, status=200)
+                    
+                except ValueError:
+                    # Invalid number
+                    send_freeform_text(
+                        reg.guest.phone,
+                        "Please reply with a valid number of guests between 1 and 50 (e.g., 2, 3, 4)"
+                    )
+                    logger.warning(f"[RSVP-GUEST-COUNT] Invalid count '{text}' for {reg.id}")
+                    return JsonResponse({"ok": True}, status=200)
+        except Exception as exc:
+            logger.exception(f"[RSVP-GUEST-COUNT-ERR] Error processing guest count: {exc}")
 
         try:
             reply_text, done = handle_inbound_answer(reg, text)
