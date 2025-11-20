@@ -283,47 +283,11 @@ def whatsapp_travel_webhook(request):
                 start_capture_after_opt_in(reg, restart=True)
                 return JsonResponse({"ok": True}, status=200)
 
+
             sess = reg.travel_capture
-            if sess.state and sess.state.get("awaiting_guest_count"):
-                logger.warning(f"[RSVP-GUEST-COUNT] Processing guest count for {reg.id}: '{text}'")
-                
-                # Parse guest count
-                try:
-                    count = int(text)
-                    if count < 1 or count > 50:
-                        raise ValueError("Out of range")
-                    
-                    # Update registration
-                    reg.estimated_pax = count
-                    reg.save(update_fields=["estimated_pax"])
-                    
-                    # Clear flag
-                    sess.state.pop("awaiting_guest_count", None)
-                    sess.save(update_fields=["state"])
-                    
-                    # Send confirmation
-                    event_name = reg.event.name if reg.event else "the event"
-                    send_freeform_text(
-                        reg.guest.phone,
-                        f"✅ Perfect! Your RSVP has been updated:\n"
-                        f"• Event: {event_name}\n"
-                        f"• Status: Confirmed\n"
-                        f"• Total Guests: {count}\n\n"
-                        "We're looking forward to seeing you! 🎉"
-                    )
-                    logger.warning(f"[RSVP-GUEST-COUNT] Successfully updated guest count to {count} for {reg.id}")
-                    return JsonResponse({"ok": True}, status=200)
-                    
-                except ValueError:
-                    # Invalid number
-                    send_freeform_text(
-                        reg.guest.phone,
-                        "Please reply with a valid number of guests between 1 and 50 (e.g., 2, 3, 4)"
-                    )
-                    logger.warning(f"[RSVP-GUEST-COUNT] Invalid count '{text}' for {reg.id}")
-                    return JsonResponse({"ok": True}, status=200)
         except Exception as exc:
-            logger.exception(f"[RSVP-GUEST-COUNT-ERR] Error processing guest count: {exc}")
+            logger.exception(f"[TEXT-ERR] Error accessing session: {exc}")
+
 
         # If session is complete (and it wasn't a command), send instructions
         if sess.is_complete:
