@@ -32,15 +32,32 @@ logger = logging.getLogger("whatsapp")
 
 # ---------- parsing helpers ----------
 
-_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
-_time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
+_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\s*$")
+_date_compact_rx = re.compile(r"^\s*(\d{2})(\d{2})(\d{2})\s*$")  # ddmmyy
+_time_rx = re.compile(r"^\s*(\d{1,2})[:.]?(\d{2})\s*(am|pm)?\s*$", re.I)
 
 
 def _parse_date(s: str):
-    m = _date_rx.match(s or "")
-    if not m:
+    s = (s or "").strip()
+    if not s:
         return None
-    d, mo, y = map(int, m.groups())
+        
+    # Try ddmmyy first
+    m = _date_compact_rx.match(s)
+    if m:
+        d, mo, y = map(int, m.groups())
+        # Assume 20xx for 2-digit year
+        y += 2000
+    else:
+        # Try standard formats
+        m = _date_rx.match(s)
+        if not m:
+            return None
+        d, mo, y = map(int, m.groups())
+        # Handle 2-digit year
+        if y < 100:
+            y += 2000
+
     try:
         return datetime(y, mo, d).date()
     except ValueError:
@@ -163,6 +180,33 @@ def _validate_optional_text(v: str, field_name: str) -> tuple[Optional[str], Opt
     return s, None
 
 
+def _validate_future_date(s: str) -> tuple[Optional[datetime.date], Optional[str]]:
+    """
+    Parses date and ensures it is in the future (tomorrow onwards).
+    Returns (date_obj, error_message).
+    """
+    dt = _parse_date(s)
+    if not dt:
+        return None, (
+            f"I couldn't understand '{s}' as a valid date. 📅\n\n"
+            "Please reply with the date in *DD-MM-YYYY* or *DDMMYY* format.\n\n"
+            "Examples:\n"
+            "• 03-10-2025\n"
+            "• 251225\n"
+            "• 01/01/26"
+        )
+    
+    # Check if date is in the past or today
+    today = dj_tz.now().date()
+    if dt <= today:
+        return None, (
+            f"The date {dt.strftime('%d-%m-%Y')} is in the past or today. 📅\n\n"
+            "Please enter a future date for your travel."
+        )
+        
+    return dt, None
+
+
 # ---------- constants ----------
 
 ARRIVAL_CHOICES = {
@@ -184,18 +228,18 @@ OPTIONAL_STEPS = {
 PROMPTS = {
     "travel_type": "How will you be traveling to the event? ✈️🚆🚗",
     "arrival": "Great! How will you be arriving at the venue?",
-    "arrival_date": "📅 ➡️ ARRIVAL: What's your *Arrival Date*? Please reply in DD-MM-YYYY format (e.g., 03-10-2025).",
-    "arrival_time": "🕒 🛬 What time will you be arriving? (e.g., 14:30 or 2:30pm)",
+    "arrival_date": "📅 ➡️ ARRIVAL: What's your *Arrival Date*? (e.g., 25-12-2025 or 251225)",
+    "arrival_time": "🕒 🛬 What time will you be arriving? (e.g., 14:30, 1430 or 2:30pm)",
     "airline": "Which *Airline* are you flying with? ✈️",
     "flight_number": "Could you share the *Flight Number*?",
     "pnr": "Do you have the *PNR* handy? (Reply 'skip' if you don't have it right now)",
     "arrival_details": "📝 ➡️ Any other arrival details we should know? (e.g., pickup location, special requirements)",
-    "hotel_arrival_time": "🏨 ⬇️ CHECK-IN: What time do you expect to *arrive at the hotel*? (e.g., 15:00 or 3pm)",
-    "hotel_departure_time": "🏨 ⬆️ CHECK-OUT: What time will you be *leaving the hotel*? (e.g., 11:00 or 11am)",
+    "hotel_arrival_time": "🏨 ⬇️ CHECK-IN: What time do you expect to *arrive at the hotel*? (e.g., 15:00, 3pm or 1500)",
+    "hotel_departure_time": "🏨 ⬆️ CHECK-OUT: What time will you be *leaving the hotel*? (e.g., 11:00, 11am or 1100)",
     "return_travel": "Do you have a return journey planned? 🔙",
     "departure": "How will you be departing?",
-    "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (DD-MM-YYYY format)",
-    "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30 or 6:30pm)",
+    "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (e.g., 25-12-2025 or 251225)",
+    "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30, 1830 or 6:30pm)",
     "departure_details": "📝 ⬅️ Any departure details we should know? (e.g., drop-off location, notes)",
     "done": "Perfect! We've saved your travel details. ✅\n\nIf you need to update anything:\n• Reply *rsvp* to change your RSVP status\n• Reply *travel* to update travel details\n\nSafe travels! 🌟",
 }
@@ -942,17 +986,9 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
         # --- Pure free-text / date / time steps ---
         elif step == "arrival_date":
-            dt = _parse_date(t)
-            if not dt:
-                return (
-                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
-                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
-                    "Examples:\n"
-                    "• 03-10-2025\n"
-                    "• 15/12/2025\n"
-                    "• 01-01-2026",
-                    False
-                )
+            dt, error = _validate_future_date(t)
+            if error:
+                return (error, False)
             td.arrival_date = dt
             td.save(update_fields=["arrival_date"])
 
@@ -963,8 +999,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                     f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
                     "Please reply with the time in one of these formats:\n\n"
                     "Examples:\n"
-                    "• 14:30 (24-hour format)\n"
-                    "• 2:30pm (12-hour format)\n"
+                    "• 14:30 or 1430 (24-hour)\n"
+                    "• 2:30pm (12-hour)\n"
                     "• 09:15am",
                     False
                 )
@@ -1013,7 +1049,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
                         "Please reply with the time format:\n\n"
                         "Examples:\n"
-                        "• 13:45 (24-hour)\n"
+                        "• 13:45 or 1345 (24-hour)\n"
                         "• 1:45pm (12-hour)\n\n"
                         "Or reply *skip* if you don't have this info yet.",
                         False
@@ -1036,7 +1072,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
                         "Please reply with the time format:\n\n"
                         "Examples:\n"
-                        "• 10:00 (24-hour)\n"
+                        "• 10:00 or 1000 (24-hour)\n"
                         "• 10:00am (12-hour)\n\n"
                         "Or reply *skip* if you don't have this info yet.",
                         False
@@ -1047,17 +1083,9 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.save(update_fields=["hotel_departure_time"])
 
         elif step == "departure_date":
-            dt = _parse_date(t)
-            if not dt:
-                return (
-                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
-                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
-                    "Examples:\n"
-                    "• 05-10-2025\n"
-                    "• 20/12/2025\n"
-                    "• 03-01-2026",
-                    False
-                )
+            dt, error = _validate_future_date(t)
+            if error:
+                return (error, False)
             td.departure_date = dt
             td.save(update_fields=["departure_date"])
 
@@ -1068,8 +1096,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                     f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
                     "Please reply with the time in one of these formats:\n\n"
                     "Examples:\n"
-                    "• 18:20 (24-hour format)\n"
-                    "• 6:20pm (12-hour format)\n"
+                    "• 18:20 or 1820 (24-hour)\n"
+                    "• 6:20pm (12-hour)\n"
                     "• 11:30am",
                     False
                 )
