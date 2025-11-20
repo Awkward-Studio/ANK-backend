@@ -210,8 +210,13 @@ def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False)
 def resume_or_start(reg: EventRegistration) -> None:
     """Resume from saved step or start at 'travel_type' and send the appropriate next prompt."""
     sess = _get_or_create_session(reg)
-    if not sess.step or sess.step in {"opt_in", ""}:
+    
+    # If previously completed, restart from scratch
+    if sess.is_complete:
+        start_capture_after_opt_in(reg, restart=True)
+    elif not sess.step or sess.step in {"opt_in", ""}:
         start_capture_after_opt_in(reg, restart=False)
+        
     send_next_prompt(reg)
 
 
