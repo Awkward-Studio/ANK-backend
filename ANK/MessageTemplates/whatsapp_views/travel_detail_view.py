@@ -93,6 +93,58 @@ def _resolve_travel_reg(wa_id: str, event_id: str):
         return None
 
 
+def _determine_user_state(reg: EventRegistration, sess=None):
+    """
+    Determine user's current state in the RSVP → Travel flow.
+    
+    Returns tuple: (state_name, should_process_message)
+    States:
+    - 'rsvp_complete_no_travel': RSVP done, no travel session
+    - 'travel_in_progress': Travel session exists and incomplete
+    - 'all_complete': Both RSVP and travel complete
+    - 'rsvp_pending': RSVP not yet complete
+    """
+    rsvp_done = reg.rsvp_status in ['Yes', 'No', 'Maybe']
+    
+    if not sess:
+        if rsvp_done:
+            return ('rsvp_complete_no_travel', False)
+        else:
+            return ('rsvp_pending', False)
+    
+    if sess.is_complete:
+        if rsvp_done:
+            return ('all_complete', False)
+        else:
+            return ('travel_complete_no_rsvp', False)
+    else:
+        return ('travel_in_progress', True)
+
+
+def _send_post_rsvp_options(reg: EventRegistration):
+    """Send options to user who completed RSVP but hasn't started travel."""
+    event_name = reg.event.name if reg.event else "the event"
+    
+    message = (
+        f"Thank you for confirming your RSVP for {event_name}! ✅\n\n"
+        "What would you like to do next?"
+    )
+    
+    buttons = [
+        {
+            "id": f"tc|start_travel|{reg.id}",
+            "title": "✈️ Provide Travel Details"
+        },
+        {
+            "id": f"tc|update_rsvp_menu|{reg.id}",
+            "title": "🔄 Update RSVP"
+        }
+    ]
+    
+    send_choice_buttons(reg.guest.phone, message, buttons)
+    logger.info(f"[POST-RSVP] Sent options to registration {reg.id}")
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
@@ -130,13 +182,44 @@ def whatsapp_travel_webhook(request):
         logger.error(f"[WEBHOOK] Invalid kind '{kind}'")
         return JsonResponse({"ok": False, "error": "invalid_kind"}, status=400)
 
-    # Ensure capture session exists
+    # Fetch capture session (don't auto-create)
+    sess = None
     try:
         sess = reg.travel_capture
     except TravelCaptureSession.DoesNotExist:
-        sess = TravelCaptureSession.objects.create(registration=reg)
+        pass  # Don't auto-create; handle below based on state
 
+    # Determine user state and decide if we should continue with normal flow
+    user_state, should_continue = _determine_user_state(reg, sess)
+    logger.warning(f"[STATE] Registration {reg.id} in state: {user_state}")
 
+    # Handle states that don't continue with normal flow
+    if not should_continue:
+        if user_state == 'rsvp_complete_no_travel':
+            # User completed RSVP but hasn't started travel capture
+            _send_post_rsvp_options(reg)
+            return JsonResponse({"ok": True}, status=200)
+        
+        elif user_state == 'all_complete':
+            # Both complete - send update instructions (current behavior)
+            event_name = f" for {reg.event.name}" if reg.event else ""
+            message = (
+                f"✅ Thank you! We've already received your details{event_name}.\n\n"
+                "If you need to update anything:\n"
+                "• Reply *rsvp* to change your RSVP status\n"
+                "• Reply *travel* to update travel details"
+            )
+            send_freeform_text(reg.guest.phone, message)
+            return JsonResponse({"ok": True}, status=200)
+        
+        elif user_state == 'rsvp_pending':
+            # RSVP not done - send fallback
+            fallback_msg = get_fallback_message("no_registration")
+            send_freeform_text(reg.guest.phone, fallback_msg)
+            return JsonResponse({"ok": True}, status=200)
+
+    # If we reach here, user_state is 'travel_in_progress' - continue normal flow
+    # Session exists and is incomplete, so proceed with travel capture
 
     # If outside 24h → send auto "resume" template request (RCS)
     if not within_24h_window(reg.responded_on):
@@ -221,8 +304,8 @@ def whatsapp_travel_webhook(request):
     if kind == "wake":
         logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
         try:
-            # If session is complete, send update instructions instead of generic resume
-            if sess.is_complete:
+            # If session exists and is complete, send update instructions
+            if sess and sess.is_complete:
                 logger.warning(f"[WAKE] Registration={reg.id} session complete; sending instructions")
                 event_name = f" for {reg.event.name}" if reg.event else ""
                 message = (
@@ -234,7 +317,12 @@ def whatsapp_travel_webhook(request):
                 send_freeform_text(reg.guest.phone, message)
                 return JsonResponse({"ok": True}, status=200)
 
-            resume_or_start(reg)
+            # If session exists but incomplete, resume
+            if sess:
+                resume_or_start(reg)
+            else:
+                # No session - send post-RSVP options
+                _send_post_rsvp_options(reg)
         except Exception as exc:
             logger.exception(f"[WAKE-ERR] Failed resume for {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
@@ -277,17 +365,20 @@ def whatsapp_travel_webhook(request):
                 )
                 return JsonResponse({"ok": True}, status=200)
             
-            # "travel" - triggers Travel flow restart
+            # \"travel\" - triggers Travel flow restart
             if "travel" in text_lower:
                 logger.warning(f"[TEXT-TRIGGER] User triggered Travel update: '{text}'")
                 start_capture_after_opt_in(reg, restart=True)
                 return JsonResponse({"ok": True}, status=200)
 
-
-            sess = reg.travel_capture
         except Exception as exc:
-            logger.exception(f"[TEXT-ERR] Error accessing session: {exc}")
+            logger.exception(f"[TEXT-ERR] Error processing commands: {exc}")
 
+        # If no session exists and not a command, send post-RSVP options
+        if not sess:
+            logger.warning(f"[TEXT] No session for reg={reg.id}, sending post-RSVP options")
+            _send_post_rsvp_options(reg)
+            return JsonResponse({"ok": True}, status=200)
 
         # If session is complete (and it wasn't a command), send instructions
         if sess.is_complete:
@@ -305,6 +396,7 @@ def whatsapp_travel_webhook(request):
                 logger.exception(f"[TEXT-ERR] Failed sending instructions: {exc}")
             return JsonResponse({"ok": True}, status=200)
 
+        # Process text as travel answer only if session exists and incomplete
         try:
             reply_text, done = handle_inbound_answer(reg, text)
         except Exception as exc:

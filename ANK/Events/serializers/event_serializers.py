@@ -64,6 +64,24 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["initiated_on"]
 
+    def validate_rsvp_status(self, value):
+        """
+        Normalize rsvp_status to lowercase for case-insensitive validation.
+        Accepts: "Pending", "pending", "Yes", "yes", etc.
+        """
+        if value:
+            # Normalize to lowercase
+            normalized = value.lower()
+            # Check if it's a valid choice
+            valid_choices = ["yes", "no", "maybe", "pending"]
+            if normalized not in valid_choices:
+                raise serializers.ValidationError(
+                    f"Invalid rsvp_status. Must be one of: {', '.join(valid_choices)}"
+                )
+            return normalized
+        return value
+
+
 
 class ExtraAttendeeSerializer(serializers.ModelSerializer):
     class Meta:

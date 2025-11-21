@@ -706,6 +706,22 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             start_capture_after_opt_in(reg, restart=True)
             return
 
+        elif step == "update_rsvp_menu":
+            # User wants to update RSVP - show RSVP buttons
+            logger.warning(f"[BUTTON] User {reg.id} wants to update RSVP")
+            from MessageTemplates.services.whatsapp import send_choice_buttons
+            event_name = reg.event.name if reg.event else "the event"
+            send_choice_buttons(
+                reg.guest.phone,
+                f"Will you be attending {event_name}? 🎉",
+                [
+                    {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
+                    {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
+                    {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
+                ]
+            )
+            return
+
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
