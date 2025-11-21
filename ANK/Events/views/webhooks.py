@@ -171,8 +171,22 @@ def whatsapp_rsvp(request):
     except Exception:
         return HttpResponseBadRequest("invalid json")
 
-    rsvp = (body.get("rsvp_status") or "").strip().lower()
-    if rsvp not in {"yes", "no", "maybe"}:
+    # Get the incoming status (lowercase from Next.js)
+    raw_status = (body.get("rsvp_status") or "").strip().lower()
+    
+    # ✅ Normalize to title case
+    status_map = {
+        'yes': 'Yes',
+        'no': 'No',
+        'maybe': 'Maybe',
+        'pending': 'Pending',
+        'not_sent': 'Not_Sent'
+    }
+    
+    normalized_status = status_map.get(raw_status)
+    
+    if not normalized_status or raw_status not in {"yes", "no", "maybe"}:
+        log.warning(f"Unknown RSVP status received: {raw_status}")
         return HttpResponseBadRequest("invalid rsvp_status")
 
     responded_on = None
@@ -234,12 +248,12 @@ def whatsapp_rsvp(request):
         if not er:
             return HttpResponseBadRequest("no mapping found for wa_id")
 
-    # Update RSVP
-    er.rsvp_status = rsvp
+    # Update RSVP with normalized status (title case)
+    er.rsvp_status = normalized_status  # "Maybe" instead of "maybe"
     er.responded_on = responded_on
     er.save(update_fields=["rsvp_status", "responded_on"])
 
-    log.info(f"Updated RSVP status to '{rsvp}' for registration {er.id}")
+    log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 
     from channels.layers import get_channel_layer
     from asgiref.sync import async_to_sync
