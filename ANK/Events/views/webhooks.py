@@ -124,8 +124,48 @@ def track_send(request):
         log.exception("track_send failed")
         return HttpResponseBadRequest(f"track_send error: {e}")
 
-    return JsonResponse({"ok": True, "map_id": str(obj.id)})
+    # Update EventRegistration status to "pending" if not yet responded
+    try:
+        if er.rsvp_status == "pending":
+            # Only update initiated_on if not already set
+            if not er.initiated_on:
+                er.initiated_on = dj_tz.now()
+                er.save(update_fields=["initiated_on"])
+                log.info(
+                    f"Updated registration {er.id}: set initiated_on for event {er.event_id}"
+                )
+            
+            # Optional: Send WebSocket notification for real-time updates
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
 
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"event_{er.event_id}",
+                        {
+                            "type": "rsvp_update",
+                            "data": {
+                                "type": "rsvp_sent",
+                                "action": "updated",
+                                "registration": {
+                                    "id": str(er.id),
+                                    "event": str(er.event_id),
+                                    "rsvp_status": er.rsvp_status,
+                                    "initiated_on": er.initiated_on.isoformat() if er.initiated_on else None,
+                                },
+                            },
+                        },
+                    )
+            except Exception as ws_err:
+                log.warning(f"WebSocket notification failed: {ws_err}")
+    except Exception as update_err:
+        # Log error but don't fail the request
+        log.error(f"Failed to update RSVP status for registration {er.id}: {update_err}")
+
+    return JsonResponse({"ok": True, "map_id": str(obj.id)})
+# 
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -148,8 +188,22 @@ def whatsapp_rsvp(request):
     except Exception:
         return HttpResponseBadRequest("invalid json")
 
-    rsvp = (body.get("rsvp_status") or "").strip().lower()
-    if rsvp not in {"yes", "no", "maybe"}:
+    # Get the incoming status (lowercase from Next.js)
+    raw_status = (body.get("rsvp_status") or "").strip().lower()
+    
+    # ✅ Normalize to title case
+    status_map = {
+        'yes': 'Yes',
+        'no': 'No',
+        'maybe': 'Maybe',
+        'pending': 'Pending',
+        'not_sent': 'Not_Sent'
+    }
+    
+    normalized_status = status_map.get(raw_status)
+    
+    if not normalized_status or raw_status not in {"yes", "no", "maybe"}:
+        log.warning(f"Unknown RSVP status received: {raw_status}")
         return HttpResponseBadRequest("invalid rsvp_status")
 
     responded_on = None
@@ -212,10 +266,12 @@ def whatsapp_rsvp(request):
         if not er:
             return HttpResponseBadRequest("no mapping found for wa_id")
 
-    # Update RSVP
-    er.rsvp_status = rsvp
+    # Update RSVP with normalized status (title case)
+    er.rsvp_status = normalized_status  # "Maybe" instead of "maybe"
     er.responded_on = responded_on
     er.save(update_fields=["rsvp_status", "responded_on"])
+
+    log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 
     from channels.layers import get_channel_layer
     from asgiref.sync import async_to_sync
@@ -241,6 +297,55 @@ def whatsapp_rsvp(request):
             },
         },
     )
+
+    # Send immediate WhatsApp confirmation with next steps
+    try:
+        from MessageTemplates.services.whatsapp import send_choice_buttons, send_freeform_text
+        
+        event_name = er.event.name if er.event else "the event"
+        
+        if normalized_status == "Yes":
+            # For "Yes" - send confirmation with travel details option
+            message = (
+                f"✅ Perfect! Your RSVP has been confirmed for {event_name}.\n\n"
+                "We're looking forward to seeing you! 🎉\n\n"
+                "What would you like to do next?"
+            )
+            buttons = [
+                {
+                    "id": f"tc|start_travel|{er.id}",
+                    "title": "✈️ Provide Travel Details"
+                },
+                {
+                    "id": f"tc|update_rsvp_menu|{er.id}",
+                    "title": "🔄 Update RSVP"
+                }
+            ]
+            send_choice_buttons(er.guest.phone, message, buttons)
+            log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
+            
+        elif normalized_status == "No":
+            # For "No" - simple confirmation
+            message = (
+                f"Thank you for letting us know.\n\n"
+                f"Your RSVP has been updated to: Not Attending ❌\n\n"
+                "We hope to see you at future events!"
+            )
+            send_freeform_text(er.guest.phone, message)
+            log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
+            
+        elif normalized_status == "Maybe":
+            # For "Maybe" - simple confirmation
+            message = (
+                f"No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
+                "Please let us know when you decide!"
+            )
+            send_freeform_text(er.guest.phone, message)
+            log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
+            
+    except Exception as msg_err:
+        log.exception(f"[RSVP] Failed to send confirmation message: {msg_err}")
+        # Don't fail the request if message sending fails
 
     # Mark WaSendMap consumed (non-fatal if it fails)
     try:

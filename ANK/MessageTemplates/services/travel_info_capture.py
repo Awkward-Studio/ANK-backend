@@ -32,15 +32,32 @@ logger = logging.getLogger("whatsapp")
 
 # ---------- parsing helpers ----------
 
-_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$")
-_time_rx = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
+_date_rx = re.compile(r"^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\s*$")
+_date_compact_rx = re.compile(r"^\s*(\d{2})(\d{2})(\d{2})\s*$")  # ddmmyy
+_time_rx = re.compile(r"^\s*(\d{1,2})[:.]?(\d{2})\s*(am|pm)?\s*$", re.I)
 
 
 def _parse_date(s: str):
-    m = _date_rx.match(s or "")
-    if not m:
+    s = (s or "").strip()
+    if not s:
         return None
-    d, mo, y = map(int, m.groups())
+        
+    # Try ddmmyy first
+    m = _date_compact_rx.match(s)
+    if m:
+        d, mo, y = map(int, m.groups())
+        # Assume 20xx for 2-digit year
+        y += 2000
+    else:
+        # Try standard formats
+        m = _date_rx.match(s)
+        if not m:
+            return None
+        d, mo, y = map(int, m.groups())
+        # Handle 2-digit year
+        if y < 100:
+            y += 2000
+
     try:
         return datetime(y, mo, d).date()
     except ValueError:
@@ -163,6 +180,33 @@ def _validate_optional_text(v: str, field_name: str) -> tuple[Optional[str], Opt
     return s, None
 
 
+def _validate_future_date(s: str) -> tuple[Optional[datetime.date], Optional[str]]:
+    """
+    Parses date and ensures it is in the future (tomorrow onwards).
+    Returns (date_obj, error_message).
+    """
+    dt = _parse_date(s)
+    if not dt:
+        return None, (
+            f"I couldn't understand '{s}' as a valid date. 📅\n\n"
+            "Please reply with the date in *DD-MM-YYYY* or *DDMMYY* format.\n\n"
+            "Examples:\n"
+            "• 03-10-2025\n"
+            "• 251225\n"
+            "• 01/01/26"
+        )
+    
+    # Check if date is in the past or today
+    today = dj_tz.now().date()
+    if dt <= today:
+        return None, (
+            f"The date {dt.strftime('%d-%m-%Y')} is in the past or today. 📅\n\n"
+            "Please enter a future date for your travel."
+        )
+        
+    return dt, None
+
+
 # ---------- constants ----------
 
 ARRIVAL_CHOICES = {
@@ -184,20 +228,20 @@ OPTIONAL_STEPS = {
 PROMPTS = {
     "travel_type": "How will you be traveling to the event? ✈️🚆🚗",
     "arrival": "Great! How will you be arriving at the venue?",
-    "arrival_date": "📅 ➡️ ARRIVAL: What's your *Arrival Date*? Please reply in DD-MM-YYYY format (e.g., 03-10-2025).",
-    "arrival_time": "🕒 🛬 What time will you be arriving? (e.g., 14:30 or 2:30pm)",
+    "arrival_date": "📅 ➡️ ARRIVAL: What's your *Arrival Date*? (e.g., 25-12-2025 or 251225)",
+    "arrival_time": "🕒 🛬 What time will you be arriving? (e.g., 14:30, 1430 or 2:30pm)",
     "airline": "Which *Airline* are you flying with? ✈️",
     "flight_number": "Could you share the *Flight Number*?",
     "pnr": "Do you have the *PNR* handy? (Reply 'skip' if you don't have it right now)",
     "arrival_details": "📝 ➡️ Any other arrival details we should know? (e.g., pickup location, special requirements)",
-    "hotel_arrival_time": "🏨 ⬇️ CHECK-IN: What time do you expect to *arrive at the hotel*? (e.g., 15:00 or 3pm)",
-    "hotel_departure_time": "🏨 ⬆️ CHECK-OUT: What time will you be *leaving the hotel*? (e.g., 11:00 or 11am)",
+    "hotel_arrival_time": "🏨 ⬇️ CHECK-IN: What time do you expect to *arrive at the hotel*? (e.g., 15:00, 3pm or 1500)",
+    "hotel_departure_time": "🏨 ⬆️ CHECK-OUT: What time will you be *leaving the hotel*? (e.g., 11:00, 11am or 1100)",
     "return_travel": "Do you have a return journey planned? 🔙",
     "departure": "How will you be departing?",
-    "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (DD-MM-YYYY format)",
-    "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30 or 6:30pm)",
+    "departure_date": "📅 ⬅️ RETURN: What's your *Departure Date*? (e.g., 25-12-2025 or 251225)",
+    "departure_time": "🕒 🛫 What time is your departure? (e.g., 18:30, 1830 or 6:30pm)",
     "departure_details": "📝 ⬅️ Any departure details we should know? (e.g., drop-off location, notes)",
-    "done": "Perfect! We've saved your travel details. ✅\n\nIf anything changes, just reply here to update us. Safe travels! 🌟",
+    "done": "Perfect! We've saved your travel details. ✅\n\nIf you need to update anything:\n• Reply *rsvp* to change your RSVP status\n• Reply *travel* to update travel details\n\nSafe travels! 🌟",
 }
 
 
@@ -372,10 +416,16 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
 def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False) -> str:
     """
     Called when guest opts in / flow explicitly started.
-    If restart=True, we reset the session to the beginning.
+    If restart=True and there's existing data, show summary + update menu.
+    Otherwise, start/resume the flow normally.
     """
     sess = _get_or_create_session(reg)
-    _get_or_create_detail(reg)
+    td = _get_or_create_detail(reg)
+
+    # If restarting with existing data, show summary menu instead
+    if restart and (td.travel_type or td.arrival_date):
+        send_travel_update_menu(reg)
+        return sess.step or "travel_type"
 
     if restart or sess.is_complete:
         sess.step = "travel_type"
@@ -634,6 +684,44 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 td.save(update_fields=["departure_details"])
             sess.save(update_fields=["state"])
 
+        elif step == "update_pax":
+            # Prompt user to enter guest count
+            sess.step = "awaiting_pax_count"
+            sess.state = sess.state or {}
+            sess.save(update_fields=["step", "state"])
+            
+            try:
+                send_freeform_text(
+                    reg.guest.phone,
+                    "👥 How many people will be attending (including yourself)?\n\n"
+                    "Please reply with a number."
+                )
+                logger.info(f"Sent pax count prompt to {reg.guest.phone}")
+            except Exception as e:
+                logger.exception(f"Failed to send pax count prompt: {e}")
+            return
+        
+        elif step == "start_travel":
+            # Explicitly start the travel capture flow from the beginning
+            start_capture_after_opt_in(reg, restart=True)
+            return
+
+        elif step == "update_rsvp_menu":
+            # User wants to update RSVP - show RSVP buttons
+            logger.warning(f"[BUTTON] User {reg.id} wants to update RSVP")
+            from MessageTemplates.services.whatsapp import send_choice_buttons
+            event_name = reg.event.name if reg.event else "the event"
+            send_choice_buttons(
+                reg.guest.phone,
+                f"Will you be attending {event_name}? 🎉",
+                [
+                    {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
+                    {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
+                    {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
+                ]
+            )
+            return
+
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
@@ -698,23 +786,54 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             except ValueError:
                 pass
 
-        elif step == "update_travel":
-            # Restart flow
-            start_capture_after_opt_in(reg, restart=True)
+
+
+        elif step == "restart_flow":
+            # User clicked "Edit Details" - Wipe everything and start fresh
+            td.travel_type = ""
+            td.arrival = None
+            td.arrival_date = None
+            td.arrival_time = None
+            td.airline = ""
+            td.flight_number = ""
+            td.pnr = ""
+            td.arrival_details = ""
+            td.hotel_arrival_time = None
+            td.hotel_departure_time = None
+            td.return_travel = False
+            td.departure_date = None
+            td.departure_time = None
+            td.departure_airline = ""
+            td.departure_flight_number = ""
+            td.departure_pnr = ""
+            td.departure_details = ""
+            
+            # Save all fields
+            td.save(update_fields=[
+                "travel_type", "arrival", "arrival_date", "arrival_time",
+                "airline", "flight_number", "pnr", "arrival_details",
+                "hotel_arrival_time", "hotel_departure_time",
+                "return_travel", "departure_date", "departure_time",
+                "departure_airline", "departure_flight_number",
+                "departure_pnr", "departure_details"
+            ])
+
+            # Reset session
+            sess.step = "travel_type"
+            sess.is_complete = False
+            sess.state = {}
+            sess.save(update_fields=["step", "is_complete", "state"])
+
+            # Start the flow
+            send_next_prompt(reg)
             return
 
-        elif step == "update_rsvp":
-            event_name = reg.event.name if reg.event else "the event"
-            send_choice_buttons(
-                reg.guest.phone,
-                f"Will you be attending {event_name}? 🎉",
-                [
-                    {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
-                    {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
-                    {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
-                ]
-            )
-            return
+        elif step == "update_section":
+            # Handle section-specific update requests from the travel summary menu
+            # raw_value contains the section name: travel_type, arrival, hotel, departure, done
+            start_section_update(reg, raw_value)
+            return  # start_section_update handles sending the next prompt
+
 
         elif step.startswith("rsvp_"):
             status = step.replace("rsvp_", "")
@@ -740,19 +859,24 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
 
                 # Send appropriate response based on status
                 if status == "yes":
-                    # Ask for guest count
+                    # Send confirmation with travel details button
                     try:
-                        send_freeform_text(
-                            reg.guest.phone,
-                            "Great! How many people will be attending (including you)? 👥\n\n"
-                            "Please reply with a number (e.g., 2, 3, 4)"
+                        event_name = reg.event.name if reg.event else "the event"
+                        msg_body = (
+                            f"✅ Perfect! Your RSVP has been updated:\n"
+                            f"• Event: {event_name}\n"
+                            f"• Status: Confirmed\n\n"
+                            "We're looking forward to seeing you! 🎉"
                         )
-                        # Set flag to expect guest count
-                        sess.state = sess.state or {}
-                        sess.state["awaiting_guest_count"] = True
-                        sess.save(update_fields=["state"])
+                        send_choice_buttons(
+                            reg.guest.phone,
+                            msg_body,
+                            [
+                                {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Provide Travel Details"}
+                            ]
+                        )
                     except Exception as exc:
-                        logger.exception(f"[RSVP-BUTTON] Failed to send guest count prompt: {exc}")
+                        logger.exception(f"[RSVP-BUTTON] Failed to send confirmation: {exc}")
                 
                 elif status == "no":
                     try:
@@ -878,17 +1002,9 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
         # --- Pure free-text / date / time steps ---
         elif step == "arrival_date":
-            dt = _parse_date(t)
-            if not dt:
-                return (
-                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
-                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
-                    "Examples:\n"
-                    "• 03-10-2025\n"
-                    "• 15/12/2025\n"
-                    "• 01-01-2026",
-                    False
-                )
+            dt, error = _validate_future_date(t)
+            if error:
+                return (error, False)
             td.arrival_date = dt
             td.save(update_fields=["arrival_date"])
 
@@ -899,8 +1015,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                     f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
                     "Please reply with the time in one of these formats:\n\n"
                     "Examples:\n"
-                    "• 14:30 (24-hour format)\n"
-                    "• 2:30pm (12-hour format)\n"
+                    "• 14:30 or 1430 (24-hour)\n"
+                    "• 2:30pm (12-hour)\n"
                     "• 09:15am",
                     False
                 )
@@ -949,7 +1065,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
                         "Please reply with the time format:\n\n"
                         "Examples:\n"
-                        "• 13:45 (24-hour)\n"
+                        "• 13:45 or 1345 (24-hour)\n"
                         "• 1:45pm (12-hour)\n\n"
                         "Or reply *skip* if you don't have this info yet.",
                         False
@@ -972,7 +1088,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         f"I couldn't understand '{val}' as a valid time. 🕒\n\n"
                         "Please reply with the time format:\n\n"
                         "Examples:\n"
-                        "• 10:00 (24-hour)\n"
+                        "• 10:00 or 1000 (24-hour)\n"
                         "• 10:00am (12-hour)\n\n"
                         "Or reply *skip* if you don't have this info yet.",
                         False
@@ -983,17 +1099,9 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             td.save(update_fields=["hotel_departure_time"])
 
         elif step == "departure_date":
-            dt = _parse_date(t)
-            if not dt:
-                return (
-                    f"I couldn't understand '{t}' as a valid date. 📅\n\n"
-                    "Please reply with the date in *DD-MM-YYYY* format.\n\n"
-                    "Examples:\n"
-                    "• 05-10-2025\n"
-                    "• 20/12/2025\n"
-                    "• 03-01-2026",
-                    False
-                )
+            dt, error = _validate_future_date(t)
+            if error:
+                return (error, False)
             td.departure_date = dt
             td.save(update_fields=["departure_date"])
 
@@ -1004,8 +1112,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                     f"I couldn't understand '{t}' as a valid time. 🕒\n\n"
                     "Please reply with the time in one of these formats:\n\n"
                     "Examples:\n"
-                    "• 18:20 (24-hour format)\n"
-                    "• 6:20pm (12-hour format)\n"
+                    "• 18:20 or 1820 (24-hour)\n"
+                    "• 6:20pm (12-hour)\n"
                     "• 11:30am",
                     False
                 )
@@ -1051,6 +1159,54 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             sess.state["departure_details_done"] = True
             state_changed = True
             td.save(update_fields=["departure_details"])
+
+        elif step == "awaiting_pax_count":
+            # Handle guest count input
+            try:
+                count = int(t)
+                if count < 1:
+                    return (
+                        "The number of attendees must be at least 1 (you). 🤔\n\n"
+                        "Please reply with a valid number (e.g., 1, 2, 3, etc.)",
+                        False
+                    )
+                
+                # Update estimated_pax
+                reg.estimated_pax = count
+                reg.save(update_fields=["estimated_pax"])
+                
+                # Clear the step so we don't loop back
+                sess.step = ""
+                sess.save(update_fields=["step"])
+                
+                # Send confirmation with travel details option
+                try:
+                    confirmation = (
+                        f"✅ Perfect! I've updated your guest count to *{count}* "
+                        f"{'person' if count == 1 else 'people'}.\n\n"
+                        "Would you like to provide travel details?"
+                    )
+                    send_choice_buttons(
+                        reg.guest.phone,
+                        confirmation,
+                        [
+                            {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Yes, Add Travel Info"}
+                        ]
+                    )
+                    logger.info(f"Updated estimated_pax to {count} for reg {reg.id}")
+                except Exception as e:
+                    logger.exception(f"Failed to send pax confirmation: {e}")
+                
+                return ("", False)
+                
+            except ValueError:
+                return (
+                    f"I couldn't understand '{t}' as a number. 🤔\n\n"
+                    "Please reply with just the number of people attending.\n\n"
+                    "Examples: 1, 2, 3, 4, etc.",
+                    False
+                )
+
 
         else:
             logger.warning(f"[ANSWER] Unknown step={step!r}, text={t!r}")
@@ -1143,3 +1299,142 @@ def get_fallback_message(scenario: str, reg=None) -> str:
             "Hi! I'm here to help with travel arrangements for your event.\n\n"
             "If you have questions or need assistance, please contact our support team. 📞"
         )
+
+# ---------- travel summary and update menu ----------
+
+
+def generate_travel_summary(reg: EventRegistration) -> str:
+    """
+    Generate a formatted summary of all travel details for display.
+    Shows current values for all fields, including optional/skipped ones.
+    """
+    td = _get_or_create_detail(reg)
+    sess = _get_or_create_session(reg)
+    state = sess.state or {}
+    
+    lines = ["📋 *Your Travel Summary*"]
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    
+    # --- Travel Type ---
+    if td.travel_type:
+        icon = "✈️" if td.travel_type == "Air" else "🚆" if td.travel_type == "Train" else "🚗"
+        lines.append(f"{icon} *Travel Type:* {td.travel_type}")
+    else:
+        lines.append("❓ *Travel Type:* Not set")
+    
+    # --- Extra Attendees ---
+    if reg.extra_attendees.exists():
+        extra_count = state.get("extra_attendees_count", 0)
+        total_extras = reg.extra_attendees.count()
+        lines.append(f"👥 *Guests:* {extra_count} (of {total_extras} registered)")
+    
+    lines.append("")
+    lines.append("📥 *Arrival*")
+    
+    # Arrival Date & Time
+    date_str = td.arrival_date.strftime('%d-%m-%Y') if td.arrival_date else "_Not provided_"
+    time_str = td.arrival_time.strftime('%I:%M %p') if td.arrival_time else "_Not provided_"
+    lines.append(f"📅 Date: {date_str}")
+    lines.append(f"🕒 Time: {time_str}")
+    
+    # Carrier details
+    if td.airline:
+        carrier_label = "Airline" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Car"
+        lines.append(f"🚆 {carrier_label}: {td.airline}")
+    
+    # Flight/Train/Car number
+    if td.flight_number:
+        number_label = "Flight" if td.travel_type == "Air" else "Train" if td.travel_type == "Train" else "Plate"
+        lines.append(f"🔢 {number_label}: {td.flight_number}")
+    
+    # PNR
+    if td.pnr:
+        lines.append(f"🎫 PNR: {td.pnr}")
+    
+    # Arrival Details
+    if td.arrival_details:
+        lines.append(f"📝 Notes: {td.arrival_details}")
+    
+    lines.append("")
+    lines.append("🏨 *Hotel*")
+    
+    # Hotel Times
+    checkin_str = td.hotel_arrival_time.strftime('%I:%M %p') if td.hotel_arrival_time else "_Skipped_" if state.get("hat_skip") else "_Not provided_"
+    checkout_str = td.hotel_departure_time.strftime('%I:%M %p') if td.hotel_departure_time else "_Skipped_" if state.get("hdt_skip") else "_Not provided_"
+    
+    lines.append(f"Check-in: {checkin_str}")
+    lines.append(f"Check-out: {checkout_str}")
+    
+    lines.append("")
+    lines.append("📤 *Return Journey*")
+    
+    # Return Travel
+    if state.get("return_travel_done"):
+        if td.return_travel:
+            lines.append("✅ Return travel: Yes")
+            
+            dep_date_str = td.departure_date.strftime('%d-%m-%Y') if td.departure_date else "_Not provided_"
+            dep_time_str = td.departure_time.strftime('%I:%M %p') if td.departure_time else "_Not provided_"
+            lines.append(f"📅 Date: {dep_date_str}")
+            lines.append(f"🕒 Time: {dep_time_str}")
+            
+            if td.departure_airline:
+                lines.append(f"🚆 Carrier: {td.departure_airline}")
+                
+            if td.departure_flight_number:
+                lines.append(f"🔢 Number: {td.departure_flight_number}")
+                
+            if td.departure_pnr:
+                lines.append(f"🎫 PNR: {td.departure_pnr}")
+                
+            if td.departure_details:
+                lines.append(f"📝 Notes: {td.departure_details}")
+        else:
+            lines.append("❌ Return travel: No")
+    else:
+        lines.append("❓ Not specified")
+    
+    return "\n".join(lines)
+
+
+def send_travel_update_menu(reg: EventRegistration) -> None:
+    """
+    Send a summary of travel details with a single edit button to restart the flow.
+    """
+    summary = generate_travel_summary(reg)
+    
+    message = (
+        f"{summary}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "Does everything look correct?"
+    )
+    
+    buttons = [
+        {"id": f"tc|restart_flow|{reg.id}", "title": "✏️ Edit Details"},
+        {"id": f"tc|update_section|done|{reg.id}", "title": "✅ Confirm"},
+    ]
+    
+    try:
+        send_choice_buttons(reg.guest.phone, message, buttons)
+        logger.warning(f"[UPDATE-MENU] Sent travel summary menu to {reg.guest.phone}")
+    except Exception as exc:
+        logger.exception(f"[UPDATE-MENU] Failed to send menu: {exc}")
+
+
+def start_section_update(reg: EventRegistration, section: str) -> None:
+    """
+    Handle final confirmation or restart flow.
+    """
+    if section == "done":
+        # User confirmed all details are correct
+        send_freeform_text(
+            reg.guest.phone,
+            "✅ Perfect! Your travel details have been saved.\n\n"
+            "We look forward to seeing you! 🎉"
+        )
+        return
+    
+    # NOTE: We no longer support partial updates (travel_type, arrival, etc.)
+    # If we ever need them back, we can restore the logic here.
+    # For now, any other section value is unexpected in this new flow.
+    logger.warning(f"[SECTION-UPDATE] Unexpected section update requested: {section}")

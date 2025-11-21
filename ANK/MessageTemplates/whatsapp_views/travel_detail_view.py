@@ -93,6 +93,30 @@ def _resolve_travel_reg(wa_id: str, event_id: str):
         return None
 
 
+def _send_post_rsvp_options(reg: EventRegistration):
+    """Send options to user who completed RSVP but hasn't started travel."""
+    event_name = reg.event.name if reg.event else "the event"
+    
+    message = (
+        f"Thank you for confirming your RSVP for {event_name}! ✅\n\n"
+        "What would you like to do next?"
+    )
+    
+    buttons = [
+        {
+            "id": f"tc|start_travel|{reg.id}",
+            "title": "✈️ Provide Travel Details"
+        },
+        {
+            "id": f"tc|update_rsvp_menu|{reg.id}",
+            "title": "🔄 Update RSVP"
+        }
+    ]
+    
+    send_choice_buttons(reg.guest.phone, message, buttons)
+    logger.info(f"[POST-RSVP] Sent options to registration {reg.id}")
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def whatsapp_travel_webhook(request):
@@ -130,40 +154,16 @@ def whatsapp_travel_webhook(request):
         logger.error(f"[WEBHOOK] Invalid kind '{kind}'")
         return JsonResponse({"ok": False, "error": "invalid_kind"}, status=400)
 
-    # Ensure capture session exists
+    # Fetch capture session (don't auto-create)
+    sess = None
     try:
         sess = reg.travel_capture
     except TravelCaptureSession.DoesNotExist:
-        sess = TravelCaptureSession.objects.create(registration=reg)
-
-    # If session already completed AND not a button click, offer update options
-    # (button clicks need to be processed even for completed sessions)
-    if sess.is_complete and kind != "button":
-        logger.warning(
-            f"[RESUME] Registration={reg.id} session already complete; offering update options."
-        )
-        # Send message with update buttons
-        try:
-            event_name = f" for {reg.event.name}" if reg.event else ""
-            message = (
-                f"✅ Thank you! We've already received your details{event_name}.\n\n"
-                "What would you like to update?"
-            )
-            send_choice_buttons(
-                reg.guest.phone,
-                message,
-                [
-                    {"id": f"update|rsvp|{reg.id}", "title": "📝 Update RSVP"},
-                    {"id": f"update|travel|{reg.id}", "title": "✈️ Update Travel Details"},
-                ]
-            )
-            logger.warning(f"[FALLBACK] Sent update options to {reg.guest.phone}")
-        except Exception as exc:
-            logger.exception(f"[FALLBACK-ERR] Failed sending update options to {reg.id}: {exc}")
-        return JsonResponse({"ok": True}, status=200)
+        pass  # Don't auto-create; handle below based on state
 
     # If outside 24h → send auto "resume" template request (RCS)
-    if not within_24h_window(reg.responded_on):
+    # Check this early for all message types except resume
+    if kind != "resume" and not within_24h_window(reg.responded_on):
         logger.warning(f"[24H] Out-of-window for {reg.id} → sending RESUME_OPENER")
         send_resume_opener(reg.guest.phone, str(reg.id))
         return JsonResponse({"ok": True}, status=200)
@@ -245,7 +245,25 @@ def whatsapp_travel_webhook(request):
     if kind == "wake":
         logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
         try:
-            resume_or_start(reg)
+            # If session exists and is complete, send update instructions
+            if sess and sess.is_complete:
+                logger.warning(f"[WAKE] Registration={reg.id} session complete; sending instructions")
+                event_name = f" for {reg.event.name}" if reg.event else ""
+                message = (
+                    f"✅ Thank you! We've already received your details{event_name}.\n\n"
+                    "If you need to update anything:\n"
+                    "• Reply *rsvp* to change your RSVP status\n"
+                    "• Reply *travel* to update travel details"
+                )
+                send_freeform_text(reg.guest.phone, message)
+                return JsonResponse({"ok": True}, status=200)
+
+            # If session exists but incomplete, resume
+            if sess:
+                resume_or_start(reg)
+            else:
+                # No session - send post-RSVP options
+                _send_post_rsvp_options(reg)
         except Exception as exc:
             logger.exception(f"[WAKE-ERR] Failed resume for {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
@@ -257,63 +275,73 @@ def whatsapp_travel_webhook(request):
             logger.warning(f"[TEXT] Empty text for reg={reg.id}")
             return JsonResponse({"ok": True}, status=200)
 
-        # Check if we're awaiting guest count for RSVP
-        try:
-            # 0. Check for explicit "update" command
-            if text.lower() in ["update", "change", "modify", "menu"]:
-                logger.warning(f"[TEXT-TRIGGER] User triggered update flow via text: '{text}'")
+        # Check for explicit commands FIRST (before any state checks)
+        text_lower = text.lower()
+        
+        # "update" / "menu" - shows instructions
+        if any(x in text_lower for x in ["update", "change", "modify", "menu"]):
+            logger.warning(f"[TEXT-TRIGGER] User asked for update menu: '{text}'")
+            try:
+                send_freeform_text(
+                    reg.guest.phone,
+                    "To make changes, please reply with:\n\n"
+                    "• *rsvp* - to update your RSVP status\n"
+                    "• *travel* - to update your travel details"
+                )
+            except Exception as exc:
+                logger.exception(f"[TEXT-ERR] Failed sending update menu: {exc}")
+            return JsonResponse({"ok": True}, status=200)
+        
+        # "rsvp" - triggers RSVP flow
+        if "rsvp" in text_lower:
+            logger.warning(f"[TEXT-TRIGGER] User triggered RSVP update: '{text}'")
+            try:
+                event_name = reg.event.name if reg.event else "the event"
                 send_choice_buttons(
                     reg.guest.phone,
-                    "What would you like to update?",
+                    f"Will you be attending {event_name}? 🎉",
                     [
-                        {"id": f"tc|update_rsvp|{reg.id}", "title": "📝 Update RSVP"},
-                        {"id": f"tc|update_travel|{reg.id}", "title": "✈️ Update Travel"},
+                        {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
+                        {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
+                        {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
                     ]
                 )
-                return JsonResponse({"ok": True}, status=200)
+            except Exception as exc:
+                logger.exception(f"[TEXT-ERR] Failed sending RSVP buttons: {exc}")
+            return JsonResponse({"ok": True}, status=200)
+        
+        # "travel" - triggers Travel flow restart
+        if "travel" in text_lower:
+            logger.warning(f"[TEXT-TRIGGER] User triggered Travel update: '{text}'")
+            try:
+                start_capture_after_opt_in(reg, restart=True)
+            except Exception as exc:
+                logger.exception(f"[TEXT-ERR] Failed starting travel flow: {exc}")
+            return JsonResponse({"ok": True}, status=200)
 
-            sess = reg.travel_capture
-            if sess.state and sess.state.get("awaiting_guest_count"):
-                logger.warning(f"[RSVP-GUEST-COUNT] Processing guest count for {reg.id}: '{text}'")
-                
-                # Parse guest count
-                try:
-                    count = int(text)
-                    if count < 1 or count > 50:
-                        raise ValueError("Out of range")
-                    
-                    # Update registration
-                    reg.estimated_pax = count
-                    reg.save(update_fields=["estimated_pax"])
-                    
-                    # Clear flag
-                    sess.state.pop("awaiting_guest_count", None)
-                    sess.save(update_fields=["state"])
-                    
-                    # Send confirmation
-                    event_name = reg.event.name if reg.event else "the event"
-                    send_freeform_text(
-                        reg.guest.phone,
-                        f"✅ Perfect! Your RSVP has been updated:\n"
-                        f"• Event: {event_name}\n"
-                        f"• Status: Confirmed\n"
-                        f"• Total Guests: {count}\n\n"
-                        "We're looking forward to seeing you! 🎉"
-                    )
-                    logger.warning(f"[RSVP-GUEST-COUNT] Successfully updated guest count to {count} for {reg.id}")
-                    return JsonResponse({"ok": True}, status=200)
-                    
-                except ValueError:
-                    # Invalid number
-                    send_freeform_text(
-                        reg.guest.phone,
-                        "Please reply with a valid number of guests between 1 and 50 (e.g., 2, 3, 4)"
-                    )
-                    logger.warning(f"[RSVP-GUEST-COUNT] Invalid count '{text}' for {reg.id}")
-                    return JsonResponse({"ok": True}, status=200)
-        except Exception as exc:
-            logger.exception(f"[RSVP-GUEST-COUNT-ERR] Error processing guest count: {exc}")
+        # If no session exists and not a command, send post-RSVP options
+        if not sess:
+            logger.warning(f"[TEXT] No session for reg={reg.id}, sending post-RSVP options")
+            _send_post_rsvp_options(reg)
+            return JsonResponse({"ok": True}, status=200)
 
+        # If session is complete (and it wasn't a command), send instructions
+        if sess.is_complete:
+            logger.warning(f"[TEXT] Registration={reg.id} session complete; sending instructions for '{text}'")
+            try:
+                event_name = f" for {reg.event.name}" if reg.event else ""
+                message = (
+                    f"✅ Thank you! We've already received your details{event_name}.\n\n"
+                    "If you need to update anything:\n"
+                    "• Reply *rsvp* to change your RSVP status\n"
+                    "• Reply *travel* to update travel details"
+                )
+                send_freeform_text(reg.guest.phone, message)
+            except Exception as exc:
+                logger.exception(f"[TEXT-ERR] Failed sending instructions: {exc}")
+            return JsonResponse({"ok": True}, status=200)
+
+        # Process text as travel answer only if session exists and incomplete
         try:
             reply_text, done = handle_inbound_answer(reg, text)
         except Exception as exc:
