@@ -280,6 +280,55 @@ def whatsapp_rsvp(request):
         },
     )
 
+    # Send immediate WhatsApp confirmation with next steps
+    try:
+        from MessageTemplates.services.whatsapp import send_choice_buttons, send_freeform_text
+        
+        event_name = er.event.name if er.event else "the event"
+        
+        if normalized_status == "Yes":
+            # For "Yes" - send confirmation with travel details option
+            message = (
+                f"✅ Perfect! Your RSVP has been confirmed for {event_name}.\n\n"
+                "We're looking forward to seeing you! 🎉\n\n"
+                "What would you like to do next?"
+            )
+            buttons = [
+                {
+                    "id": f"tc|start_travel|{er.id}",
+                    "title": "✈️ Provide Travel Details"
+                },
+                {
+                    "id": f"tc|update_rsvp_menu|{er.id}",
+                    "title": "🔄 Update RSVP"
+                }
+            ]
+            send_choice_buttons(er.guest.phone, message, buttons)
+            log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
+            
+        elif normalized_status == "No":
+            # For "No" - simple confirmation
+            message = (
+                f"Thank you for letting us know.\n\n"
+                f"Your RSVP has been updated to: Not Attending ❌\n\n"
+                "We hope to see you at future events!"
+            )
+            send_freeform_text(er.guest.phone, message)
+            log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
+            
+        elif normalized_status == "Maybe":
+            # For "Maybe" - simple confirmation
+            message = (
+                f"No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
+                "Please let us know when you decide!"
+            )
+            send_freeform_text(er.guest.phone, message)
+            log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
+            
+    except Exception as msg_err:
+        log.exception(f"[RSVP] Failed to send confirmation message: {msg_err}")
+        # Don't fail the request if message sending fails
+
     # Mark WaSendMap consumed (non-fatal if it fails)
     try:
         wa_id = _norm_digits(body.get("wa_id", ""))
