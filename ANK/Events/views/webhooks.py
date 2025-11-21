@@ -107,6 +107,46 @@ def track_send(request):
         log.exception("track_send failed")
         return HttpResponseBadRequest(f"track_send error: {e}")
 
+    # Update EventRegistration status to "pending" if not yet responded
+    try:
+        if er.rsvp_status == "pending":
+            # Only update initiated_on if not already set
+            if not er.initiated_on:
+                er.initiated_on = dj_tz.now()
+                er.save(update_fields=["initiated_on"])
+                log.info(
+                    f"Updated registration {er.id}: set initiated_on for event {er.event_id}"
+                )
+            
+            # Optional: Send WebSocket notification for real-time updates
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"event_{er.event_id}",
+                        {
+                            "type": "rsvp_update",
+                            "data": {
+                                "type": "rsvp_sent",
+                                "action": "updated",
+                                "registration": {
+                                    "id": str(er.id),
+                                    "event": str(er.event_id),
+                                    "rsvp_status": er.rsvp_status,
+                                    "initiated_on": er.initiated_on.isoformat() if er.initiated_on else None,
+                                },
+                            },
+                        },
+                    )
+            except Exception as ws_err:
+                log.warning(f"WebSocket notification failed: {ws_err}")
+    except Exception as update_err:
+        # Log error but don't fail the request
+        log.error(f"Failed to update RSVP status for registration {er.id}: {update_err}")
+
     return JsonResponse({"ok": True, "map_id": str(obj.id)})
 # 
 
