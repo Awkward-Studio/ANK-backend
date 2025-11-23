@@ -134,32 +134,6 @@ def track_send(request):
                 log.info(
                     f"Updated registration {er.id}: set initiated_on for event {er.event_id}"
                 )
-            
-            # Optional: Send WebSocket notification for real-time updates
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    async_to_sync(channel_layer.group_send)(
-                        f"event_{er.event_id}",
-                        {
-                            "type": "rsvp_update",
-                            "data": {
-                                "type": "rsvp_sent",
-                                "action": "updated",
-                                "registration": {
-                                    "id": str(er.id),
-                                    "event": str(er.event_id),
-                                    "rsvp_status": er.rsvp_status,
-                                    "initiated_on": er.initiated_on.isoformat() if er.initiated_on else None,
-                                },
-                            },
-                        },
-                    )
-            except Exception as ws_err:
-                log.warning(f"WebSocket notification failed: {ws_err}")
     except Exception as update_err:
         # Log error but don't fail the request
         log.error(f"Failed to update RSVP status for registration {er.id}: {update_err}")
@@ -273,31 +247,6 @@ def whatsapp_rsvp(request):
 
     log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
-
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"event_{er.event_id}",
-        {
-            "type": "rsvp_update",  # consumer handler name
-            "data": {
-                "type": "rsvp_changed",  # <-- match your hook
-                "action": "updated",
-                "registration": {
-                    "id": str(er.id),
-                    "event": str(er.event_id),
-                    "rsvp_status": er.rsvp_status,
-                    "estimated_pax": getattr(er, "estimated_pax", None),
-                    "additional_guest_count": getattr(
-                        er, "additional_guest_count", None
-                    ),
-                    # include responded_on/updated_at if you want
-                },
-            },
-        },
-    )
-
     # Send immediate WhatsApp confirmation with next steps
     try:
         from MessageTemplates.services.whatsapp import send_choice_buttons, send_freeform_text
@@ -392,7 +341,7 @@ def resolve_wa(request, wa_id):
     row = (
         WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=timezone.now())
         .order_by("-created_at")
-        .values("event_id", "event_registration_id")
+        .values("event_id", "event_registration_id", "flow_type")
         .first()
     )
 
@@ -405,5 +354,6 @@ def resolve_wa(request, wa_id):
             "found": True,
             "event_id": row["event_id"],
             "registration_id": row["event_registration_id"],
+            "flow_type": row.get("flow_type"),
         }
     )

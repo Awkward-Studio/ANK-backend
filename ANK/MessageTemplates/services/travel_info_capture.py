@@ -14,7 +14,7 @@ import re
 import logging
 import requests
 import os
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Tuple, Optional, Dict
 
 from django.utils import timezone as dj_tz
@@ -23,6 +23,7 @@ from django.db import transaction
 from Logistics.models.travel_details_models import TravelDetail
 from Logistics.models.travel_detail_capture_session import TravelCaptureSession
 from Events.models.event_registration_model import EventRegistration
+from Events.models.wa_send_map import WaSendMap
 from MessageTemplates.services.whatsapp import (
     send_freeform_text,
     send_choice_buttons,
@@ -626,6 +627,23 @@ def send_next_prompt(reg: EventRegistration) -> None:
         logger.exception(f"[ERROR] Failed to send WA prompt for step={step}")
         # Do NOT advance; let the next WAKE try again
         return
+
+    # --- Create/Update WaSendMap for 'travel' flow ---
+    # This ensures that when the user replies, resolve_wa finds this map
+    # and identifies the flow as 'travel'.
+    try:
+        WaSendMap.objects.update_or_create(
+            wa_id=reg.guest.phone.replace("+", ""),  # normalize if needed, model expects digits
+            event_registration=reg,
+            flow_type="travel",
+            defaults={
+                "event": reg.event,
+                "template_wamid": None,  # generic flow
+                "expires_at": dj_tz.now() + timedelta(days=30),
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update WaSendMap for travel flow: {e}")
 
     # Only if send succeeded do we record that we prompted this step
     sess.step = step
