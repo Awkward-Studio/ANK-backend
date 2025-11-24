@@ -14,10 +14,15 @@ class Migration(migrations.Migration):
             model_name='wasendmap',
             name='Events_wase_wa_id_057d50_idx',
         ),
-        migrations.AddField(
-            model_name='event',
-            name='client_name',
-            field=models.CharField(blank=True, max_length=200, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.AddField(
+                    model_name='event',
+                    name='client_name',
+                    field=models.CharField(blank=True, max_length=200, null=True),
+                ),
+            ],
         ),
         migrations.AddField(
             model_name='event',
