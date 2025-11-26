@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
 from utils.swagger import (
@@ -51,6 +52,8 @@ from utilities.serializers.tax_slab_serializer import TaxSlabSerializer
     }
 )
 class TaxSlabList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = TaxSlab.objects.all().order_by("financial_year", "lower_limit")
@@ -108,6 +111,8 @@ class TaxSlabList(APIView):
     }
 )
 class TaxSlabDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(TaxSlab, pk=pk)

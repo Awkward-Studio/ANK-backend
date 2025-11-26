@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 
 from Logistics.models.hotel_models import (
@@ -56,6 +57,8 @@ from utils.swagger import (
     }
 )
 class HotelList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Hotel.objects.all().prefetch_related("room_types")
@@ -107,6 +110,8 @@ class HotelList(APIView):
     }
 )
 class HotelDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             hotel = get_object_or_404(Hotel, pk=pk)
@@ -170,6 +175,8 @@ class HotelDetail(APIView):
     }
 )
 class HotelRoomTypeList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = HotelRoomType.objects.all()
@@ -225,6 +232,8 @@ class HotelRoomTypeList(APIView):
     }
 )
 class HotelRoomTypeDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(HotelRoomType, pk=pk)
@@ -287,6 +296,8 @@ class HotelRoomTypeDetail(APIView):
     }
 )
 class EventHotelList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventHotel.objects.all()
@@ -339,6 +350,8 @@ class EventHotelList(APIView):
     }
 )
 class EventHotelDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventHotel, pk=pk)
@@ -407,6 +420,8 @@ class EventHotelDetail(APIView):
     }
 )
 class EventHotelRoomTypeList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventHotelRoomType.objects.select_related(
@@ -463,6 +478,8 @@ class EventHotelRoomTypeList(APIView):
     }
 )
 class EventHotelRoomTypeDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventHotelRoomType, pk=pk)
@@ -516,6 +533,8 @@ class EventHotelRoomTypeDetail(APIView):
     }
 )
 class EventHotelsByEventAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         event_id = request.GET.get("event")
         if not event_id:
@@ -547,6 +566,8 @@ class EventHotelsByEventAPIView(APIView):
     }
 )
 class RoomTypesByEventHotelAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         event_hotel_id = request.GET.get("event_hotel")
         if not event_hotel_id:
@@ -571,6 +592,8 @@ class RoomTypesByEventHotelAPIView(APIView):
     }
 )
 class RoomTypeAvailabilityAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     URL expects: /.../availability/<event_hotel_id>/<room_type_name>/
     """
@@ -606,6 +629,8 @@ class RoomTypeAvailabilityAPIView(APIView):
     }
 )
 class BulkRoomAvailabilityAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def put(self, request):
         updates = request.data.get("room_updates", [])
         if not isinstance(updates, list):
@@ -646,6 +671,8 @@ class BulkRoomAvailabilityAPIView(APIView):
     }
 )
 class RoomTypesByEventAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         event_id = request.GET.get("event")
         if not event_id:

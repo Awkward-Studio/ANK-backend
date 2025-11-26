@@ -45,6 +45,7 @@ from utils.swagger import (
     }
 )
 class MessageTemplateList(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request):
         try:
             qs = MessageTemplate.objects.all().prefetch_related("variables")
@@ -106,6 +107,7 @@ class MessageTemplateList(APIView):
     }
 )
 class MessageTemplateDetail(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, pk):
         try:
             obj = get_object_or_404(
@@ -168,6 +170,7 @@ class MessageTemplateDetail(APIView):
     }
 )
 class MessageTemplateVariableList(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request):
         try:
             qs = MessageTemplateVariable.objects.all()
@@ -225,6 +228,7 @@ class MessageTemplateVariableList(APIView):
     }
 )
 class MessageTemplateVariableDetail(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, pk):
         try:
             obj = get_object_or_404(MessageTemplateVariable, pk=pk)
@@ -274,6 +278,7 @@ class MessageTemplateVariableDetail(APIView):
     }
 )
 class EventMessageTemplatesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     """
     GET /events/<uuid:event_pk>/message-templates/
     """

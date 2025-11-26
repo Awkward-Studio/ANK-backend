@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
 from Events.models.event_registration_model import EventRegistrationField
@@ -59,6 +60,8 @@ from utils.swagger import (
     }
 )
 class UserEventEventFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventFieldPermission.objects.filter(
@@ -113,6 +116,8 @@ class UserEventEventFieldPermsAPIView(APIView):
     }
 )
 class UserEventEventFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             eid = request.data.get("eventfield_id")
@@ -177,6 +182,8 @@ class UserEventEventFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventGuestFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventGuestFieldPermission.objects.filter(
@@ -233,6 +240,8 @@ class UserEventGuestFieldPermsAPIView(APIView):
     }
 )
 class UserEventGuestFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             gid = request.data.get("guestfield_id")
@@ -297,6 +306,8 @@ class UserEventGuestFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventSessionFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventSessionFieldPermission.objects.filter(
@@ -358,6 +369,8 @@ class UserEventSessionFieldPermsAPIView(APIView):
     }
 )
 class UserEventSessionFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             sid = request.data.get("sessionfield_id")
@@ -424,6 +437,8 @@ class UserEventSessionFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventTravelDetailFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventTravelDetailFieldPermission.objects.filter(
@@ -493,6 +508,8 @@ class UserEventTravelDetailFieldPermsAPIView(APIView):
     }
 )
 class UserEventTravelDetailFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             tid = request.data.get("traveldetailfield_id")
@@ -568,6 +585,8 @@ class UserEventTravelDetailFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventEventRegistrationFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventEventRegistrationFieldPermission.objects.filter(
@@ -636,6 +655,8 @@ class UserEventEventRegistrationFieldPermsAPIView(APIView):
     }
 )
 class UserEventEventRegistrationFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             eid = request.data.get("eventregistrationfield_id")
@@ -711,6 +732,8 @@ class UserEventEventRegistrationFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventAccommodationFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_pk, user_pk):
         try:
             perms = UserEventAccommodationFieldPermission.objects.filter(
@@ -779,6 +802,8 @@ class UserEventAccommodationFieldPermsAPIView(APIView):
     }
 )
 class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_pk, user_pk):
         try:
             aid = request.data.get("accommodationfield_id")
@@ -845,6 +870,8 @@ class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
     }
 )
 class UserEventAssignAllFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     POST /events/{event_pk}/users/{user_pk}/set-all-field-perms/
     {
@@ -1037,6 +1064,8 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
     }
 )
 class UserEventAllAllowedFieldsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /events/<event_pk>/users/<user_pk>/allowed-fields/
     Returns all allowed event fields, guest fields, session fields, travel detail fields,

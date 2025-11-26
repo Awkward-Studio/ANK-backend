@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
 from Events.models.event_model import Event
@@ -57,6 +58,8 @@ from Departments.serializers import BUDGET_FIELD_KEYS
     }
 )
 class DepartmentList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Department.objects.all()
@@ -105,6 +108,8 @@ class DepartmentList(APIView):
     }
 )
 class DepartmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(Department, pk=pk)
@@ -167,6 +172,8 @@ class DepartmentDetail(APIView):
     }
 )
 class EventDepartmentList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventDepartment.objects.select_related("event", "department").all()
@@ -218,6 +225,8 @@ class EventDepartmentList(APIView):
     }
 )
 class EventDepartmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventDepartment, pk=pk)
@@ -265,6 +274,8 @@ class EventDepartmentDetail(APIView):
     }
 )
 class EventDepartmentsByEventAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             get_object_or_404(Event, pk=pk)
@@ -309,6 +320,8 @@ class EventDepartmentsByEventAPIView(APIView):
     }
 )
 class EventDepartmentStaffAssignmentList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventDepartmentStaffAssignment.objects.select_related(
@@ -364,6 +377,8 @@ class EventDepartmentStaffAssignmentList(APIView):
     }
 )
 class EventDepartmentStaffAssignmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventDepartmentStaffAssignment, pk=pk)
@@ -413,6 +428,8 @@ class EventDepartmentStaffAssignmentDetail(APIView):
     }
 )
 class StaffAssignmentsByEventDepartmentAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             get_object_or_404(EventDepartment, pk=pk)
@@ -460,6 +477,8 @@ class StaffAssignmentsByEventDepartmentAPIView(APIView):
     }
 )
 class BudgetLineItemList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = BudgetLineItem.objects.select_related("event_department").all()
@@ -513,6 +532,8 @@ class BudgetLineItemList(APIView):
     }
 )
 class BudgetLineItemDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(BudgetLineItem, pk=pk)
@@ -560,6 +581,8 @@ class BudgetLineItemDetail(APIView):
     }
 )
 class BudgetItemsByEventDepartmentAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             get_object_or_404(EventDepartment, pk=pk)
@@ -605,6 +628,8 @@ class BudgetItemsByEventDepartmentAPIView(APIView):
     }
 )
 class BudgetFieldPermissionList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = BudgetFieldPermission.objects.select_related(
@@ -661,6 +686,8 @@ class BudgetFieldPermissionList(APIView):
     }
 )
 class BudgetFieldPermissionDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(BudgetFieldPermission, pk=pk)
@@ -708,6 +735,8 @@ class BudgetFieldPermissionDetail(APIView):
     }
 )
 class FieldPermsByEventDepartmentAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             get_object_or_404(EventDepartment, pk=pk)
@@ -739,6 +768,8 @@ class FieldPermsByEventDepartmentAPIView(APIView):
     }
 )
 class EventDepartmentUserFieldPermsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, event_dept_pk, user_pk):
         try:
             get_object_or_404(EventDepartment, pk=event_dept_pk)
@@ -779,6 +810,8 @@ class EventDepartmentUserFieldPermsAPIView(APIView):
     }
 )
 class EventDepartmentUserFieldPermsSetAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_dept_pk, user_pk):
         try:
             ed = get_object_or_404(EventDepartment, pk=event_dept_pk)
@@ -857,6 +890,8 @@ class EventDepartmentUserFieldPermsSetAPIView(APIView):
     }
 )
 class EventDepartmentUserFieldPermsAddAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_dept_pk, user_pk):
         try:
             ed = get_object_or_404(EventDepartment, pk=event_dept_pk)
@@ -923,6 +958,8 @@ class EventDepartmentUserFieldPermsAddAPIView(APIView):
     }
 )
 class EventDepartmentUserFieldPermsRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, event_dept_pk, user_pk):
         try:
             ed = get_object_or_404(EventDepartment, pk=event_dept_pk)
@@ -1004,6 +1041,8 @@ def _build_access_rows(assignments, user_id):
     }
 )
 class UserEventScopedDepartmentFieldAccessAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /api/users/<user_pk>/events/<event_pk>/departments/field-access/
     → Only event-departments under <event_pk> where the user is assigned + allowed field_keys.

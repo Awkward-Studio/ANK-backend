@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 
 from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
@@ -51,6 +52,8 @@ from utils.swagger import (
     }
 )
 class TravelDetailList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = TravelDetail.objects.all()
@@ -114,6 +117,8 @@ class TravelDetailList(APIView):
     }
 )
 class TravelDetailDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             td = get_object_or_404(TravelDetail, pk=pk)
@@ -167,6 +172,8 @@ class TravelDetailDetail(APIView):
     }
 )
 class TravelDetailFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = TravelDetailField.objects.all()
@@ -212,6 +219,8 @@ class TravelDetailFieldList(APIView):
     }
 )
 class TravelDetailFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(TravelDetailField, pk=pk)

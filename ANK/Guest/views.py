@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from contextlib import nullcontext
@@ -42,6 +43,8 @@ from utils.swagger import (
     }
 )
 class GuestFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = GuestField.objects.all()
@@ -86,6 +89,8 @@ class GuestFieldList(APIView):
     }
 )
 class GuestFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(GuestField, pk=pk)
@@ -145,6 +150,8 @@ class GuestFieldDetail(APIView):
     }
 )
 class GuestList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Guest.objects.all()
@@ -187,6 +194,8 @@ class GuestList(APIView):
     }
 )
 class GuestDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(Guest, pk=pk)
@@ -225,6 +234,8 @@ class GuestDetail(APIView):
 
 
 class BulkGuestUploadAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     POST /api/guest-list/{event_id}/upload-guests-csv/
     Accepts a CSV file with guest+registration data.

@@ -1,7 +1,8 @@
 from rest_framework.views import APIView
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from rest_framework import status, serializers
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated, serializers
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.conf import settings
@@ -258,6 +259,8 @@ class LogoutView(GenericAPIView):
     }
 )
 class UserList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = User.objects.all()
@@ -298,6 +301,8 @@ class UserList(APIView):
     }
 )
 class UserDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(User, pk=pk)
@@ -345,6 +350,8 @@ class UserDetail(APIView):
     }
 )
 class UserAssignedEventsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
@@ -367,6 +374,8 @@ class UserAssignedEventsAPIView(APIView):
     }
 )
 class UserAssignedSessionsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
