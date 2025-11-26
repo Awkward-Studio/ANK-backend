@@ -57,6 +57,12 @@ class SendLocalTemplateView(APIView):
             MessageTemplate.objects.prefetch_related("variables"), id=template_id
         )
 
+        # If this is an RSVP message and status is "not_sent", update to "pending"
+        if tmpl.is_rsvp_message and reg.rsvp_status == "not_sent":
+            reg.rsvp_status = "pending"
+            reg.save(update_fields=["rsvp_status"])
+            logger.info(f"Updated RSVP status to 'pending' for registration {reg.id}")
+
         ctx = build_registration_context(reg)
         try:
             text = render_template_with_vars(tmpl, ctx)

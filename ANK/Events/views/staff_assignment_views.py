@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 
 
@@ -45,6 +46,7 @@ from utils.swagger import (
     }
 )
 class EventStaffAssignmentList(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
@@ -100,6 +102,7 @@ class EventStaffAssignmentList(APIView):
     }
 )
 class EventStaffAssignmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         try:
@@ -162,6 +165,7 @@ class EventStaffAssignmentDetail(APIView):
     }
 )
 class SessionStaffAssignmentList(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
@@ -211,6 +215,7 @@ class SessionStaffAssignmentList(APIView):
     }
 )
 class SessionStaffAssignmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         try:

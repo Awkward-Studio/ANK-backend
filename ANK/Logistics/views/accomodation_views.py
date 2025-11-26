@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from Logistics.models.accomodation_models import Accommodation, AccommodationField
 from Logistics.serializers.accomodation_serializers import (
@@ -47,6 +48,8 @@ from utils.swagger import (
     }
 )
 class AccommodationList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Accommodation.objects.all()
@@ -105,6 +108,8 @@ class AccommodationList(APIView):
     }
 )
 class AccommodationDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             acc = get_object_or_404(Accommodation, pk=pk)
@@ -158,6 +163,8 @@ class AccommodationDetail(APIView):
     }
 )
 class AccommodationFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = AccommodationField.objects.all()
@@ -203,6 +210,8 @@ class AccommodationFieldList(APIView):
     }
 )
 class AccommodationFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(AccommodationField, pk=pk)

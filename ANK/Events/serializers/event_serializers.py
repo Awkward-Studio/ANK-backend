@@ -73,7 +73,7 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             # Normalize to lowercase
             normalized = value.lower()
             # Check if it's a valid choice
-            valid_choices = ["yes", "no", "maybe", "pending"]
+            valid_choices = ["not_sent", "pending", "yes", "no", "maybe"]
             if normalized not in valid_choices:
                 raise serializers.ValidationError(
                     f"Invalid rsvp_status. Must be one of: {', '.join(valid_choices)}"

@@ -25,13 +25,14 @@ class EventRegistration(models.Model):
     )
     hamper_count = models.PositiveIntegerField(default=0)
     RSVP_CHOICES = [
+        ("not_sent", "Not Sent"),
+        ("pending", "Pending Response"),
         ("yes", "Yes"),
         ("no", "No"),
         ("maybe", "Maybe"),
-        ("pending", "No Response"),
     ]
     rsvp_status = models.CharField(
-        max_length=10, choices=RSVP_CHOICES, default="pending"
+        max_length=10, choices=RSVP_CHOICES, default="not_sent"
     )
     initiated_on = models.DateTimeField(auto_now_add=True)
     responded_on = models.DateTimeField(null=True, blank=True)

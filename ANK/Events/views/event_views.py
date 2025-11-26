@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -69,6 +70,8 @@ from utils.swagger import (
     }
 )
 class EventListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Event.objects.all()
@@ -111,6 +114,8 @@ class EventListCreateView(APIView):
     }
 )
 class EventDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             ev = get_object_or_404(Event, pk=pk)
@@ -164,6 +169,8 @@ class EventDetailView(APIView):
     }
 )
 class EventFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventField.objects.all()
@@ -208,6 +215,8 @@ class EventFieldList(APIView):
     }
 )
 class EventFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventField, pk=pk)
@@ -266,6 +275,8 @@ class EventFieldDetail(APIView):
     }
 )
 class EventRegistrationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventRegistration.objects.all()
@@ -310,6 +321,8 @@ class EventRegistrationListCreateView(APIView):
     }
 )
 class EventRegistrationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
@@ -363,6 +376,8 @@ class EventRegistrationDetailView(APIView):
     }
 )
 class EventRegistrationFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = EventRegistrationField.objects.all()
@@ -408,6 +423,8 @@ class EventRegistrationFieldList(APIView):
     }
 )
 class EventRegistrationFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(EventRegistrationField, pk=pk)
@@ -465,6 +482,8 @@ class EventRegistrationFieldDetail(APIView):
     }
 )
 class ExtraAttendeeListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = ExtraAttendee.objects.all()
@@ -513,6 +532,8 @@ class ExtraAttendeeListCreateView(APIView):
     }
 )
 class ExtraAttendeeDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             extra = get_object_or_404(ExtraAttendee, pk=pk)
@@ -560,6 +581,8 @@ class ExtraAttendeeDetailView(APIView):
     }
 )
 class ExtraAttendeesForRegistrationAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         reg = get_object_or_404(EventRegistration, pk=pk)
         try:
@@ -582,6 +605,8 @@ class ExtraAttendeesForRegistrationAPIView(APIView):
     }
 )
 class EventSessionsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         event = get_object_or_404(Event, pk=pk)
         try:
@@ -604,6 +629,8 @@ class EventSessionsAPIView(APIView):
     }
 )
 class EventRegistrationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             regs = EventRegistration.objects.filter(event_id=pk)
@@ -627,6 +654,8 @@ class EventRegistrationsAPIView(APIView):
     }
 )
 class EventAccommodationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             # Find all registrations and extras for this event
@@ -667,6 +696,8 @@ class EventAccommodationsAPIView(APIView):
     }
 )
 class EventTravelDetailsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             reg_ids = list(
@@ -705,6 +736,8 @@ class EventTravelDetailsAPIView(APIView):
     }
 )
 class EventRegistrationAccommodationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             accos = Accommodation.objects.filter(event_registrations__id=pk)
@@ -730,6 +763,8 @@ class EventRegistrationAccommodationsAPIView(APIView):
     }
 )
 class EventRegistrationTravelDetailsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             travels = TravelDetail.objects.filter(event_registrations__id=pk)
@@ -755,6 +790,8 @@ class EventRegistrationTravelDetailsAPIView(APIView):
     }
 )
 class ExtraAttendeeAccommodationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             accos = Accommodation.objects.filter(extra_attendees__id=pk)
@@ -780,6 +817,8 @@ class ExtraAttendeeAccommodationsAPIView(APIView):
     }
 )
 class ExtraAttendeeTravelDetailsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             travels = TravelDetail.objects.filter(extra_attendees__id=pk)
@@ -805,6 +844,8 @@ class ExtraAttendeeTravelDetailsAPIView(APIView):
     }
 )
 class EventAllAttendeesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /events/{event_pk}/all-attendees/
     Returns a list of all EventRegistrations (with Guest data)
@@ -864,6 +905,8 @@ class EventAllAttendeesAPIView(APIView):
     }
 )
 class EventRegistrationAttendeesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /event-registrations/{registration_pk}/attendees/
     Returns guest info + extra_attendees for this event registration.
@@ -908,6 +951,8 @@ class EventRegistrationAttendeesAPIView(APIView):
     }
 )
 class EventRegistrationSessionRegistrationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /api/event-registrations/{registration_id}/session-registrations/
     Returns all session registrations for the guest in this event registration.
@@ -947,3 +992,4 @@ class EventRegistrationSessionRegistrationsAPIView(APIView):
                 {"detail": "Error fetching session registrations", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+

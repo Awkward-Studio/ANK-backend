@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 
@@ -44,6 +45,8 @@ from utils.swagger import (
     }
 )
 class SessionListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = Session.objects.all()
@@ -88,6 +91,8 @@ class SessionListCreateView(APIView):
     }
 )
 class SessionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             sess = get_object_or_404(Session, pk=pk)
@@ -141,6 +146,8 @@ class SessionDetailView(APIView):
     }
 )
 class SessionFieldList(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = SessionField.objects.all()
@@ -185,6 +192,8 @@ class SessionFieldList(APIView):
     }
 )
 class SessionFieldDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             obj = get_object_or_404(SessionField, pk=pk)
@@ -243,6 +252,8 @@ class SessionFieldDetail(APIView):
     }
 )
 class SessionRegistrationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
         try:
             qs = SessionRegistration.objects.all()
@@ -290,6 +301,8 @@ class SessionRegistrationListCreateView(APIView):
     }
 )
 class SessionRegistrationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             reg = get_object_or_404(SessionRegistration, pk=pk)
@@ -337,6 +350,8 @@ class SessionRegistrationDetailView(APIView):
     }
 )
 class SessionRegistrationsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         try:
             regs = SessionRegistration.objects.filter(session_id=pk)
@@ -357,6 +372,8 @@ class SessionRegistrationsAPIView(APIView):
     }
 )
 class SessionAllAttendeesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /sessions/{session_pk}/all-attendees/
     Returns a list of all SessionRegistrations (with guest data).
@@ -394,6 +411,8 @@ class SessionAllAttendeesAPIView(APIView):
     }
 )
 class SessionRegistrationAttendeesAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     """
     GET /session-registrations/{registration_pk}/attendees/
     Returns guest info for this session registration.
