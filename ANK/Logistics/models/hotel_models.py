@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 import uuid
 from Events.models.event_model import Event
 
@@ -6,12 +7,27 @@ from Events.models.event_model import Event
 class Hotel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    address = models.CharField(max_length=300)
-    country = models.CharField(max_length=100)
-    city = models.CharField(max_length=100)
+    address = models.CharField(max_length=300, null=True, blank=True)
+    country = models.CharField(max_length=100, null=True, blank=True)
+    city = models.CharField(max_length=100, null=True, blank=True)
+    venue_list = models.JSONField(default=list, blank=True)  # Array of strings
+    is_venue = models.BooleanField(default=False, null=True, blank=True)
 
     # class Meta:
     # unique_together = ("name", "city")
+
+    def clean(self):
+        """Prevent venues from having room types."""
+        if self.is_venue and self.pk:
+            # Check if this hotel has any room types
+            if self.room_types.exists():
+                raise ValidationError(
+                    "Cannot mark hotel as venue when it has room types. Remove all room types first."
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} - {self.city}, {self.country}"
@@ -32,6 +48,17 @@ class HotelRoomType(models.Model):
 
     class Meta:
         unique_together = ("hotel", "name")
+
+    def clean(self):
+        """Prevent room types from being added to venues."""
+        if self.hotel and self.hotel.is_venue:
+            raise ValidationError(
+                f"Cannot add room types to '{self.hotel.name}' because it is marked as a venue."
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.name} @ {self.hotel.name} ({self.total_count})"
