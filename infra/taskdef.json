@@ -32,7 +32,7 @@
         },
         {
           "name": "USE_JWT",
-          "value": "false"
+          "value": "true"
         },
         {
           "name": "DJANGO_ALLOWED_HOSTS",
