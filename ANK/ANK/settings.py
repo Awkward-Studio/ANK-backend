@@ -274,19 +274,23 @@ else:
 # ---------------------------
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
-CSRF_COOKIE_DOMAIN = ".anewknot.com"
+
 if DEBUG:
+    # Local development - no domain restrictions, works over HTTP
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = False
-    CSRF_COOKIE_SAMESITE = "None"
-    CSRF_COOKIE_SECURE = True
-    # CSRF_COOKIE_SAMESITE = "Lax"
-    # CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_DOMAIN = None
+    CSRF_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SECURE = False
+    CSRF_COOKIE_DOMAIN = None
 else:
+    # Production - cross-origin support with secure cookies
     SESSION_COOKIE_SAMESITE = "None"
     SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_DOMAIN = None  # Allow CORS origins to receive session cookies
     CSRF_COOKIE_SAMESITE = "None"
     CSRF_COOKIE_SECURE = True
+    CSRF_COOKIE_DOMAIN = ".anewknot.com"
     SECURE_SSL_REDIRECT = False
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 7
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
