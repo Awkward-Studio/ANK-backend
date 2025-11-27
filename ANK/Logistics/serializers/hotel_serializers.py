@@ -17,6 +17,14 @@ class HotelRoomTypeSerializer(serializers.ModelSerializer):
         model = HotelRoomType
         fields = ["id", "name", "total_count", "hotel_id"]
 
+    def validate(self, attrs):
+        hotel = attrs.get("hotel") or getattr(self.instance, "hotel", None)
+        if hotel and hotel.is_venue:
+            raise serializers.ValidationError(
+                f"Cannot add room types to '{hotel.name}' because it is marked as a venue."
+            )
+        return attrs
+
 
 class HotelRoomTypeNestedCreateSerializer(serializers.ModelSerializer):
     """Used only when creating room types inside Hotel.create().
@@ -45,6 +53,8 @@ class HotelSerializer(serializers.ModelSerializer):
             "address",
             "country",
             "city",
+            "venue_list",
+            "is_venue",
             "room_types",  # read-only output
             "room_types_input",  # write-only input (preferred)
         ]
