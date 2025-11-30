@@ -154,14 +154,16 @@ def send_resume_opener(
 
 def within_24h_window(last_inbound) -> bool:
     """
-    Very light window check:
-    Returns True if last_inbound is within 24 hours.
-    You can later switch this to your own logic (e.g., tracking true inbound timestamps).
+    Checks if last_inbound timestamp is within 24 hours.
+    Returns True if last_inbound is within 24 hours, False otherwise.
     """
-    # if not last_inbound:
-    #     return False
-    # return (timezone.now() - last_inbound) <= timedelta(hours=24)
-    return True
+    if not last_inbound:
+        return False
+    
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    return (timezone.now() - last_inbound) <= timedelta(hours=24)
 
 
 def send_choice_buttons(
