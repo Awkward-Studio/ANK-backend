@@ -22,7 +22,7 @@ def serialize_compact(er: EventRegistration) -> dict:
     return {
         "id": str(er.id),
         "event": str(er.event_id),
-        "guest": er.guest_id,
+        "guest": str(er.guest_id),  # Convert UUID to string for WebSocket serialization
         "rsvp_status": er.rsvp_status,
         "estimated_pax": er.estimated_pax,
         "additional_guest_count": er.additional_guest_count,
@@ -36,7 +36,7 @@ def serialize_rsvp_only(er: EventRegistration) -> dict:
     return {
         "id": str(er.id),
         "event": str(er.event_id),
-        "guest": er.guest_id,
+        "guest": str(er.guest_id),  # Convert UUID to string for WebSocket serialization
         "rsvp_status": er.rsvp_status,
     }
 

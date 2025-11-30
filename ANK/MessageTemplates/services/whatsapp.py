@@ -117,6 +117,8 @@ def send_resume_opener(
     Sends the approved 'resume conversation' template with a single quick-reply button.
     The button payload embeds the reg_id: `resume|<reg_uuid>`.
     """
+    logger.warning(f"[WA-SEND-RESUME] TO={to_wa_id} REG={registration_uuid}")
+    
     components = []
     if opener_body_param:
         components.append(
@@ -136,20 +138,25 @@ def send_resume_opener(
         }
     )
 
-    data = _post(
-        "messages",
-        {
-            "messaging_product": "whatsapp",
-            "to": _norm_digits(to_wa_id),
-            "type": "template",
-            "template": {
-                "name": RESUME_TEMPLATE_NAME,
-                "language": {"code": RESUME_TEMPLATE_LANG},
-                "components": components,
-            },
+    template_payload = {
+        "messaging_product": "whatsapp",
+        "to": _norm_digits(to_wa_id),
+        "type": "template",
+        "template": {
+            "name": RESUME_TEMPLATE_NAME,
+            "language": {"code": RESUME_TEMPLATE_LANG},
+            "components": components,
         },
-    )
-    return (data.get("messages") or [{}])[0].get("id", "")
+    }
+    
+    logger.warning(f"[WA-RESUME-PAYLOAD] Template={RESUME_TEMPLATE_NAME}, Components={len(components)}")
+
+    data = _post("messages", template_payload)
+    
+    msg_id = (data.get("messages") or [{}])[0].get("id", "")
+    logger.warning(f"[WA-RESUME-RESPONSE] MessageID={msg_id}")
+    
+    return msg_id
 
 
 def within_24h_window(last_inbound) -> bool:
