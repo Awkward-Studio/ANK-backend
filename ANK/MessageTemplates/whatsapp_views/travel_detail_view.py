@@ -48,6 +48,12 @@ def _norm_digits(s: str) -> str:
     return "".join(ch for ch in (s or "") if ch.isdigit())[-15:]
 
 
+def _update_responded_on(reg: EventRegistration):
+    """Update the responded_on timestamp for a registration when guest interacts."""
+    reg.responded_on = timezone.now()
+    reg.save(update_fields=["responded_on"])
+
+
 def _safe_get_registration(reg_id: str):
     """Return EventRegistration or None. Logs errors safely."""
     if not reg_id:
@@ -175,6 +181,8 @@ def whatsapp_travel_webhook(request):
     # === RESUME ===============================================================
     if kind == "resume":
         logger.warning(f"[RESUME] reg={reg.id} restarting/continuing flow")
+        # Update responded_on when guest resumes conversation
+        _update_responded_on(reg)
         try:
             resume_or_start(reg)
         except Exception as exc:
@@ -232,6 +240,8 @@ def whatsapp_travel_webhook(request):
                 logger.warning(
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
+                # Update responded_on when guest clicks a button
+                _update_responded_on(reg)
                 # Delegate EVERYTHING to the orchestrator
                 apply_button_choice(reg, step, value)
             except Exception as exc:
@@ -244,6 +254,8 @@ def whatsapp_travel_webhook(request):
     # === WAKE ================================================================
     if kind == "wake":
         logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
+        # Update responded_on when guest initiates conversation
+        _update_responded_on(reg)
         try:
             # If session exists and is complete, send update instructions
             if sess and sess.is_complete:
@@ -274,6 +286,9 @@ def whatsapp_travel_webhook(request):
         if not text:
             logger.warning(f"[TEXT] Empty text for reg={reg.id}")
             return JsonResponse({"ok": True}, status=200)
+        
+        # Update responded_on when guest sends a text message
+        _update_responded_on(reg)
 
         # Check for explicit commands FIRST (before any state checks)
         text_lower = text.lower()
