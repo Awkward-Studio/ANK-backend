@@ -23,6 +23,26 @@ class MessageTemplate(models.Model):
     desc = models.TextField(blank=True, null=True)
     is_rsvp_message = models.BooleanField(default=False)
 
+    # New media attachment fields
+    MEDIA_TYPE_CHOICES = [
+        ("image", "Image"),
+        ("video", "Video"),
+        ("document", "Document"),
+    ]
+    media_type = models.CharField(
+        max_length=20,
+        choices=MEDIA_TYPE_CHOICES,
+        null=True,
+        blank=True,
+        help_text="Type of media attached to this template",
+    )
+    media_url = models.URLField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text="WhatsApp media ID or URL",
+    )
+
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
