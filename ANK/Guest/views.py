@@ -288,6 +288,7 @@ class BulkGuestUploadAPIView(APIView):
             with context_manager():
                 for idx, row in enumerate(csv_reader, start=2):  # 2 for header row
                     try:
+                        uid = row.get("UID", "").strip()
                         group = row.get("Guest Group", "").strip()
                         subgroup = row.get("Sub Guest Group", "").strip()
                         salutation = row.get("Salutation", "").strip()
@@ -300,6 +301,14 @@ class BulkGuestUploadAPIView(APIView):
                         city = row.get("City", "").strip()
                         pincode = row.get("Pincode", "").strip()
                         country = row.get("Country", "").strip()
+
+                        # Validation
+                        if not uid:
+                            raise ValueError("UID is required")
+                        if not email:
+                            raise ValueError("Email is required")
+                        if not first_name:
+                            raise ValueError("First Name is required")
 
                         # Sessions for this row
                         # unique_strings_raw = row.get("unique_strings", "") or row.get(
@@ -323,13 +332,27 @@ class BulkGuestUploadAPIView(APIView):
                         # Full Name
                         full_name = f"{first_name} {last_name}".strip()
 
-                        # Will we create a new Guest?
-                        is_new_guest = not Guest.objects.filter(email=email).exists()
-                        if is_new_guest:
-                            guests_created += 1
+                        # Validate field lengths before processing
+                        if len(group) > 20:
+                            raise ValueError(
+                                f"Guest Group '{group}' exceeds maximum length of 20 characters (current: {len(group)})"
+                            )
+                        if len(subgroup) > 20:
+                            raise ValueError(
+                                f"Sub Guest Group '{subgroup}' exceeds maximum length of 20 characters (current: {len(subgroup)})"
+                            )
+                        if len(salutation) > 20:
+                            raise ValueError(
+                                f"Salutation/Title '{salutation}' exceeds maximum length of 20 characters (current: {len(salutation)})"
+                            )
+                        if len(full_name) > 200:
+                            raise ValueError(
+                                f"Name '{full_name}' exceeds maximum length of 200 characters (current: {len(full_name)})"
+                            )
 
                         if not dry_run:
-                            guest, _ = Guest.objects.get_or_create(
+                            # Get or create guest
+                            guest, guest_created = Guest.objects.get_or_create(
                                 email=email,
                                 defaults={
                                     "name": full_name,
@@ -339,16 +362,44 @@ class BulkGuestUploadAPIView(APIView):
                                     "nationality": country,
                                 },
                             )
-                            reg = EventRegistration.objects.create(
-                                guest=guest,
-                                event=event,
-                                guest_group=group,
-                                sub_guest_group=subgroup,
-                                title=salutation,
-                                name_on_message=full_name,
-                                estimated_pax=pax,
-                            )
-                            event_regs_created += 1
+                            if guest_created:
+                                guests_created += 1
+
+                            # Check if registration exists by UID or by guest+event
+                            existing_reg = None
+                            if uid:
+                                existing_reg = EventRegistration.objects.filter(uid=uid).first()
+
+                            if not existing_reg:
+                                existing_reg = EventRegistration.objects.filter(
+                                    guest=guest, event=event
+                                ).first()
+
+                            if existing_reg:
+                                # Update existing registration
+                                existing_reg.uid = uid
+                                existing_reg.guest_group = group
+                                existing_reg.sub_guest_group = subgroup
+                                existing_reg.title = salutation
+                                existing_reg.name_on_message = full_name
+                                existing_reg.estimated_pax = pax
+                                existing_reg.save()
+                            else:
+                                # Create new registration
+                                EventRegistration.objects.create(
+                                    uid=uid,
+                                    guest=guest,
+                                    event=event,
+                                    guest_group=group,
+                                    sub_guest_group=subgroup,
+                                    title=salutation,
+                                    name_on_message=full_name,
+                                    estimated_pax=pax,
+                                )
+                                event_regs_created += 1
+
+                            # Get the registration for extra attendees and session registrations
+                            reg = EventRegistration.objects.get(guest=guest, event=event)
 
                             if create_extra_attendees:
                                 for i in range(pax - 1):
@@ -374,16 +425,50 @@ class BulkGuestUploadAPIView(APIView):
                                 pass
 
                         else:
-                            event_regs_created += 1
+                            # Dry run - count what would be created/updated
+                            is_new_guest = not Guest.objects.filter(email=email).exists()
+                            if is_new_guest:
+                                guests_created += 1
+
+                            # Check if registration exists
+                            existing_reg = None
+                            if uid:
+                                existing_reg = EventRegistration.objects.filter(uid=uid).first()
+
+                            if not existing_reg:
+                                # Try to find by guest email + event
+                                guest = Guest.objects.filter(email=email).first()
+                                if guest:
+                                    existing_reg = EventRegistration.objects.filter(
+                                        guest=guest, event=event
+                                    ).first()
+
+                            if not existing_reg:
+                                event_regs_created += 1
+
                             if create_extra_attendees:
                                 extra_attendees_created += max(pax - 1, 0)
+
                             # For session registrations: Only count if session unique_string matches
                             for unique_str in unique_strings:
                                 if unique_str in sessions_by_unique:
                                     session_regs_created += 1
 
                     except Exception as row_e:
-                        errors.append(f"Row {idx}: {row_e}")
+                        # Create detailed error message with row context
+                        error_context = {
+                            "row": idx,
+                            "uid": row.get("UID", "N/A"),
+                            "name": f"{row.get('First Name', '')} {row.get('Last Name', '')}".strip(),
+                            "email": row.get("Email", "N/A"),
+                            "error": str(row_e),
+                        }
+                        detailed_error = (
+                            f"Row {idx} [UID: {error_context['uid']}, "
+                            f"Name: {error_context['name']}, "
+                            f"Email: {error_context['email']}]: {error_context['error']}"
+                        )
+                        errors.append(detailed_error)
 
                 if dry_run:
                     raise RuntimeError("__dry_run_complete__")

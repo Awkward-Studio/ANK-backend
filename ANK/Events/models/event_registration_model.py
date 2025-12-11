@@ -7,6 +7,7 @@ from Events.models.event_model import Event
 class EventRegistration(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uid = models.CharField(max_length=50, unique=True, blank=True, null=True)
     guest = models.ForeignKey(Guest, on_delete=models.CASCADE)
     event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="registrations"
@@ -38,7 +39,7 @@ class EventRegistration(models.Model):
     responded_on = models.DateTimeField(null=True, blank=True)
 
     # Field to track how many extra attendees
-    additional_guest_count = models.PositiveIntegerField(default=0)
+    additional_guest_count = models.PositiveIntegerField(default=0, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
