@@ -197,23 +197,9 @@ def whatsapp_travel_webhook(request):
         value = (body.get("value") or "").strip()
         btn_id = ""  # Initialize before conditional
 
-        # DEBUG: Send message to confirm webhook received
-        try:
-            send_freeform_text(reg.guest.phone, f"🔍 DEBUG: Button webhook received\nkind={kind}\nreg_id={reg.id}")
-        except Exception:
-            pass
-
         if not (step and value):
             btn_id = (body.get("button_id") or "").strip()
-            
-            # DIAGNOSTIC: Send test message to confirm button click received
             logger.warning(f"[BUTTON-DEBUG] Received button_id: {btn_id!r}")
-            
-            # DEBUG: Send button_id to WhatsApp
-            try:
-                send_freeform_text(reg.guest.phone, f"🔍 DEBUG: Parsing button_id\nbutton_id={btn_id!r}")
-            except Exception:
-                pass
             
             try:
                 parts = btn_id.split("|", 2)
@@ -247,49 +233,19 @@ def whatsapp_travel_webhook(request):
             except Exception:
                 logger.error(f"[BUTTON-ERR] Malformed button_id: {btn_id}")
 
-        # DEBUG: Send parsed step/value
-        try:
-            send_freeform_text(reg.guest.phone, f"🔍 DEBUG: Parsed\nstep={step!r}\nvalue={value!r}")
-        except Exception:
-            pass
-
         if step and value:
             try:
                 logger.warning(
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
-                # Update responded_on when guest clicks a button
-                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "template", btn_id or wa_id, body)
-                
-                # DEBUG: About to call apply_button_choice
-                try:
-                    send_freeform_text(reg.guest.phone, f"🔍 DEBUG: Calling apply_button_choice({step}, {value})")
-                except Exception:
-                    pass
-                
+                # Log inbound button click
+                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "button", btn_id or wa_id, body)
                 # Delegate EVERYTHING to the orchestrator
                 apply_button_choice(reg, step, value)
-                
-                # DEBUG: apply_button_choice completed
-                try:
-                    send_freeform_text(reg.guest.phone, f"✅ DEBUG: apply_button_choice completed!")
-                except Exception:
-                    pass
-                    
             except Exception as exc:
                 logger.exception(f"[BUTTON-EXCEPTION] Failed for reg={reg.id}: {exc}")
-                # DEBUG: Send exception to WhatsApp
-                try:
-                    send_freeform_text(reg.guest.phone, f"❌ DEBUG ERROR: {type(exc).__name__}: {str(exc)[:200]}")
-                except Exception:
-                    pass
         else:
             logger.error(f"[BUTTON] Could not resolve step/value from payload: {body}")
-            # DEBUG: step/value missing
-            try:
-                send_freeform_text(reg.guest.phone, f"❌ DEBUG: Could not resolve step/value!")
-            except Exception:
-                pass
 
         return JsonResponse({"ok": True}, status=200)
 

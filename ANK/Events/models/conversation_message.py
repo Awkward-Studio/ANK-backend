@@ -22,6 +22,7 @@ class ConversationMessage(models.Model):
         ('rsvp', 'RSVP'),
         ('travel', 'Travel'),
         ('system', 'System'),
+        ('button', 'Button'),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -36,8 +37,8 @@ class ConversationMessage(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='sent')
     
-    # WhatsApp specific
-    wa_message_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    # WhatsApp specific - NOT unique since we may not always have actual message IDs
+    wa_message_id = models.CharField(max_length=100, blank=True, null=True)
     template_name = models.CharField(max_length=100, blank=True, null=True)
     
     # Generic metadata
