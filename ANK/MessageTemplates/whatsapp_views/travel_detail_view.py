@@ -195,6 +195,7 @@ def whatsapp_travel_webhook(request):
         #  2) Standard: {"button_id": "tc|step|value"}
         step = (body.get("step") or "").strip()
         value = (body.get("value") or "").strip()
+        btn_id = ""  # Initialize before conditional
 
         # DEBUG: Send message to confirm webhook received
         try:

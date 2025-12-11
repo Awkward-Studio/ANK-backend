@@ -28,6 +28,7 @@ from MessageTemplates.services.whatsapp import (
     send_freeform_text,
     send_choice_buttons,
 )
+from Events.services.message_logger import MessageLogger
 
 logger = logging.getLogger("whatsapp")
 
@@ -467,55 +468,59 @@ def resume_or_start(reg: EventRegistration) -> None:
 def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
     """
     Internal helper: send exactly ONE WA message for this step.
+    Uses MessageLogger wrappers for automatic logging.
     """
-    phone = reg.guest.phone
-    logger.warning(f"[PROMPT] Sending step '{step}' to {phone}")
+    logger.warning(f"[PROMPT] Sending step '{step}' to {reg.guest.phone}")
 
     # Buttons for choice steps
     if step == "travel_type":
-        send_choice_buttons(
-            phone,
+        MessageLogger.send_buttons(
+            reg,
             PROMPTS["travel_type"],
             [
                 {"id": "tc|travel_type|Air", "title": "Air"},
                 {"id": "tc|travel_type|Train", "title": "Train"},
                 {"id": "tc|travel_type|Car", "title": "Car"},
             ],
+            "travel"
         )
         return
 
     if step == "arrival":
-        send_choice_buttons(
-            phone,
+        MessageLogger.send_buttons(
+            reg,
             PROMPTS["arrival"],
             [
                 {"id": "tc|arrival|commercial", "title": "Commercial"},
                 {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
                 {"id": "tc|arrival|self", "title": "Self"},
             ],
+            "travel"
         )
         return
 
     if step == "return_travel":
-        send_choice_buttons(
-            phone,
+        MessageLogger.send_buttons(
+            reg,
             PROMPTS["return_travel"],
             [
                 {"id": "tc|return_travel|yes", "title": "Yes"},
                 {"id": "tc|return_travel|no", "title": "No"},
             ],
+            "travel"
         )
         return
 
     if step == "departure":
-        send_choice_buttons(
-            phone,
+        MessageLogger.send_buttons(
+            reg,
             PROMPTS["departure"],
             [
                 {"id": "tc|departure|commercial", "title": "Commercial"},
                 {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
                 {"id": "tc|departure|self", "title": "Self"},
             ],
+            "travel"
         )
         return
 
@@ -549,17 +554,18 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
             "How many of them are traveling with you on this journey?"
         )
         
-        send_choice_buttons(phone, msg, buttons)
+        MessageLogger.send_buttons(reg, msg, buttons, "travel")
         return
 
     # Optional steps with Skip button
     if step in OPTIONAL_STEPS:
         td = _get_or_create_detail(reg)
         text = _get_prompt_text(step, td.travel_type)
-        send_choice_buttons(
-            phone,
+        MessageLogger.send_buttons(
+            reg,
             text,
             [{"id": f"tc|{step}|__skip__", "title": "⏭️ Skip"}],
+            "travel"
         )
         return
 
@@ -567,7 +573,7 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
     # Use dynamic prompt text
     td = _get_or_create_detail(reg)
     text = _get_prompt_text(step, td.travel_type)
-    send_freeform_text(phone, text)
+    MessageLogger.send_text(reg, text, "travel")
 
 
 def send_next_prompt(reg: EventRegistration) -> None:
@@ -591,7 +597,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
         # Final message, then mark complete
         try:
             logger.warning(f"[PROMPT] Sending DONE to {reg.guest.phone}")
-            send_freeform_text(reg.guest.phone, PROMPTS["done"])
+            MessageLogger.send_text(reg, PROMPTS["done"], "travel")
         except Exception:
             logger.exception("[ERROR] Failed to send DONE message on WhatsApp")
             # Even if WA fails, mark as complete — data is there
@@ -709,10 +715,11 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             sess.save(update_fields=["step", "state"])
             
             try:
-                send_freeform_text(
-                    reg.guest.phone,
+                MessageLogger.send_text(
+                    reg,
                     "👥 How many people will be attending (including yourself)?\n\n"
-                    "Please reply with a number."
+                    "Please reply with a number.",
+                    "travel"
                 )
                 logger.info(f"Sent pax count prompt to {reg.guest.phone}")
             except Exception as e:
@@ -727,16 +734,16 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
         elif step == "update_rsvp_menu":
             # User wants to update RSVP - show RSVP buttons
             logger.warning(f"[BUTTON] User {reg.id} wants to update RSVP")
-            from MessageTemplates.services.whatsapp import send_choice_buttons
             event_name = reg.event.name if reg.event else "the event"
-            send_choice_buttons(
-                reg.guest.phone,
+            MessageLogger.send_buttons(
+                reg,
                 f"Will you be attending {event_name}? 🎉",
                 [
                     {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
                     {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
                     {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
-                ]
+                ],
+                "rsvp"
             )
             return
 
@@ -886,33 +893,36 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                             f"• Status: Confirmed\n\n"
                             "We're looking forward to seeing you! 🎉"
                         )
-                        send_choice_buttons(
-                            reg.guest.phone,
+                        MessageLogger.send_buttons(
+                            reg,
                             msg_body,
                             [
                                 {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Provide Travel Details"}
-                            ]
+                            ],
+                            "rsvp"
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send confirmation: {exc}")
                 
                 elif status == "no":
                     try:
-                        send_freeform_text(
-                            reg.guest.phone,
+                        MessageLogger.send_text(
+                            reg,
                             "Thank you for letting us know.\n\n"
                             "Your RSVP has been updated to: Not Attending ❌\n\n"
-                            "We hope to see you at future events!"
+                            "We hope to see you at future events!",
+                            "rsvp"
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send decline confirmation: {exc}")
                 
                 elif status == "maybe":
                     try:
-                        send_freeform_text(
-                            reg.guest.phone,
+                        MessageLogger.send_text(
+                            reg,
                             "No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
-                            "Please let us know when you decide!"
+                            "Please let us know when you decide!",
+                            "rsvp"
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send maybe confirmation: {exc}")
@@ -1204,12 +1214,13 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         f"{'person' if count == 1 else 'people'}.\n\n"
                         "Would you like to provide travel details?"
                     )
-                    send_choice_buttons(
-                        reg.guest.phone,
+                    MessageLogger.send_buttons(
+                        reg,
                         confirmation,
                         [
                             {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Yes, Add Travel Info"}
-                        ]
+                        ],
+                        "travel"
                     )
                     logger.info(f"Updated estimated_pax to {count} for reg {reg.id}")
                 except Exception as e:
@@ -1433,7 +1444,7 @@ def send_travel_update_menu(reg: EventRegistration) -> None:
     ]
     
     try:
-        send_choice_buttons(reg.guest.phone, message, buttons)
+        MessageLogger.send_buttons(reg, message, buttons, "travel")
         logger.warning(f"[UPDATE-MENU] Sent travel summary menu to {reg.guest.phone}")
     except Exception as exc:
         logger.exception(f"[UPDATE-MENU] Failed to send menu: {exc}")
@@ -1445,10 +1456,11 @@ def start_section_update(reg: EventRegistration, section: str) -> None:
     """
     if section == "done":
         # User confirmed all details are correct
-        send_freeform_text(
-            reg.guest.phone,
+        MessageLogger.send_text(
+            reg,
             "✅ Perfect! Your travel details have been saved.\n\n"
-            "We look forward to seeing you! 🎉"
+            "We look forward to seeing you! 🎉",
+            "travel"
         )
         return
     
