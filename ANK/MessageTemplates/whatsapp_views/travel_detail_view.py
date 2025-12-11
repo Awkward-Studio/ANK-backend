@@ -118,7 +118,7 @@ def _send_post_rsvp_options(reg: EventRegistration):
         }
     ]
     
-    send_choice_buttons(reg.guest.phone, message, buttons)
+    MessageLogger.send_buttons(reg, message, buttons, "rsvp")
     logger.info(f"[POST-RSVP] Sent options to registration {reg.id}")
 
 
@@ -170,7 +170,7 @@ def whatsapp_travel_webhook(request):
     # Check this early for all message types except resume
     if kind != "resume" and not within_24h_window(reg.responded_on):
         logger.warning(f"[24H] Out-of-window for {reg.id} → sending RESUME_OPENER")
-        send_resume_opener(reg.guest.phone, str(reg.id))
+        MessageLogger.send_resume_template(reg)
         return JsonResponse({"ok": True}, status=200)
 
     # -------------------------
@@ -266,7 +266,7 @@ def whatsapp_travel_webhook(request):
                     "• Reply *rsvp* to change your RSVP status\n"
                     "• Reply *travel* to update travel details"
                 )
-                send_freeform_text(reg.guest.phone, message)
+                MessageLogger.send_text(reg, message, "system")
                 return JsonResponse({"ok": True}, status=200)
 
             # If session exists but incomplete, resume
@@ -296,11 +296,12 @@ def whatsapp_travel_webhook(request):
         if any(x in text_lower for x in ["update", "change", "modify", "menu"]):
             logger.warning(f"[TEXT-TRIGGER] User asked for update menu: '{text}'")
             try:
-                send_freeform_text(
-                    reg.guest.phone,
+                MessageLogger.send_text(
+                    reg,
                     "To make changes, please reply with:\n\n"
                     "• *rsvp* - to update your RSVP status\n"
-                    "• *travel* - to update your travel details"
+                    "• *travel* - to update your travel details",
+                    "system"
                 )
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending update menu: {exc}")
@@ -311,14 +312,15 @@ def whatsapp_travel_webhook(request):
             logger.warning(f"[TEXT-TRIGGER] User triggered RSVP update: '{text}'")
             try:
                 event_name = reg.event.name if reg.event else "the event"
-                send_choice_buttons(
-                    reg.guest.phone,
+                MessageLogger.send_buttons(
+                    reg,
                     f"Will you be attending {event_name}? 🎉",
                     [
                         {"id": f"tc|rsvp_yes|{reg.id}", "title": "✅ Yes"},
                         {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
                         {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
-                    ]
+                    ],
+                    "rsvp"
                 )
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending RSVP buttons: {exc}")
@@ -350,7 +352,7 @@ def whatsapp_travel_webhook(request):
                     "• Reply *rsvp* to change your RSVP status\n"
                     "• Reply *travel* to update travel details"
                 )
-                send_freeform_text(reg.guest.phone, message)
+                MessageLogger.send_text(reg, message, "system")
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending instructions: {exc}")
             return JsonResponse({"ok": True}, status=200)
@@ -365,7 +367,7 @@ def whatsapp_travel_webhook(request):
         # Always send the textual reply (either next prompt or validation error)
         if reply_text:
             try:
-                send_freeform_text(reg.guest.phone, reply_text)
+                MessageLogger.send_text(reg, reply_text, "travel")
             except Exception as exc:
                 logger.exception(
                     f"[TEXT-SEND-ERR] Failed sending message to {reg.id}: {exc}"
