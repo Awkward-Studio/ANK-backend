@@ -242,8 +242,18 @@ def whatsapp_rsvp(request):
 
     # Update RSVP with normalized status (title case)
     er.rsvp_status = normalized_status  # "Maybe" instead of "maybe"
-    er.responded_on = responded_on
-    er.save(update_fields=["rsvp_status", "responded_on"])
+    # er.responded_on is updated via MessageLogger
+    er.save(update_fields=["rsvp_status"])
+
+    # Log inbound message
+    from Events.services.message_logger import MessageLogger
+    MessageLogger.log_inbound(
+        event_registration=er,
+        content=f"RSVP: {normalized_status}",
+        message_type="rsvp",
+        wa_message_id=body.get("wa_id", ""), # Best effort if available here
+        metadata=body
+    )
 
     log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 

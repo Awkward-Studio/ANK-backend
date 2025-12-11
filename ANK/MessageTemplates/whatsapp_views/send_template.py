@@ -15,8 +15,10 @@ from MessageTemplates.utils import render_template_with_vars
 from MessageTemplates.services.whatsapp import (
     send_freeform_text,
     send_resume_opener,
+    send_resume_opener,
     within_24h_window,
 )
+from Events.services.message_logger import MessageLogger
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,10 @@ class SendLocalTemplateView(APIView):
             # Send immediately (free-form)
             try:
                 msg_id = send_freeform_text(to_wa, text)
+                
+                # Log outbound
+                MessageLogger.log_outbound(reg, text, msg_id, "content", tmpl.name)
+                
                 return Response(
                     {"ok": True, "status": "sent", "message_id": msg_id},
                     status=status.HTTP_200_OK,
@@ -119,6 +125,10 @@ class SendLocalTemplateView(APIView):
                 variables.get("guest_name") or getattr(reg.guest, "name", "") or "Guest"
             )
             opener_id = send_resume_opener(to_wa, str(reg.id))
+            
+            # Log opener
+            MessageLogger.log_outbound(reg, "Resume Conversation Template", opener_id, "template", "resume_conversation")
+
             return Response(
                 {"ok": True, "status": "queued", "opener_message_id": opener_id},
                 status=status.HTTP_200_OK,
