@@ -278,6 +278,10 @@ def whatsapp_rsvp(request):
                 {
                     "id": f"tc|update_rsvp_menu|{er.id}",
                     "title": "Update RSVP"
+                },
+                {
+                    "id": f"tc|remind_later|{er.id}",
+                    "title": "Remind Me Later"
                 }
             ]
             MsgLogger.send_buttons(er, message, buttons, "rsvp")

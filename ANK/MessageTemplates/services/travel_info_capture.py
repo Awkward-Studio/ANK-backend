@@ -594,10 +594,20 @@ def send_next_prompt(reg: EventRegistration) -> None:
         return
 
     if step == "done":
-        # Final message, then mark complete
+        # Final message with buttons, then mark complete
         try:
             logger.warning(f"[PROMPT] Sending DONE to {reg.guest.phone}")
-            MessageLogger.send_text(reg, PROMPTS["done"], "travel")
+            MessageLogger.send_buttons(
+                reg,
+                "✅ All done! Your travel details have been saved.\n\n"
+                "We look forward to seeing you! 🎉\n\n"
+                "Need to make changes?",
+                [
+                    {"id": f"tc|start_travel|{reg.id}", "title": "Edit Travel Details"},
+                    {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
+                ],
+                "travel"
+            )
         except Exception:
             logger.exception("[ERROR] Failed to send DONE message on WhatsApp")
             # Even if WA fails, mark as complete — data is there
@@ -1478,10 +1488,14 @@ def start_section_update(reg: EventRegistration, section: str) -> None:
     """
     if section == "done":
         # User confirmed all details are correct
-        MessageLogger.send_text(
+        MessageLogger.send_buttons(
             reg,
             "✅ Perfect! Your travel details have been saved.\n\n"
             "We look forward to seeing you! 🎉",
+            [
+                {"id": f"tc|start_travel|{reg.id}", "title": "Edit Travel Details"},
+                {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
+            ],
             "travel"
         )
         return
