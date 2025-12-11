@@ -110,11 +110,11 @@ def _send_post_rsvp_options(reg: EventRegistration):
     buttons = [
         {
             "id": f"tc|start_travel|{reg.id}",
-            "title": "✈️ Provide Travel Details"
+            "title": "Add Travel Details"
         },
         {
             "id": f"tc|update_rsvp_menu|{reg.id}",
-            "title": "🔄 Update RSVP"
+            "title": "Update RSVP"
         },
         {
             "id": f"tc|remind_later|{reg.id}",
