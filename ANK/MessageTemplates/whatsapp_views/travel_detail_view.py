@@ -181,7 +181,7 @@ def whatsapp_travel_webhook(request):
     if kind == "resume":
         logger.warning(f"[RESUME] reg={reg.id} restarting/continuing flow")
         # Update responded_on when guest resumes conversation
-        _update_responded_on(reg)
+        MessageLogger.log_inbound(reg, "Resume / Continue", "system", wa_id, body)
         try:
             resume_or_start(reg)
         except Exception as exc:
