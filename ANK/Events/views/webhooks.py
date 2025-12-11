@@ -259,7 +259,7 @@ def whatsapp_rsvp(request):
 
     # Send immediate WhatsApp confirmation with next steps
     try:
-        from MessageTemplates.services.whatsapp import send_choice_buttons, send_freeform_text
+        from Events.services.message_logger import MessageLogger as MsgLogger
         
         event_name = er.event.name if er.event else "the event"
         
@@ -280,7 +280,7 @@ def whatsapp_rsvp(request):
                     "title": "🔄 Update RSVP"
                 }
             ]
-            send_choice_buttons(er.guest.phone, message, buttons)
+            MsgLogger.send_buttons(er, message, buttons, "rsvp")
             log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
             
         elif normalized_status == "No":
@@ -290,7 +290,7 @@ def whatsapp_rsvp(request):
                 f"Your RSVP has been updated to: Not Attending ❌\n\n"
                 "We hope to see you at future events!"
             )
-            send_freeform_text(er.guest.phone, message)
+            MsgLogger.send_text(er, message, "rsvp")
             log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
             
         elif normalized_status == "Maybe":
@@ -299,7 +299,7 @@ def whatsapp_rsvp(request):
                 f"No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
                 "Please let us know when you decide!"
             )
-            send_freeform_text(er.guest.phone, message)
+            MsgLogger.send_text(er, message, "rsvp")
             log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
             
     except Exception as msg_err:
