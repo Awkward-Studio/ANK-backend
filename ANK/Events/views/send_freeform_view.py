@@ -57,6 +57,17 @@ class SendFreeformMessageView(APIView):
         try:
             wa_message_id = send_freeform_text(phone, message)
 
+            # Pause any active travel session so user replies aren't treated as travel answers
+            try:
+                from Logistics.models.travel_detail_capture_session import TravelCaptureSession
+                session = TravelCaptureSession.objects.filter(registration=reg).first()
+                if session and not session.is_complete and session.step:
+                    logger.info(f"[FREEFORM] Pausing travel session for reg {reg.id} (was at step {session.step})")
+                    session.step = ""  # Clear step to pause the flow
+                    session.save(update_fields=["step"])
+            except Exception as pause_exc:
+                logger.warning(f"[FREEFORM] Failed to pause session: {pause_exc}")
+
             # Log outbound message
             MessageLogger.log_outbound(
                 event_registration=reg,

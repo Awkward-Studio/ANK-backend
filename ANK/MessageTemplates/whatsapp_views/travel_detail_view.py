@@ -295,15 +295,18 @@ def whatsapp_travel_webhook(request):
         # Check for explicit commands FIRST (before any state checks)
         text_lower = text.lower()
         
-        # "update" / "menu" - shows instructions
+        # "update" / "menu" - shows menu buttons
         if any(x in text_lower for x in ["update", "change", "modify", "menu"]):
             logger.warning(f"[TEXT-TRIGGER] User asked for update menu: '{text}'")
             try:
-                MessageLogger.send_text(
+                MessageLogger.send_buttons(
                     reg,
-                    "To make changes, please reply with:\n\n"
-                    "• *rsvp* - to update your RSVP status\n"
-                    "• *travel* - to update your travel details",
+                    "What would you like to do? 📋",
+                    [
+                        {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Update Travel"},
+                        {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "🔄 Update RSVP"},
+                        {"id": f"tc|remind_later|{reg.id}", "title": "⏰ Remind Later"},
+                    ],
                     "system"
                 )
             except Exception as exc:
@@ -343,14 +346,16 @@ def whatsapp_travel_webhook(request):
             logger.warning(f"[TEXT-TRIGGER] User sent greeting/help: '{text}'")
             try:
                 if sess and not sess.is_complete:
-                    # Active session - remind them what we're asking
-                    MessageLogger.send_text(
+                    # Active session - send buttons to continue or change
+                    MessageLogger.send_buttons(
                         reg,
                         "👋 Hi there! You're currently providing your travel details.\n\n"
-                        "Please respond to the question above, or type:\n"
-                        "• *menu* - to see all options\n"
-                        "• *rsvp* - to change your RSVP\n"
-                        "• *travel* - to restart travel details",
+                        "What would you like to do?",
+                        [
+                            {"id": f"tc|continue_flow|{reg.id}", "title": "▶️ Continue"},
+                            {"id": f"tc|start_travel|{reg.id}", "title": "🔄 Restart Travel"},
+                            {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "📝 Update RSVP"},
+                        ],
                         "system"
                     )
                 else:
@@ -370,13 +375,16 @@ def whatsapp_travel_webhook(request):
             logger.warning(f"[TEXT] Registration={reg.id} session complete; sending instructions for '{text}'")
             try:
                 event_name = f" for {reg.event.name}" if reg.event else ""
-                message = (
+                MessageLogger.send_buttons(
+                    reg,
                     f"✅ Thank you! We've already received your details{event_name}.\n\n"
-                    "If you need to update anything:\n"
-                    "• Reply *rsvp* to change your RSVP status\n"
-                    "• Reply *travel* to update travel details"
+                    "What would you like to do?",
+                    [
+                        {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Update Travel"},
+                        {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "🔄 Update RSVP"},
+                    ],
+                    "system"
                 )
-                MessageLogger.send_text(reg, message, "system")
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending instructions: {exc}")
             return JsonResponse({"ok": True}, status=200)
