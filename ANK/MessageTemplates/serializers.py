@@ -40,6 +40,8 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             "desc",
             "is_rsvp_message",
             "variables",
+            "media_type",
+            "media_url",
             "created_at",
             "updated_at",
         ]
@@ -63,6 +65,8 @@ class MessageTemplateWriteSerializer(serializers.ModelSerializer):
             "desc",
             "is_rsvp_message",
             "variables",
+            "media_type",
+            "media_url",
         ]
 
     @staticmethod
