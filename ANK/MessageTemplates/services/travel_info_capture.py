@@ -759,6 +759,12 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             )
             return
 
+        elif step == "continue_flow":
+            # User wants to continue the current flow - resend the current step prompt
+            logger.warning(f"[BUTTON] User {reg.id} chose to continue flow")
+            send_next_prompt(reg)
+            return
+
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
