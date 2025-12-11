@@ -273,11 +273,11 @@ def whatsapp_rsvp(request):
             buttons = [
                 {
                     "id": f"tc|start_travel|{er.id}",
-                    "title": "✈️ Provide Travel Details"
+                    "title": "Add Travel Details"
                 },
                 {
                     "id": f"tc|update_rsvp_menu|{er.id}",
-                    "title": "🔄 Update RSVP"
+                    "title": "Update RSVP"
                 }
             ]
             MsgLogger.send_buttons(er, message, buttons, "rsvp")
