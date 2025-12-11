@@ -1,0 +1,44 @@
+# ===========================================
+# terraform.tfvars.example
+# ===========================================
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to version control!
+
+# General
+project_name = "ank"
+environment  = "prod"
+aws_region   = "ap-south-1"
+
+# Networking
+availability_zone   = "ap-south-1a"
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidr  = "10.0.1.0/24"
+private_subnet_cidr = "10.0.2.0/24"
+
+# Database
+db_name              = "ankdb"
+db_username          = "admin"     # Change this!
+db_password          = "CHANGEME"   # Change this!
+db_instance_class    = "db.t3.micro"
+db_allocated_storage = 20
+db_engine_version    = "15.4"
+
+# ECS
+ecs_task_cpu       = "256"
+ecs_task_memory    = "512"
+ecs_desired_count  = 1
+container_port     = 8000
+docker_image       = ""  # Will be set after ECR push
+
+# ECR
+ecr_repository_name = "ank-backend"
+
+# Load Balancer
+health_check_path = "/health"  # Adjust based on your app
+certificate_arn   = ""          # Optional: Add ACM cert ARN for HTTPS
+
+# Secrets (optional)
+additional_secrets = {
+  # "DJANGO_SECRET_KEY" = "your-secret-key-here"
+  # "MANGO_RSVP_SEC"    = "your-api-secret-here"
+}
