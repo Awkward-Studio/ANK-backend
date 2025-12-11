@@ -58,6 +58,7 @@ from Events.views.staff_event_fields_permissions_views import (
 
 from Events.views.webhooks import whatsapp_rsvp
 from Events.views.conversation_views import ConversationHistoryView, ServiceWindowStatusView
+from Events.views.send_freeform_view import SendFreeformMessageView
 
 urlpatterns = [
     # ─── Conversation Components ───────────────────────────────────────────
@@ -70,6 +71,11 @@ urlpatterns = [
         "events/<uuid:event_id>/registrations/<uuid:registration_id>/service-window/",
         ServiceWindowStatusView.as_view(),
         name="registration-service-window",
+    ),
+    path(
+        "events/<uuid:event_id>/registrations/<uuid:registration_id>/send-freeform/",
+        SendFreeformMessageView.as_view(),
+        name="send-freeform-message",
     ),
     # ─── Events ────────────────────────────────────────────────────────────
     path("events/", EventListCreateView.as_view(), name="event-list"),
