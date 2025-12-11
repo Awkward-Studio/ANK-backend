@@ -115,6 +115,10 @@ def _send_post_rsvp_options(reg: EventRegistration):
         {
             "id": f"tc|update_rsvp_menu|{reg.id}",
             "title": "🔄 Update RSVP"
+        },
+        {
+            "id": f"tc|remind_later|{reg.id}",
+            "title": "⏰ Remind Me Later"
         }
     ]
     
@@ -332,6 +336,27 @@ def whatsapp_travel_webhook(request):
                 start_capture_after_opt_in(reg, restart=True)
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed starting travel flow: {exc}")
+            return JsonResponse({"ok": True}, status=200)
+        
+        # Greetings or "help" / "hi" / "hello" - send a friendly menu
+        if any(x in text_lower for x in ["help", "hi", "hello", "hey", "namaste", "hii", "hiii"]):
+            logger.warning(f"[TEXT-TRIGGER] User sent greeting/help: '{text}'")
+            try:
+                if sess and not sess.is_complete:
+                    # Active session - remind them what we're asking
+                    MessageLogger.send_text(
+                        reg,
+                        "👋 Hi there! You're currently providing your travel details.\n\n"
+                        "Please respond to the question above, or type:\n"
+                        "• *menu* - to see all options\n"
+                        "• *rsvp* - to change your RSVP\n"
+                        "• *travel* - to restart travel details",
+                        "system"
+                    )
+                else:
+                    _send_post_rsvp_options(reg)
+            except Exception as exc:
+                logger.exception(f"[TEXT-ERR] Failed sending greeting response: {exc}")
             return JsonResponse({"ok": True}, status=200)
 
         # If no session exists and not a command, send post-RSVP options

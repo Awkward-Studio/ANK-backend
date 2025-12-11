@@ -747,6 +747,18 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             )
             return
 
+        elif step == "remind_later":
+            # User wants to be reminded later - just acknowledge and stop the flow
+            logger.warning(f"[BUTTON] User {reg.id} chose remind later")
+            MessageLogger.send_text(
+                reg,
+                "No problem! 👍\n\n"
+                "We'll remind you later to provide your travel details.\n\n"
+                "Whenever you're ready, just message us or tap the button in your previous message.",
+                "system"
+            )
+            return
+
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
             # If changing type, reset arrival + air fields to force re-ask
             if td.travel_type != raw_value:
@@ -977,10 +989,11 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             val = _choice(t, TRAVEL_TYPE_CHOICES)
             if not val:
                 return (
-                    f"I didn't understand '{t}' as a travel type. 🤔\n\n"
-                    "Please choose one of these options:\n"
+                    "I'm not sure what you mean. 🤔\n\n"
+                    "Please choose how you'll be traveling:\n"
                     "• Tap a button above, OR\n"
-                    "• Reply with: *Air*, *Train*, or *Car*",
+                    "• Reply with: *Air*, *Train*, or *Car*\n\n"
+                    "Or type *menu* to see other options.",
                     False
                 )
             td.travel_type = val
@@ -990,10 +1003,11 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             val = _choice(t, ARRIVAL_CHOICES)
             if not val:
                 return (
-                    f"I didn't understand '{t}' as an arrival option. 🤔\n\n"
-                    "Please choose one of these:\n"
+                    "I'm not sure what you mean. 🤔\n\n"
+                    "Please choose your arrival preference:\n"
                     "• Tap a button above, OR\n"
-                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*",
+                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*\n\n"
+                    "Or type *menu* to see other options.",
                     False,
                 )
             td.arrival = val
@@ -1003,10 +1017,11 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             b = _yn(t)
             if b is None:
                 return (
-                    f"I didn't understand '{t}' as a yes/no answer. 🤔\n\n"
-                    "Please let me know:\n"
+                    "I'm not sure what you mean. 🤔\n\n"
+                    "Will you need return travel?\n"
                     "• Tap a button above, OR\n"
-                    "• Reply with: *Yes* or *No*",
+                    "• Reply with: *Yes* or *No*\n\n"
+                    "Or type *menu* to see other options.",
                     False
                 )
             td.return_travel = b
@@ -1019,10 +1034,11 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             val = _choice(t, ARRIVAL_CHOICES)
             if not val:
                 return (
-                    f"I didn't understand '{t}' as a departure option. 🤔\n\n"
-                    "Please choose one of these:\n"
+                    "I'm not sure what you mean. 🤔\n\n"
+                    "Please choose your departure preference:\n"
                     "• Tap a button above, OR\n"
-                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*",
+                    "• Reply with: *Commercial*, *Local Pickup*, or *Self*\n\n"
+                    "Or type *menu* to see other options.",
                     False,
                 )
             td.departure = val
