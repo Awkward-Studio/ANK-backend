@@ -40,6 +40,7 @@ from MessageTemplates.services.travel_info_capture import (
     get_fallback_message,
     start_capture_after_opt_in,
 )
+from Events.services.message_logger import MessageLogger
 
 logger = logging.getLogger("whatsapp")
 
@@ -48,10 +49,8 @@ def _norm_digits(s: str) -> str:
     return "".join(ch for ch in (s or "") if ch.isdigit())[-15:]
 
 
-def _update_responded_on(reg: EventRegistration):
-    """Update the responded_on timestamp for a registration when guest interacts."""
-    reg.responded_on = timezone.now()
-    reg.save(update_fields=["responded_on"])
+
+# _update_responded_on REMOVED - replaced by MessageLogger
 
 
 def _safe_get_registration(reg_id: str):
@@ -241,7 +240,7 @@ def whatsapp_travel_webhook(request):
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
                 # Update responded_on when guest clicks a button
-                _update_responded_on(reg)
+                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "template", btn_id or wa_id, body)
                 # Delegate EVERYTHING to the orchestrator
                 apply_button_choice(reg, step, value)
             except Exception as exc:
@@ -255,7 +254,7 @@ def whatsapp_travel_webhook(request):
     if kind == "wake":
         logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
         # Update responded_on when guest initiates conversation
-        _update_responded_on(reg)
+        MessageLogger.log_inbound(reg, "Wake / Init", "system", wa_id, body)
         try:
             # If session exists and is complete, send update instructions
             if sess and sess.is_complete:
@@ -288,7 +287,7 @@ def whatsapp_travel_webhook(request):
             return JsonResponse({"ok": True}, status=200)
         
         # Update responded_on when guest sends a text message
-        _update_responded_on(reg)
+        MessageLogger.log_inbound(reg, text, "content", wa_id, body)
 
         # Check for explicit commands FIRST (before any state checks)
         text_lower = text.lower()
