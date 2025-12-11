@@ -16,14 +16,14 @@ class EventRegistration(models.Model):
     name_on_message = models.CharField(max_length=200, blank=True, null=True)
     family_salutation = models.CharField(max_length=100, blank=True, null=True)
     title = models.CharField(max_length=20, blank=True, null=True)
-    estimated_pax = models.PositiveIntegerField(default=1)
+    estimated_pax = models.PositiveIntegerField(default=1, blank=True, null=True)
     visa_oci = models.FileField(
         upload_to="guest_visas/",
         blank=True,
         null=True,
         help_text="Upload visa/OCI document",
     )
-    hamper_count = models.PositiveIntegerField(default=0)
+    hamper_count = models.PositiveIntegerField(default=0, blank=True, null=True)
     RSVP_CHOICES = [
         ("not_sent", "Not Sent"),
         ("pending", "Pending Response"),
