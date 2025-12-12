@@ -42,12 +42,18 @@ class EventRegistrationFieldSerializer(serializers.ModelSerializer):
 class EventRegistrationSerializer(serializers.ModelSerializer):
     guest = GuestSerializer(read_only=True)
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
+    guest_id = serializers.PrimaryKeyRelatedField(
+        queryset=Guest.objects.all(), 
+        source='guest',       # content of guest_id saves to 'guest' field
+        write_only=True       # used only for input, not output
+    )
 
     class Meta:
         model = EventRegistration
         fields = [
             "id",
             "guest",
+            "guest_id",
             "event",
             "rsvp_status",
             "initiated_on",
