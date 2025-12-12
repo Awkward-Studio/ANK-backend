@@ -6,7 +6,7 @@ from Events.models.event_registration_model import (
     EventRegistrationField,
     ExtraAttendee,
 )
-
+from Guest.models import Guest
 
 class EventSerializer(serializers.ModelSerializer):
     class Meta:
