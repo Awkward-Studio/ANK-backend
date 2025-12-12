@@ -15,17 +15,18 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-from django.http import HttpResponse, JsonResponse
 from django.contrib import admin
-from django.urls import path, include
+from django.http import HttpResponse, JsonResponse
+from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
-from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
-from ANK.csrf import csrf
 from Events.views.webhooks import resolve_wa, track_send, whatsapp_rsvp
+from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
+
+from ANK.csrf import csrf
 
 
 def healthz(_):
@@ -47,6 +48,7 @@ urlpatterns = [
     path("api/", include("MessageTemplates.urls")),
     path("api/", include("Departments.urls")),
     path("api/", include("utilities.urls")),
+    path("api/", include("CustomField.urls")),
     # API schema generation (raw OpenAPI)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     # Swagger UI

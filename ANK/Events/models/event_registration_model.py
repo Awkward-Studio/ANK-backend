@@ -1,11 +1,14 @@
 import uuid
+
+from CustomField.models import CustomFieldValue
+from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 from Guest.models import Guest
+
 from Events.models.event_model import Event
 
 
 class EventRegistration(models.Model):
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     uid = models.CharField(max_length=50, unique=True, blank=True, null=True)
     guest = models.ForeignKey(Guest, on_delete=models.CASCADE)
@@ -39,9 +42,19 @@ class EventRegistration(models.Model):
     responded_on = models.DateTimeField(null=True, blank=True)
 
     # Field to track how many extra attendees
-    additional_guest_count = models.PositiveIntegerField(default=0, null=True, blank=True)
+    additional_guest_count = models.PositiveIntegerField(
+        default=0, null=True, blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Dynamic custom fields support
+    custom_field_values = GenericRelation(
+        CustomFieldValue,
+        content_type_field="content_type",
+        object_id_field="object_id",
+        related_query_name="event_registration",
+    )
 
     class Meta:
         unique_together = ("guest", "event")
