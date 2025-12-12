@@ -270,11 +270,17 @@ class BulkGuestUploadAPIView(APIView):
 
             data = csv_file.read().decode("utf-8-sig")
             csv_reader = csv.DictReader(io.StringIO(data))
+
+            # Counters
             guests_created = 0
+            guests_updated = 0
             event_regs_created = 0
+            event_regs_updated = 0
             extra_attendees_created = 0
             session_regs_created = 0
+            session_regs_skipped = 0
             errors = []
+            warnings = []
 
             # Prepare all sessions for the event, indexed by unique_string
             sessions_by_unique = {
@@ -283,11 +289,17 @@ class BulkGuestUploadAPIView(APIView):
                 if hasattr(s, "unique_string")
             }
 
+            # Track UIDs and emails seen in this CSV to detect duplicates within the file
+            seen_uids_in_csv = set()
+            seen_emails_in_csv = set()
+            seen_phones_in_csv = set()
+
             context_manager = transaction.atomic if not dry_run else nullcontext
 
             with context_manager():
                 for idx, row in enumerate(csv_reader, start=2):  # 2 for header row
                     try:
+                        # Extract and clean data
                         uid = row.get("UID", "").strip()
                         group = row.get("Guest Group", "").strip()
                         subgroup = row.get("Sub Guest Group", "").strip()
@@ -296,13 +308,13 @@ class BulkGuestUploadAPIView(APIView):
                         last_name = row.get("Last Name", "").strip()
                         pax = int(row.get("Pax", "1").strip() or "1")
                         contact = row.get("Contact", "").strip()
-                        email = row.get("Email", "").strip()
+                        email = row.get("Email", "").strip().lower()  # Normalize email
                         address = row.get("Address", "").strip()
                         city = row.get("City", "").strip()
                         pincode = row.get("Pincode", "").strip()
                         country = row.get("Country", "").strip()
 
-                        # Validation
+                        # === VALIDATION ===
                         if not uid:
                             raise ValueError("UID is required")
                         if not email:
@@ -310,19 +322,20 @@ class BulkGuestUploadAPIView(APIView):
                         if not first_name:
                             raise ValueError("First Name is required")
 
-                        # Sessions for this row
-                        # unique_strings_raw = row.get("unique_strings", "") or row.get(
-                        #     "unique_string", ""
-                        # )
-                        # # Split on comma, strip whitespace
-                        # unique_strings = [
-                        #     u.strip()
-                        #     for u in unique_strings_raw.split(",")
-                        #     if u.strip()
-                        # ]
+                        # Check for duplicates within the CSV file itself
+                        if uid in seen_uids_in_csv:
+                            raise ValueError(f"Duplicate UID '{uid}' found in CSV at row {idx}")
+                        if email in seen_emails_in_csv:
+                            raise ValueError(f"Duplicate email '{email}' found in CSV at row {idx}")
+
+                        seen_uids_in_csv.add(uid)
+                        seen_emails_in_csv.add(email)
+                        if contact:
+                            if contact in seen_phones_in_csv:
+                                warnings.append(f"Row {idx}: Duplicate phone '{contact}' in CSV (not blocking)")
+                            seen_phones_in_csv.add(contact)
 
                         unique_strings_raw = row.get("unique_strings") or ""
-
                         unique_strings = [
                             s.strip()
                             for s in unique_strings_raw.split(",")
@@ -332,7 +345,7 @@ class BulkGuestUploadAPIView(APIView):
                         # Full Name
                         full_name = f"{first_name} {last_name}".strip()
 
-                        # Validate field lengths before processing
+                        # Validate field lengths
                         if len(group) > 20:
                             raise ValueError(
                                 f"Guest Group '{group}' exceeds maximum length of 20 characters (current: {len(group)})"
@@ -350,8 +363,27 @@ class BulkGuestUploadAPIView(APIView):
                                 f"Name '{full_name}' exceeds maximum length of 200 characters (current: {len(full_name)})"
                             )
 
+                        # === DUPLICATE DETECTION IN DATABASE ===
+                        # Check if UID already exists in database (EventRegistration.uid is unique)
+                        uid_conflict = EventRegistration.objects.filter(uid=uid).first()
+                        if uid_conflict:
+                            # UID exists - check if it's for a different guest
+                            if uid_conflict.guest.email != email:
+                                raise ValueError(
+                                    f"UID '{uid}' already exists for a different guest: {uid_conflict.guest.email}"
+                                )
+
+                        # Check for phone number conflicts (warning only, as phone is not unique in model)
+                        if contact:
+                            phone_conflicts = Guest.objects.filter(phone=contact).exclude(email=email)
+                            if phone_conflicts.exists():
+                                conflict_emails = ", ".join([g.email for g in phone_conflicts[:3]])
+                                warnings.append(
+                                    f"Row {idx}: Phone '{contact}' already used by: {conflict_emails}"
+                                )
+
                         if not dry_run:
-                            # Get or create guest
+                            # === 1) GUEST: Get or Create ===
                             guest, guest_created = Guest.objects.get_or_create(
                                 email=email,
                                 defaults={
@@ -362,21 +394,28 @@ class BulkGuestUploadAPIView(APIView):
                                     "nationality": country,
                                 },
                             )
+
                             if guest_created:
                                 guests_created += 1
+                            else:
+                                # Update guest info if it already exists
+                                guest.name = full_name
+                                guest.phone = contact
+                                guest.address = address
+                                guest.city = city
+                                guest.nationality = country
+                                guest.save()
+                                guests_updated += 1
 
-                            # Check if registration exists by UID or by guest+event
-                            existing_reg = None
-                            if uid:
-                                existing_reg = EventRegistration.objects.filter(uid=uid).first()
+                            # === 2) EVENT REGISTRATION: Get or Create ===
+                            # Check by (guest, event) unique constraint
+                            existing_reg = EventRegistration.objects.filter(
+                                guest=guest, event=event
+                            ).first()
 
-                            if not existing_reg:
-                                existing_reg = EventRegistration.objects.filter(
-                                    guest=guest, event=event
-                                ).first()
-
+                            reg_created = False
                             if existing_reg:
-                                # Update existing registration
+                                # Update existing registration (no duplicate)
                                 existing_reg.uid = uid
                                 existing_reg.guest_group = group
                                 existing_reg.sub_guest_group = subgroup
@@ -384,9 +423,11 @@ class BulkGuestUploadAPIView(APIView):
                                 existing_reg.name_on_message = full_name
                                 existing_reg.estimated_pax = pax
                                 existing_reg.save()
+                                reg = existing_reg
+                                event_regs_updated += 1
                             else:
                                 # Create new registration
-                                EventRegistration.objects.create(
+                                reg = EventRegistration.objects.create(
                                     uid=uid,
                                     guest=guest,
                                     event=event,
@@ -397,62 +438,98 @@ class BulkGuestUploadAPIView(APIView):
                                     estimated_pax=pax,
                                 )
                                 event_regs_created += 1
+                                reg_created = True
 
-                            # Get the registration for extra attendees and session registrations
-                            reg = EventRegistration.objects.get(guest=guest, event=event)
-
+                            # === 3) EXTRA ATTENDEES: Create only for new registrations ===
                             if create_extra_attendees:
-                                for i in range(pax - 1):
-                                    ea_name = f"Guest of {full_name}_{i+1}"
-                                    ExtraAttendee.objects.create(
-                                        registration=reg,
-                                        name=ea_name,
-                                    )
-                                    extra_attendees_created += 1
+                                needed_extra = max(pax - 1, 0)
+                                existing_extra_count = reg.extra_attendees.count()
 
-                            # Now create session regs for all sessions this guest should attend
+                                if reg_created and needed_extra > 0:
+                                    # New registration - create all extra attendees
+                                    for i in range(needed_extra):
+                                        ea_name = f"Guest of {full_name}_{i + 1}"
+                                        ExtraAttendee.objects.create(
+                                            registration=reg,
+                                            name=ea_name,
+                                        )
+                                        extra_attendees_created += 1
+                                elif not reg_created and needed_extra != existing_extra_count:
+                                    # Existing registration - adjust extra attendees if pax changed
+                                    if needed_extra > existing_extra_count:
+                                        # Add more extra attendees
+                                        for i in range(existing_extra_count, needed_extra):
+                                            ea_name = f"Guest of {full_name}_{i + 1}"
+                                            ExtraAttendee.objects.create(
+                                                registration=reg,
+                                                name=ea_name,
+                                            )
+                                            extra_attendees_created += 1
+                                    elif needed_extra < existing_extra_count:
+                                        # Remove excess extra attendees
+                                        excess = reg.extra_attendees.all()[needed_extra:]
+                                        excess.delete()
+
+                            # === 4) SESSION REGISTRATIONS: Create only if not exists ===
                             for unique_str in unique_strings:
                                 session = sessions_by_unique.get(unique_str)
                                 if session:
-                                    # Avoid duplicate session registration for this guest/session
-                                    if not SessionRegistration.objects.filter(
-                                        guest=guest, session=session
-                                    ).exists():
-                                        SessionRegistration.objects.create(
-                                            guest=guest, session=session
-                                        )
+                                    # Use get_or_create to leverage unique_together constraint
+                                    session_reg, created = SessionRegistration.objects.get_or_create(
+                                        guest=guest,
+                                        session=session,
+                                    )
+                                    if created:
                                         session_regs_created += 1
-                                pass
+                                    else:
+                                        session_regs_skipped += 1
+                                else:
+                                    warnings.append(
+                                        f"Row {idx}: Session '{unique_str}' not found for this event"
+                                    )
 
                         else:
-                            # Dry run - count what would be created/updated
+                            # === DRY RUN MODE ===
                             is_new_guest = not Guest.objects.filter(email=email).exists()
                             if is_new_guest:
                                 guests_created += 1
+                            else:
+                                guests_updated += 1
 
                             # Check if registration exists
                             existing_reg = None
-                            if uid:
-                                existing_reg = EventRegistration.objects.filter(uid=uid).first()
-
-                            if not existing_reg:
-                                # Try to find by guest email + event
-                                guest = Guest.objects.filter(email=email).first()
-                                if guest:
-                                    existing_reg = EventRegistration.objects.filter(
-                                        guest=guest, event=event
-                                    ).first()
+                            guest = Guest.objects.filter(email=email).first()
+                            if guest:
+                                existing_reg = EventRegistration.objects.filter(
+                                    guest=guest, event=event
+                                ).first()
 
                             if not existing_reg:
                                 event_regs_created += 1
+                                # Count extra attendees only for new registrations
+                                if create_extra_attendees:
+                                    extra_attendees_created += max(pax - 1, 0)
+                            else:
+                                event_regs_updated += 1
 
-                            if create_extra_attendees:
-                                extra_attendees_created += max(pax - 1, 0)
-
-                            # For session registrations: Only count if session unique_string matches
+                            # Session registrations: count only if not already registered
                             for unique_str in unique_strings:
-                                if unique_str in sessions_by_unique:
-                                    session_regs_created += 1
+                                session = sessions_by_unique.get(unique_str)
+                                if session:
+                                    already_registered = False
+                                    if guest:
+                                        already_registered = SessionRegistration.objects.filter(
+                                            guest=guest, session=session
+                                        ).exists()
+
+                                    if not already_registered:
+                                        session_regs_created += 1
+                                    else:
+                                        session_regs_skipped += 1
+                                else:
+                                    warnings.append(
+                                        f"Row {idx}: Session '{unique_str}' not found for this event"
+                                    )
 
                     except Exception as row_e:
                         # Create detailed error message with row context
@@ -475,17 +552,24 @@ class BulkGuestUploadAPIView(APIView):
 
             return Response(
                 {
-                    "created_guests": guests_created,
-                    "created_event_registrations": event_regs_created,
-                    "created_extra_attendees": extra_attendees_created,
-                    "created_session_registrations": session_regs_created,
+                    "guests_created": guests_created,
+                    "guests_updated": guests_updated,
+                    "event_registrations_created": event_regs_created,
+                    "event_registrations_updated": event_regs_updated,
+                    "extra_attendees_created": extra_attendees_created,
+                    "session_registrations_created": session_regs_created,
+                    "session_registrations_skipped": session_regs_skipped,
                     "errors": errors,
+                    "warnings": warnings,
                     "dry_run": dry_run,
                     "create_extra_attendees": create_extra_attendees,
                     "message": (
-                        "Dry run successful. Would create " if dry_run else "Imported "
-                    )
-                    + f"{event_regs_created} registrations, {extra_attendees_created} extra attendees, {session_regs_created} session registrations.",
+                        f"{'[DRY RUN] Would create' if dry_run else 'Successfully imported'}: "
+                        f"{guests_created} new guests, {guests_updated} updated guests, "
+                        f"{event_regs_created} new registrations, {event_regs_updated} updated registrations, "
+                        f"{extra_attendees_created} extra attendees, "
+                        f"{session_regs_created} session registrations (skipped {session_regs_skipped} duplicates)"
+                    ),
                 },
                 status=200 if dry_run else 201,
             )
@@ -494,14 +578,22 @@ class BulkGuestUploadAPIView(APIView):
             if str(dry_run_marker) == "__dry_run_complete__":
                 return Response(
                     {
-                        "created_guests": guests_created,
-                        "created_event_registrations": event_regs_created,
-                        "created_extra_attendees": extra_attendees_created,
-                        "created_session_registrations": session_regs_created,
+                        "guests_created": guests_created,
+                        "guests_updated": guests_updated,
+                        "event_registrations_created": event_regs_created,
+                        "event_registrations_updated": event_regs_updated,
+                        "extra_attendees_created": extra_attendees_created,
+                        "session_registrations_created": session_regs_created,
+                        "session_registrations_skipped": session_regs_skipped,
                         "errors": errors,
+                        "warnings": warnings,
                         "dry_run": True,
                         "message": (
-                            f"Dry run successful. Would create {event_regs_created} registrations, {extra_attendees_created} extra attendees, {session_regs_created} session registrations."
+                            f"[DRY RUN] Would create: "
+                            f"{guests_created} new guests, {guests_updated} updated guests, "
+                            f"{event_regs_created} new registrations, {event_regs_updated} updated registrations, "
+                            f"{extra_attendees_created} extra attendees, "
+                            f"{session_regs_created} session registrations (skipped {session_regs_skipped} duplicates)"
                         ),
                     },
                     status=200,
