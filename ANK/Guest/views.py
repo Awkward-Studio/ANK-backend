@@ -440,35 +440,26 @@ class BulkGuestUploadAPIView(APIView):
                                 event_regs_created += 1
                                 reg_created = True
 
-                            # === 3) EXTRA ATTENDEES: Create only for new registrations ===
+                            # === 3) EXTRA ATTENDEES: Handled automatically by signal ===
+                            # The sync_extra_guests signal in Events/signals.py automatically
+                            # creates/deletes extra attendees based on estimated_pax.
+                            # Signal logic: required_extras = max(0, estimated_pax - 1)
+                            # Signal fires on post_save of EventRegistration.
+                            #
+                            # We just need to track what WOULD be created for reporting.
                             if create_extra_attendees:
                                 needed_extra = max(pax - 1, 0)
-                                existing_extra_count = reg.extra_attendees.count()
-
-                                if reg_created and needed_extra > 0:
-                                    # New registration - create all extra attendees
-                                    for i in range(needed_extra):
-                                        ea_name = f"Guest of {full_name}_{i + 1}"
-                                        ExtraAttendee.objects.create(
-                                            registration=reg,
-                                            name=ea_name,
-                                        )
-                                        extra_attendees_created += 1
-                                elif not reg_created and needed_extra != existing_extra_count:
-                                    # Existing registration - adjust extra attendees if pax changed
+                                if reg_created:
+                                    # New registration - signal will create all extras
+                                    extra_attendees_created += needed_extra
+                                else:
+                                    # Existing registration - signal will adjust count
+                                    # Check current count to see what changed
+                                    existing_extra_count = reg.extra_attendees.count()
+                                    # After signal runs, count will match needed_extra
+                                    # Track the delta for reporting
                                     if needed_extra > existing_extra_count:
-                                        # Add more extra attendees
-                                        for i in range(existing_extra_count, needed_extra):
-                                            ea_name = f"Guest of {full_name}_{i + 1}"
-                                            ExtraAttendee.objects.create(
-                                                registration=reg,
-                                                name=ea_name,
-                                            )
-                                            extra_attendees_created += 1
-                                    elif needed_extra < existing_extra_count:
-                                        # Remove excess extra attendees
-                                        excess = reg.extra_attendees.all()[needed_extra:]
-                                        excess.delete()
+                                        extra_attendees_created += (needed_extra - existing_extra_count)
 
                             # === 4) SESSION REGISTRATIONS: Create only if not exists ===
                             for unique_str in unique_strings:
