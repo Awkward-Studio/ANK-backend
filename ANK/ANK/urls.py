@@ -23,7 +23,15 @@ from drf_spectacular.views import (
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
-from Events.views.webhooks import resolve_wa, track_send, whatsapp_rsvp
+from Events.views.webhooks import (
+    message_logs,
+    message_logs_latest,
+    message_status_lookup,
+    message_status_webhook,
+    resolve_wa,
+    track_send,
+    whatsapp_rsvp,
+)
 from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
 
 from ANK.csrf import csrf
@@ -68,6 +76,26 @@ urlpatterns = [
     # path("api/debug/echo-secret/", echo_secret),
     path("api/webhooks/track-send/", track_send, name="track_send"),
     path("api/webhooks/whatsapp-travel/", whatsapp_travel_webhook),
+    path(
+        "api/webhooks/message-status/",
+        message_status_webhook,
+        name="message_status_webhook",
+    ),
+    path(
+        "api/webhooks/message-status-lookup/",
+        message_status_lookup,
+        name="message_status_lookup",
+    ),
+    path(
+        "api/webhooks/message-logs/",
+        message_logs,
+        name="message_logs",
+    ),
+    path(
+        "api/webhooks/message-logs/latest/",
+        message_logs_latest,
+        name="message_logs_latest",
+    ),
     path("healthz", healthz),
     path("api/internal/resolve-wa/<str:wa_id>/", resolve_wa, name="resolve_wa"),
 ]

@@ -1,14 +1,18 @@
-import os, json, logging
-from datetime import datetime, timedelta, timezone as tz
+import json
+import logging
+import os
+from datetime import datetime, timedelta
+from datetime import timezone as tz
 
-from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
+from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
+from django.utils import timezone as dj_tz  # ← use alias; never shadow inside functions
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from django.utils.dateparse import parse_datetime
-from django.utils import timezone as dj_tz  # ← use alias; never shadow inside functions
 
 from Events.models.event_registration_model import EventRegistration
 from Events.models.wa_send_map import WaSendMap
+from Events.models.whatsapp_message_log import WhatsAppMessageLog
 
 log = logging.getLogger(__name__)
 
@@ -136,10 +140,45 @@ def track_send(request):
                 )
     except Exception as update_err:
         # Log error but don't fail the request
-        log.error(f"Failed to update RSVP status for registration {er.id}: {update_err}")
+        log.error(
+            f"Failed to update RSVP status for registration {er.id}: {update_err}"
+        )
+
+    # Create WhatsAppMessageLog entry for delivery tracking
+    if template_wamid:
+        try:
+            template_name = body.get("template_name")
+            guest_id = body.get("guest_id")
+            guest_name = body.get("guest_name")
+            message_type = body.get("message_type") or flow_type or "rsvp"
+
+            WhatsAppMessageLog.objects.update_or_create(
+                wamid=template_wamid,
+                defaults={
+                    "recipient_id": wa_id,
+                    "status": "sent",
+                    "sent_at": dj_tz.now(),
+                    "event_registration_id": str(er.id),
+                    "event_id": str(event_id),
+                    "template_name": template_name,
+                    "flow_type": flow_type,
+                    "message_type": message_type,
+                    "guest_id": str(guest_id) if guest_id else None,
+                    "guest_name": guest_name,
+                },
+            )
+            log.info(
+                f"[TRACK-SEND] Created message log for wamid={template_wamid[:30]}..."
+            )
+        except Exception as log_err:
+            # Non-fatal - don't fail the request if logging fails
+            log.warning(f"[TRACK-SEND] Failed to create message log: {log_err}")
 
     return JsonResponse({"ok": True, "map_id": str(obj.id)})
-# 
+
+
+#
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -164,18 +203,18 @@ def whatsapp_rsvp(request):
 
     # Get the incoming status (lowercase from Next.js)
     raw_status = (body.get("rsvp_status") or "").strip().lower()
-    
+
     # ✅ Normalize to title case
     status_map = {
-        'yes': 'Yes',
-        'no': 'No',
-        'maybe': 'Maybe',
-        'pending': 'Pending',
-        'not_sent': 'Not_Sent'
+        "yes": "Yes",
+        "no": "No",
+        "maybe": "Maybe",
+        "pending": "Pending",
+        "not_sent": "Not_Sent",
     }
-    
+
     normalized_status = status_map.get(raw_status)
-    
+
     if not normalized_status or raw_status not in {"yes", "no", "maybe"}:
         log.warning(f"Unknown RSVP status received: {raw_status}")
         return HttpResponseBadRequest("invalid rsvp_status")
@@ -247,12 +286,13 @@ def whatsapp_rsvp(request):
 
     # Log inbound message
     from Events.services.message_logger import MessageLogger
+
     MessageLogger.log_inbound(
         event_registration=er,
         content=f"RSVP: {normalized_status}",
         message_type="rsvp",
-        wa_message_id=body.get("wa_id", ""), # Best effort if available here
-        metadata=body
+        wa_message_id=body.get("wa_id", ""),  # Best effort if available here
+        metadata=body,
     )
 
     log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
@@ -260,9 +300,9 @@ def whatsapp_rsvp(request):
     # Send immediate WhatsApp confirmation with next steps
     try:
         from Events.services.message_logger import MessageLogger as MsgLogger
-        
+
         event_name = er.event.name if er.event else "the event"
-        
+
         if normalized_status == "Yes":
             # For "Yes" - send confirmation with travel details option
             message = (
@@ -271,22 +311,13 @@ def whatsapp_rsvp(request):
                 "What would you like to do next?"
             )
             buttons = [
-                {
-                    "id": f"tc|start_travel|{er.id}",
-                    "title": "Add Travel Details"
-                },
-                {
-                    "id": f"tc|update_rsvp_menu|{er.id}",
-                    "title": "Update RSVP"
-                },
-                {
-                    "id": f"tc|remind_later|{er.id}",
-                    "title": "Remind Me Later"
-                }
+                {"id": f"tc|start_travel|{er.id}", "title": "Add Travel Details"},
+                {"id": f"tc|update_rsvp_menu|{er.id}", "title": "Update RSVP"},
+                {"id": f"tc|remind_later|{er.id}", "title": "Remind Me Later"},
             ]
             MsgLogger.send_buttons(er, message, buttons, "rsvp")
             log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
-            
+
         elif normalized_status == "No":
             # For "No" - simple confirmation
             message = (
@@ -296,7 +327,7 @@ def whatsapp_rsvp(request):
             )
             MsgLogger.send_text(er, message, "rsvp")
             log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
-            
+
         elif normalized_status == "Maybe":
             # For "Maybe" - simple confirmation
             message = (
@@ -305,7 +336,7 @@ def whatsapp_rsvp(request):
             )
             MsgLogger.send_text(er, message, "rsvp")
             log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
-            
+
     except Exception as msg_err:
         log.exception(f"[RSVP] Failed to send confirmation message: {msg_err}")
         # Don't fail the request if message sending fails
@@ -347,8 +378,9 @@ def resolve_wa(request, wa_id):
     if token != os.getenv("DJANGO_RSVP_SECRET"):
         return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
 
-    from Events.models.wa_send_map import WaSendMap
     from django.utils import timezone
+
+    from Events.models.wa_send_map import WaSendMap
 
     wa_digits = "".join(c for c in wa_id if c.isdigit())[-15:]
 
@@ -369,5 +401,293 @@ def resolve_wa(request, wa_id):
             "event_id": row["event_id"],
             "registration_id": row["event_registration_id"],
             "flow_type": row.get("flow_type"),
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def message_status_webhook(request):
+    """
+    Receive status updates from Next.js webhook (forwarded from Meta).
+
+    POST /api/webhooks/message-status/
+    {
+        "wamid": "wamid.xxx...",
+        "recipient_id": "919876543210",
+        "status": "delivered" | "read" | "failed",
+        "timestamp": "2024-01-15T10:30:00Z",
+        "errors": [{"code": 131026, "title": "..."}]  // if failed
+    }
+    """
+    # Verify webhook token
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    wamid = body.get("wamid")
+    status = body.get("status")
+    timestamp_str = body.get("timestamp")
+    errors = body.get("errors")
+    recipient_id = _norm_digits(body.get("recipient_id", ""))
+
+    if not wamid or not status:
+        return HttpResponseBadRequest("missing wamid or status")
+
+    try:
+        # Parse timestamp
+        ts = None
+        if timestamp_str:
+            parsed = parse_datetime(timestamp_str)
+            ts = _ensure_aware(parsed) if parsed else dj_tz.now()
+        else:
+            ts = dj_tz.now()
+
+        # Get or create the message log
+        msg_log, created = WhatsAppMessageLog.objects.get_or_create(
+            wamid=wamid,
+            defaults={
+                "recipient_id": recipient_id,
+                "status": status,
+                "sent_at": ts,
+            },
+        )
+
+        # Update status (only upgrade, never downgrade - except for failed)
+        status_order = {"sent": 1, "delivered": 2, "read": 3, "failed": 0}
+        current_order = status_order.get(msg_log.status, 0)
+        new_order = status_order.get(status, 0)
+
+        if new_order > current_order or status == "failed":
+            msg_log.status = status
+
+            # Set timestamp based on status
+            if status == "delivered":
+                msg_log.delivered_at = ts
+            elif status == "read":
+                msg_log.read_at = ts
+            elif status == "failed":
+                msg_log.failed_at = ts
+                if errors and len(errors) > 0:
+                    msg_log.error_code = str(errors[0].get("code", ""))
+                    msg_log.error_message = errors[0].get("title", "") or errors[0].get(
+                        "message", ""
+                    )
+
+            msg_log.save()
+            log.info(f"[MESSAGE-STATUS] Updated {wamid[:30]}... to {status}")
+
+        return JsonResponse({"ok": True, "status": msg_log.status})
+
+    except Exception as e:
+        log.exception(f"[MESSAGE-STATUS] Error processing status update: {e}")
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def message_status_lookup(request):
+    """
+    Look up current status of messages by wamid.
+
+    POST /api/webhooks/message-status-lookup/
+    {
+        "wamids": ["wamid1", "wamid2", ...]
+    }
+
+    Returns:
+    {
+        "statuses": {
+            "wamid1": {"status": "delivered", "delivered_at": "..."},
+            "wamid2": {"status": "read", "read_at": "..."},
+            ...
+        }
+    }
+    """
+    # Verify webhook token
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    wamids = body.get("wamids", [])
+
+    if not wamids:
+        return JsonResponse({"statuses": {}})
+
+    try:
+        logs = WhatsAppMessageLog.objects.filter(wamid__in=wamids)
+
+        statuses = {}
+        for msg_log in logs:
+            statuses[msg_log.wamid] = {
+                "status": msg_log.status,
+                "error": msg_log.error_message if msg_log.status == "failed" else None,
+                "error_code": msg_log.error_code
+                if msg_log.status == "failed"
+                else None,
+                "sent_at": msg_log.sent_at.isoformat() if msg_log.sent_at else None,
+                "delivered_at": msg_log.delivered_at.isoformat()
+                if msg_log.delivered_at
+                else None,
+                "read_at": msg_log.read_at.isoformat() if msg_log.read_at else None,
+            }
+
+        return JsonResponse({"statuses": statuses})
+
+    except Exception as e:
+        log.exception(f"[MESSAGE-STATUS-LOOKUP] Error: {e}")
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def message_logs(request):
+    """
+    Get message logs filtered by registration, event, or guest.
+
+    GET /api/webhooks/message-logs/
+    Query params:
+        - registration_id: Filter by registration
+        - event_id: Filter by event
+        - guest_id: Filter by guest
+
+    Returns:
+    {
+        "logs": [
+            {
+                "id": "uuid",
+                "wamid": "wamid.xxx...",
+                "recipient_id": "919876543210",
+                "status": "delivered",
+                "message_type": "rsvp",
+                "template_name": null,
+                "event_id": "uuid",
+                "registration_id": "uuid",
+                "guest_id": "uuid",
+                "guest_name": "John Doe",
+                "sent_at": "2024-01-15T10:30:00Z",
+                "delivered_at": "2024-01-15T10:30:05Z",
+                "read_at": null,
+                "error_code": null,
+                "error_message": null
+            }
+        ]
+    }
+    """
+    # Verify webhook token
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    registration_id = request.GET.get("registration_id")
+    event_id = request.GET.get("event_id")
+    guest_id = request.GET.get("guest_id")
+
+    queryset = WhatsAppMessageLog.objects.all()
+
+    if registration_id:
+        queryset = queryset.filter(event_registration_id=registration_id)
+    if event_id:
+        queryset = queryset.filter(event_id=event_id)
+    if guest_id:
+        queryset = queryset.filter(guest_id=guest_id)
+
+    # Limit to 50 most recent
+    queryset = queryset.order_by("-sent_at")[:50]
+
+    logs = []
+    for msg_log in queryset:
+        logs.append(
+            {
+                "id": str(msg_log.id),
+                "wamid": msg_log.wamid,
+                "recipient_id": msg_log.recipient_id,
+                "status": msg_log.status,
+                "message_type": msg_log.message_type,
+                "template_name": msg_log.template_name,
+                "event_id": msg_log.event_id,
+                "registration_id": msg_log.event_registration_id,
+                "guest_id": msg_log.guest_id,
+                "guest_name": msg_log.guest_name,
+                "sent_at": msg_log.sent_at.isoformat() if msg_log.sent_at else None,
+                "delivered_at": msg_log.delivered_at.isoformat()
+                if msg_log.delivered_at
+                else None,
+                "read_at": msg_log.read_at.isoformat() if msg_log.read_at else None,
+                "failed_at": msg_log.failed_at.isoformat()
+                if msg_log.failed_at
+                else None,
+                "error_code": msg_log.error_code,
+                "error_message": msg_log.error_message,
+            }
+        )
+
+    return JsonResponse({"logs": logs})
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def message_logs_latest(request):
+    """
+    Get the latest message log for a registration.
+
+    GET /api/webhooks/message-logs/latest/
+    Query params:
+        - registration_id: Required
+
+    Returns:
+    {
+        "log": { ... } or null
+    }
+    """
+    # Verify webhook token
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    registration_id = request.GET.get("registration_id")
+    if not registration_id:
+        return HttpResponseBadRequest("Missing registration_id")
+
+    msg_log = (
+        WhatsAppMessageLog.objects.filter(event_registration_id=registration_id)
+        .order_by("-sent_at")
+        .first()
+    )
+
+    if not msg_log:
+        return JsonResponse({"log": None})
+
+    return JsonResponse(
+        {
+            "log": {
+                "id": str(msg_log.id),
+                "wamid": msg_log.wamid,
+                "recipient_id": msg_log.recipient_id,
+                "status": msg_log.status,
+                "message_type": msg_log.message_type,
+                "template_name": msg_log.template_name,
+                "sent_at": msg_log.sent_at.isoformat() if msg_log.sent_at else None,
+                "delivered_at": msg_log.delivered_at.isoformat()
+                if msg_log.delivered_at
+                else None,
+                "read_at": msg_log.read_at.isoformat() if msg_log.read_at else None,
+                "error_code": msg_log.error_code,
+                "error_message": msg_log.error_message,
+            }
         }
     )
