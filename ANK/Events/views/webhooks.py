@@ -60,9 +60,10 @@ def track_send(request):
 
     wa_id = _norm_digits(body.get("wa_id", ""))
     event_id = body.get("event_id")
-    reg_id = body.get("event_registration_id")
+    reg_id = body.get("event_registration_id") or ""
     template_wamid = body.get("template_wamid") or None
     flow_type = (body.get("flow_type") or "").strip() or None
+    message_type = body.get("message_type") or flow_type or "rsvp"
 
     log.info(
         "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s",
@@ -73,8 +74,53 @@ def track_send(request):
         flow_type,
     )
 
-    if not wa_id or not event_id:
-        return HttpResponseBadRequest("missing wa_id or event_id")
+    if not wa_id:
+        return HttpResponseBadRequest("missing wa_id")
+
+    # Check if this is a standalone message (no event/registration context)
+    # This supports bulk-send and other template messages sent outside event flows
+    is_standalone = not event_id and not reg_id
+
+    if is_standalone:
+        # For standalone messages, only create WhatsAppMessageLog (no WaSendMap)
+        if not template_wamid:
+            return HttpResponseBadRequest(
+                "missing template_wamid for standalone message"
+            )
+
+        try:
+            template_name = body.get("template_name")
+            guest_name = body.get("guest_name")
+
+            WhatsAppMessageLog.objects.update_or_create(
+                wamid=template_wamid,
+                defaults={
+                    "recipient_id": wa_id,
+                    "status": "sent",
+                    "sent_at": dj_tz.now(),
+                    "event_registration_id": None,
+                    "event_id": None,
+                    "template_name": template_name,
+                    "flow_type": flow_type or "standalone",
+                    "message_type": message_type or "template",
+                    "guest_id": None,
+                    "guest_name": guest_name,
+                },
+            )
+            log.info(
+                f"[TRACK-SEND][STANDALONE] Created message log for wamid={template_wamid[:30]}..."
+            )
+        except Exception as log_err:
+            log.warning(
+                f"[TRACK-SEND][STANDALONE] Failed to create message log: {log_err}"
+            )
+            return JsonResponse({"ok": False, "error": str(log_err)}, status=500)
+
+        return JsonResponse({"ok": True, "standalone": True, "wamid": template_wamid})
+
+    # Regular flow - requires event_id for event-based messages
+    if not event_id:
+        return HttpResponseBadRequest("missing event_id")
 
     # Try resolve registration
     er = None
@@ -555,13 +601,16 @@ def message_status_lookup(request):
 @require_http_methods(["GET"])
 def message_logs(request):
     """
-    Get message logs filtered by registration, event, or guest.
+    Get message logs filtered by registration, event, guest, or recipient phone.
 
     GET /api/webhooks/message-logs/
     Query params:
         - registration_id: Filter by registration
         - event_id: Filter by event
         - guest_id: Filter by guest
+        - recipient_id: Filter by recipient phone number (for standalone messages)
+        - template_name: Filter by template name
+        - standalone: If "true", only return messages without event/registration context
 
     Returns:
     {
@@ -595,6 +644,9 @@ def message_logs(request):
     registration_id = request.GET.get("registration_id")
     event_id = request.GET.get("event_id")
     guest_id = request.GET.get("guest_id")
+    recipient_id = request.GET.get("recipient_id")
+    template_name = request.GET.get("template_name")
+    standalone_only = request.GET.get("standalone", "").lower() == "true"
 
     queryset = WhatsAppMessageLog.objects.all()
 
@@ -604,6 +656,16 @@ def message_logs(request):
         queryset = queryset.filter(event_id=event_id)
     if guest_id:
         queryset = queryset.filter(guest_id=guest_id)
+    if recipient_id:
+        # Normalize phone number (keep last 10-15 digits)
+        normalized = _norm_digits(recipient_id)
+        queryset = queryset.filter(recipient_id__endswith=normalized[-10:])
+    if template_name:
+        queryset = queryset.filter(template_name=template_name)
+    if standalone_only:
+        queryset = queryset.filter(
+            event_id__isnull=True, event_registration_id__isnull=True
+        )
 
     # Limit to 50 most recent
     queryset = queryset.order_by("-sent_at")[:50]
