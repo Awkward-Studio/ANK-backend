@@ -141,6 +141,11 @@ def whatsapp_travel_webhook(request):
     wa_id = _norm_digits(body.get("wa_id") or "")
     reg_id = body.get("registration_id")
     
+    # [FIX] Robust text extraction (Next.js sends 'text', logging tools might send 'body'/'message')
+    # Extract this early so we can log it even if user is unknown
+    raw_text = body.get("text") or body.get("body") or body.get("message") or ""
+    text = raw_text.strip()
+
     reg = _safe_get_registration(reg_id)
 
     if not reg:
@@ -148,6 +153,26 @@ def whatsapp_travel_webhook(request):
 
     if not reg:
         logger.warning(f"[WEBHOOK] No registration resolved (id={reg_id}, wa={wa_id})")
+        
+        # [FIX] Log "Orphan" messages from unknown users so they appear in history
+        # Only log if it's a text message or generic payload that has content
+        if text:
+            try:
+                from Events.models.whatsapp_message_log import WhatsAppMessageLog
+                WhatsAppMessageLog.objects.create(
+                    wamid=body.get("wamid") or f"unknown-{timezone.now().timestamp()}",
+                    recipient_id=wa_id,
+                    status="received",
+                    sent_at=timezone.now(),
+                    direction="inbound",
+                    body=text,
+                    message_type="custom",
+                    flow_type="unknown",  # Mark as unknown flow
+                )
+                logger.info(f"[WEBHOOK] Logged orphan message from {wa_id}")
+            except Exception as log_err:
+                logger.error(f"[WEBHOOK-LOG-ERR] Failed to log orphan message: {log_err}")
+
         # Send helpful fallback message instead of silent return
         try:
             wa_phone = wa_id if wa_id else body.get("wa_id", "")
@@ -284,7 +309,7 @@ def whatsapp_travel_webhook(request):
 
     # === TEXT ================================================================
     if kind == "text":
-        text = (body.get("text") or "").strip()
+        # 'text' is already extracted at the top
         if not text:
             logger.warning(f"[TEXT] Empty text for reg={reg.id}")
             return JsonResponse({"ok": True}, status=200)
