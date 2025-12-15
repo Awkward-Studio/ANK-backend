@@ -323,7 +323,28 @@ def whatsapp_rsvp(request):
                 er = EventRegistration.objects.get(pk=rid)
 
         if not er:
-            return HttpResponseBadRequest("no mapping found for wa_id")
+            # STANDALONE / UNREGISTERED MESSAGE HANDLING
+            # If we cannot resolve a registration, we still want to log this message
+            # so it appears in the Bulk Chat History (standalone view).
+            
+            # Create a log entry for this unknown inbound message
+            from Events.models.whatsapp_message_log import WhatsAppMessageLog
+            
+            WhatsAppMessageLog.objects.create(
+                wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
+                recipient_id=wa_id,
+                status="received",
+                sent_at=responded_on,
+                direction="inbound",
+                body=f"RSVP: {raw_status}" if raw_status else "Unknown text",
+                message_type="custom",
+                flow_type="standalone",
+            )
+            
+            log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id}")
+            return JsonResponse({"ok": True, "standalone": True})
+            
+            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
     # Update RSVP with normalized status (title case)
     er.rsvp_status = normalized_status  # "Maybe" instead of "maybe"
@@ -694,6 +715,8 @@ def message_logs(request):
                 else None,
                 "error_code": msg_log.error_code,
                 "error_message": msg_log.error_message,
+                "direction": msg_log.direction,
+                "body": msg_log.body,
             }
         )
 

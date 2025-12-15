@@ -45,6 +45,18 @@ class WhatsAppMessageLog(models.Model):
         max_length=20, choices=MESSAGE_TYPE_CHOICES, default="rsvp"
     )
 
+    # Direction (new)
+    DIRECTION_CHOICES = (
+        ("inbound", "Inbound"),
+        ("outbound", "Outbound"),
+    )
+    direction = models.CharField(
+        max_length=10, choices=DIRECTION_CHOICES, default="outbound"
+    )
+
+    # Content (new)
+    body = models.TextField(null=True, blank=True)
+
     # Timestamps
     sent_at = models.DateTimeField(default=timezone.now)
     delivered_at = models.DateTimeField(null=True, blank=True)
