@@ -31,6 +31,39 @@ class MessageLogger:
                 metadata=metadata or {},
             )
 
+            # [FIX] Log to WhatsAppMessageLog for unified history view
+            if wa_message_id:
+                try:
+                    phone = getattr(event_registration.guest, "phone", "") or ""
+                    # Store only digits
+                    guest_wa_id = "".join(c for c in phone if c.isdigit())[-15:]
+
+                    WhatsAppMessageLog.objects.update_or_create(
+                        wamid=wa_message_id,
+                        defaults={
+                            "recipient_id": guest_wa_id,
+                            "status": "received",
+                            "sent_at": timezone.now(),
+                            "event_registration_id": str(event_registration.id),
+                            "event_id": str(event_registration.event_id)
+                            if event_registration.event_id
+                            else None,
+                            "template_name": None,
+                            "flow_type": "rsvp", # Defaulting to RSVP context for inbound logged here
+                            "message_type": message_type,
+                            "guest_id": str(event_registration.guest_id)
+                            if event_registration.guest_id
+                            else None,
+                            "guest_name": getattr(
+                                event_registration.guest, "name", None
+                            ),
+                            "direction": "inbound",
+                            "body": content,
+                        },
+                    )
+                except Exception as log_err:
+                     logger.warning(f"[LOG-INBOUND] Failed to create history log: {log_err}")
+
             # Update the service window tracker
             event_registration.responded_on = timezone.now()
             event_registration.save(update_fields=["responded_on"])

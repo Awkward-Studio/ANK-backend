@@ -12,7 +12,7 @@ def default_expiry_30d():
     Return a timezone-aware datetime 30 days from now.
     Must be a top-level function so Django can serialize it in migrations.
     """
-    return timezone.now() + timedelta(days=30)
+    return timezone.now() + timedelta(days=4)
 
 
 class WaSendMap(models.Model):
@@ -22,10 +22,18 @@ class WaSendMap(models.Model):
     wa_id = models.CharField(max_length=32, db_index=True)
 
     event = models.ForeignKey(
-        Event, on_delete=models.CASCADE, related_name="wa_send_maps"
+        Event,
+        on_delete=models.CASCADE,
+        related_name="wa_send_maps",
+        null=True,
+        blank=True,
     )
     event_registration = models.ForeignKey(
-        EventRegistration, on_delete=models.CASCADE, related_name="wa_send_maps"
+        EventRegistration,
+        on_delete=models.CASCADE,
+        related_name="wa_send_maps",
+        null=True,
+        blank=True,
     )
 
     template_wamid = models.CharField(
