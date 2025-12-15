@@ -64,6 +64,7 @@ def track_send(request):
     template_wamid = body.get("template_wamid") or None
     flow_type = (body.get("flow_type") or "").strip() or None
     message_type = body.get("message_type") or flow_type or "rsvp"
+    body_text = body.get("body") or body.get("message") or body.get("text")
 
     log.info(
         "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s",
@@ -107,6 +108,7 @@ def track_send(request):
                     "message_type": message_type or "template",
                     "guest_id": None,
                     "guest_name": guest_name,
+                    "body": body_text,
                 },
             )
             log.info(
@@ -228,6 +230,7 @@ def track_send(request):
                     "message_type": message_type,
                     "guest_id": str(guest_id) if guest_id else None,
                     "guest_name": guest_name,
+                    "body": body_text,
                 },
             )
             log.info(
