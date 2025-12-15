@@ -104,6 +104,8 @@ class MessageLogger:
                             "guest_name": getattr(
                                 event_registration.guest, "name", None
                             ),
+                            "direction": "outbound",
+                            "body": content,
                         },
                     )
                     logger.info(

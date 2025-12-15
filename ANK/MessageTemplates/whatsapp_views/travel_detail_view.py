@@ -364,10 +364,11 @@ def whatsapp_travel_webhook(request):
                 logger.exception(f"[TEXT-ERR] Failed sending greeting response: {exc}")
             return JsonResponse({"ok": True}, status=200)
 
-        # If no session exists and not a command, send post-RSVP options
+        # If no session exists and not a command, do NOT send post-RSVP options automatically.
+        # This prevents "travel detail" loops when users reply to bulk messages.
         if not sess:
-            logger.warning(f"[TEXT] No session for reg={reg.id}, sending post-RSVP options")
-            _send_post_rsvp_options(reg)
+            logger.warning(f"[TEXT] No session for reg={reg.id}, generic text received. Logging only.")
+            # Message is already logged by MessageLogger.log_inbound above.
             return JsonResponse({"ok": True}, status=200)
 
         # If session is complete (and it wasn't a command), send instructions
