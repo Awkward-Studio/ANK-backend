@@ -350,10 +350,12 @@ def whatsapp_rsvp(request):
                 map_flow_type = active_map.get("flow_type")
                 # Allowed flows for implicit text RSVP: 'rsvp'
                 # Disallowed: 'standalone', 'travel', etc.
+                # [CHANGED] User requested strict RSVP context only.
+                # Even if in 'travel' flow, typed "Yes"/"No" will NOT trigger travel logic here.
+                # It will be logged as generic text. Travel buttons (payloads) still work via travel webhook.
                 if map_flow_type != "rsvp":
                     log.info(f"[RSVP] Ignoring generic '{raw_status}' because flow_type='{map_flow_type}' (not rsvp)")
                     # Do NOT set `er`. Treat as if no registration found for RSVP purposes.
-                    # This will fall through to the STANDALONE / UNREGISTERED block below.
                     er = None 
                 else:
                     # Valid RSVP flow
@@ -378,7 +380,7 @@ def whatsapp_rsvp(request):
                 status="received",
                 sent_at=responded_on,
                 direction="inbound",
-                body=f"RSVP: {raw_status}" if raw_status else "Unknown text",
+                body=raw_status,  # [FIX] Log exact text, don't prefix with "RSVP:" unless it IS one
                 message_type="custom",
                 flow_type="standalone",
             )
