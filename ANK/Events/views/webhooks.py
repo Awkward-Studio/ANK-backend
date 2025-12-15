@@ -82,7 +82,8 @@ def track_send(request):
     is_standalone = not event_id and not reg_id
 
     if is_standalone:
-        # For standalone messages, only create WhatsAppMessageLog (no WaSendMap)
+        # For standalone messages, we MUST create a WaSendMap to "break stickiness"
+        # of previous event sessions. This makes the bulk message the active context.
         if not template_wamid:
             return HttpResponseBadRequest(
                 "missing template_wamid for standalone message"
@@ -92,6 +93,7 @@ def track_send(request):
             template_name = body.get("template_name")
             guest_name = body.get("guest_name")
 
+            # 1. Create Message Log
             WhatsAppMessageLog.objects.update_or_create(
                 wamid=template_wamid,
                 defaults={
@@ -110,9 +112,24 @@ def track_send(request):
             log.info(
                 f"[TRACK-SEND][STANDALONE] Created message log for wamid={template_wamid[:30]}..."
             )
+
+            # 2. Create WaSendMap (Standalone Context)
+            # We set event=None, event_registration=None
+            defaults = {
+                "wa_id": wa_id,
+                "event": None,
+                "event_registration": None,
+                "expires_at": dj_tz.now() + timedelta(days=4),
+                "flow_type": flow_type or "standalone",
+            }
+            obj, _ = WaSendMap.objects.update_or_create(
+                template_wamid=template_wamid, defaults=defaults
+            )
+            log.info(f"[TRACK-SEND][STANDALONE] Created WaSendMap for {wa_id}")
+
         except Exception as log_err:
             log.warning(
-                f"[TRACK-SEND][STANDALONE] Failed to create message log: {log_err}"
+                f"[TRACK-SEND][STANDALONE] Failed to create log/map: {log_err}"
             )
             return JsonResponse({"ok": False, "error": str(log_err)}, status=500)
 
@@ -145,7 +162,7 @@ def track_send(request):
             "wa_id": wa_id,
             "event": er.event,
             "event_registration": er,
-            "expires_at": dj_tz.now() + timedelta(days=30),
+            "expires_at": dj_tz.now() + timedelta(days=4),
             "flow_type": flow_type,
         }
         if template_wamid:
@@ -312,15 +329,37 @@ def whatsapp_rsvp(request):
             if rid:
                 er = EventRegistration.objects.get(pk=rid)
 
-        # Priority 3: latest mapping for this wa_id (fallback)
         if not er:
             rid = (
                 base_qs.order_by("-created_at")
                 .values_list("event_registration", flat=True)
                 .first()
             )
-            if rid:
-                er = EventRegistration.objects.get(pk=rid)
+            # LOGIC FIX: Check strictly for RSVP context
+            # If we found a registration via "recent session" (stickiness),
+            # we must ensure the SESSION TYPE is actually 'rsvp'.
+            # If the session is 'standalone' or 'travel' or None, "Yes/No" should NOT update RSVP.
+            
+            # Fetch the actual map entry to check flow_type
+            active_map = base_qs.order_by("-created_at").values("flow_type", "event_registration").first()
+            
+            if active_map:
+                map_flow_type = active_map.get("flow_type")
+                # Allowed flows for implicit text RSVP: 'rsvp'
+                # Disallowed: 'standalone', 'travel', etc.
+                if map_flow_type != "rsvp":
+                    log.info(f"[RSVP] Ignoring generic '{raw_status}' because flow_type='{map_flow_type}' (not rsvp)")
+                    # Do NOT set `er`. Treat as if no registration found for RSVP purposes.
+                    # This will fall through to the STANDALONE / UNREGISTERED block below.
+                    er = None 
+                else:
+                    # Valid RSVP flow
+                    if active_map.get("event_registration"):
+                         er = EventRegistration.objects.get(pk=active_map["event_registration"])
+            else:
+                 # No active map? (Fallthrough from "Unsolicited but maybe recently messaged?")
+                 # If no map, we definitely shouldn't update RSVP based on random "Yes".
+                 er = None
 
         if not er:
             # STANDALONE / UNREGISTERED MESSAGE HANDLING

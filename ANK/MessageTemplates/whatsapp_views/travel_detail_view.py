@@ -367,8 +367,60 @@ def whatsapp_travel_webhook(request):
         # If no session exists and not a command, do NOT send post-RSVP options automatically.
         # This prevents "travel detail" loops when users reply to bulk messages.
         if not sess:
-            logger.warning(f"[TEXT] No session for reg={reg.id}, generic text received. Logging only.")
-            # Message is already logged by MessageLogger.log_inbound above.
+            # GLOBAL MENU FALLBACK
+            # If the user sends a message and is NOT in a specific travel flow,
+            # we check if they have any active registrations and send them a menu.
+            
+            wa_digits = "".join(c for c in wa_id if c.isdigit())[-15:]
+            
+            # Find active registrations (future events or recent past)
+            # You might want to filter by Event.start_date >= today
+            active_regs = EventRegistration.objects.filter(
+                guest__phone__endswith=wa_digits
+            ).select_related('event').order_by('-event__start_date')[:3]
+
+            if active_regs:
+                msg_body = "👋 Welcome back! Here are your events:\n\n"
+                rows = []
+                for reg in active_regs:
+                    evt_name = reg.event.name
+                    status = reg.rsvp_status or "Pending"
+                    # We can't easily make these clickable list items without a template,
+                    # so we'll just list them as text for now, or send a generic "My Events" button.
+                    msg_body += f"• *{evt_name}* (RSVP: {status})\n"
+                
+                msg_body += "\nReply with specific commands or wait for an admin to reply."
+                
+                # We can also send a helper button if desired, but simple text is safe.
+                from Events.services.message_logger import MessageLogger
+                
+                # Use the first registration as a proxy for sending the message
+                # (MessageLogger requires a registration to link the log to)
+                proxy_reg = active_regs[0]
+                
+                MessageLogger.send_text(
+                    event_registration=proxy_reg,
+                    content=msg_body,
+                    message_type="bot_reply"
+                )
+                logger.info(f"[TEXT] Sent Global Menu to {wa_id} (found {len(active_regs)} events)")
+                return JsonResponse({"ok": True, "menu_sent": True})
+
+            else:
+                # Unknown user? Or no active events.
+                # Send a generic "Contact us" message.
+                msg_body = (
+                    "👋 Hello! We couldn't find any active events linked to this number.\n\n"
+                    "If you believe this is a mistake, please contact the event admin directly."
+                )
+                try:
+                    from MessageTemplates.services.whatsapp import send_freeform_text
+                    send_freeform_text(wa_id, msg_body)
+                    logger.info(f"[TEXT] Sent Unknown User generic reply to {wa_id}")
+                except Exception as e:
+                    logger.error(f"[TEXT] Failed to send Unknown User reply: {e}")
+
+            logger.warning(f"[TEXT] No session & no active events for {wa_id}, logging only.")
             return JsonResponse({"ok": True}, status=200)
 
         # If session is complete (and it wasn't a command), send instructions
