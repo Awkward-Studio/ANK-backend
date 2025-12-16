@@ -283,8 +283,10 @@ def whatsapp_rsvp(request):
     except Exception:
         return HttpResponseBadRequest("invalid json")
 
-    # Get the incoming status (lowercase from Next.js)
-    raw_status = (body.get("rsvp_status") or "").strip().lower()
+    # Get the incoming status/body and media
+    raw_status = (body.get("rsvp_status") or body.get("body") or "").strip()
+    media_id = body.get("media_id")
+    media_type = body.get("media_type")
 
     # ✅ Normalize to title case
     status_map = {
@@ -295,12 +297,12 @@ def whatsapp_rsvp(request):
         "not_sent": "Not_Sent",
     }
 
-    normalized_status = status_map.get(raw_status)
+    normalized_status = status_map.get(raw_status.lower())
 
-    if not normalized_status or raw_status not in {"yes", "no", "maybe"}:
-        log.warning(f"Unknown RSVP status received: {raw_status}")
-        return HttpResponseBadRequest("invalid rsvp_status")
-
+    # If it's a valid RSVP, we use that. If not, we treat it as generic content.
+    # We no longer reject unknown status if it might be a media message or generic text.
+    is_rsvp = normalized_status in {"Yes", "No", "Maybe"}
+    
     responded_on = None
     if body.get("responded_on"):
         parsed = parse_datetime(body["responded_on"])
@@ -409,34 +411,45 @@ def whatsapp_rsvp(request):
                 status="received",
                 sent_at=responded_on,
                 direction="inbound",
-                body=raw_status,  # [FIX] Log exact text, don't prefix with "RSVP:" unless it IS one
+                body=raw_status,
                 message_type="custom",
                 flow_type="standalone",
-                guest_name=found_name,  # [NEW] Persist name if known
+                guest_name=found_name,
+                media_id=media_id,
+                media_type=media_type,
             )
             
-            log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id}")
+            log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id} (media={bool(media_id)})")
             return JsonResponse({"ok": True, "standalone": True})
             
             # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
-    # Update RSVP with normalized status (title case)
-    er.rsvp_status = normalized_status  # "Maybe" instead of "maybe"
-    # er.responded_on is updated via MessageLogger
-    er.save(update_fields=["rsvp_status"])
+    # Update RSVP only if it's a valid RSVP command
+    if is_rsvp:
+        er.rsvp_status = normalized_status
+        er.save(update_fields=["rsvp_status"])
+        log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 
     # Log inbound message
     from Events.services.message_logger import MessageLogger
 
+    # Determine display content
+    if is_rsvp:
+        display_content = f"RSVP: {normalized_status}"
+        msg_type = "rsvp"
+    else:
+        display_content = raw_status # Generic text
+        msg_type = "custom"
+
     MessageLogger.log_inbound(
         event_registration=er,
-        content=f"RSVP: {normalized_status}",
-        message_type="rsvp",
-        wa_message_id=body.get("wa_id", ""),  # Best effort if available here
+        content=display_content,
+        message_type=msg_type,
+        wa_message_id=body.get("wa_id", ""),
+        media_id=media_id,
+        media_type=media_type,
         metadata=body,
     )
-
-    log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
 
     # Send immediate WhatsApp confirmation with next steps
     try:
