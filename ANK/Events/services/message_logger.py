@@ -15,6 +15,9 @@ class MessageLogger:
         content: str,
         message_type: str = "content",
         wa_message_id: str = None,
+        media_url: str = None,
+        media_type: str = None,
+        media_id: str = None,
         metadata: dict = None,
     ):
         """
@@ -28,6 +31,9 @@ class MessageLogger:
                 content=content,
                 status="received",
                 wa_message_id=wa_message_id,
+                media_url=media_url,
+                media_type=media_type,
+                media_id=media_id,
                 metadata=metadata or {},
             )
 
@@ -59,6 +65,9 @@ class MessageLogger:
                             ),
                             "direction": "inbound",
                             "body": content,
+                            "media_url": media_url,
+                            "media_type": media_type,
+                            "media_id": media_id,
                         },
                     )
                 except Exception as log_err:
@@ -82,6 +91,9 @@ class MessageLogger:
         wa_message_id: str,
         message_type: str = "content",
         template_name: str = None,
+        media_url: str = None,
+        media_type: str = None,
+        media_id: str = None,
         metadata: dict = None,
     ):
         """
@@ -96,6 +108,9 @@ class MessageLogger:
                 status="sent",
                 wa_message_id=wa_message_id,
                 template_name=template_name,
+                media_url=media_url,
+                media_type=media_type,
+                media_id=media_id,
                 metadata=metadata or {},
             )
 
@@ -139,6 +154,9 @@ class MessageLogger:
                             ),
                             "direction": "outbound",
                             "body": content,
+                            "media_url": media_url,
+                            "media_type": media_type,
+                            "media_id": media_id,
                         },
                     )
                     logger.info(
@@ -289,4 +307,38 @@ class MessageLogger:
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_RESUME] Failed for reg {reg.id}: {e}")
+            return ""
+
+    @staticmethod
+    def send_media_message(
+        reg: EventRegistration,
+        media_type: str,
+        media_url: str,
+        caption: str = None,
+        message_type: str = "content",
+    ) -> str:
+        """
+        Send a media message AND log it.
+        Returns the WhatsApp message ID.
+        """
+        from MessageTemplates.services.whatsapp import send_media
+
+        phone = getattr(reg.guest, "phone", None)
+        if not phone:
+            logger.warning(f"[SEND_MEDIA] No phone for reg {reg.id}")
+            return ""
+
+        try:
+            wa_id = send_media(phone, media_type, media_url, caption)
+            MessageLogger.log_outbound(
+                reg,
+                content=caption,  # Log caption as the main text content
+                wa_message_id=wa_id,
+                message_type=message_type,
+                media_url=media_url,
+                media_type=media_type,
+            )
+            return wa_id
+        except Exception as e:
+            logger.exception(f"[SEND_MEDIA] Failed for reg {reg.id}: {e}")
             return ""

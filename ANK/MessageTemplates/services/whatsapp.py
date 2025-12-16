@@ -110,6 +110,43 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
     return (data.get("messages") or [{}])[0].get("id", "")
 
 
+def send_media(
+    to_wa_id: str, media_type: str, media_url: str, caption: Optional[str] = None
+) -> str:
+    """
+    Sends a media message (image, video, document, audio) via WhatsApp.
+    media_type should be one of: 'image', 'video', 'document', 'audio'.
+    """
+    logger.warning(
+        f"[WA-SEND-MEDIA] TO={to_wa_id} TYPE={media_type} URL={media_url} CAPTION={caption}"
+    )
+
+    valid_types = {"image", "video", "document", "audio"}
+    if media_type not in valid_types:
+        raise WhatsAppError(f"Invalid media_type: {media_type}. Must be one of {valid_types}")
+
+    payload_media = {"link": media_url}
+    # Audio does not support caption
+    if caption and media_type != "audio":
+        payload_media["caption"] = caption
+        # Document needs 'filename' sometimes, but caption is usually supported as caption? 
+        # Actually for document, 'caption' field represents the filename in some contexts or caption text. 
+        # Meta API: document object supports 'caption' and 'filename'. 
+        # We will map caption to 'caption'.
+
+    data = _post(
+        "messages",
+        {
+            "messaging_product": "whatsapp",
+            "to": _norm_digits(to_wa_id),
+            "type": media_type,
+            media_type: payload_media,
+        },
+    )
+    logger.warning(f"[WA-MEDIA-RESPONSE] {data}")
+    return (data.get("messages") or [{}])[0].get("id", "")
+
+
 def send_resume_opener(
     to_wa_id: str, registration_uuid: str, opener_body_param: Optional[str] = None
 ) -> str:
