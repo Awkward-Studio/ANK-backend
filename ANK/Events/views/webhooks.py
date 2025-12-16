@@ -13,6 +13,12 @@ from django.views.decorators.http import require_http_methods
 from Events.models.event_registration_model import EventRegistration
 from Events.models.wa_send_map import WaSendMap
 from Events.models.whatsapp_message_log import WhatsAppMessageLog
+from Events.serializers.whatsapp_message_log_serializer import (
+    WhatsAppMessageLogSerializer,
+)
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 
 log = logging.getLogger(__name__)
 
@@ -373,16 +379,30 @@ def whatsapp_rsvp(request):
             
             # Create a log entry for this unknown inbound message
             from Events.models.whatsapp_message_log import WhatsAppMessageLog
-            
+
+            # [NEW] Try to find a name from previous logs for this number
+            previous_log_with_name = (
+                WhatsAppMessageLog.objects.filter(
+                    recipient_id=_norm_digits(wa_id)[-15:], guest_name__isnull=False
+                )
+                .exclude(guest_name="")
+                .order_by("-sent_at")
+                .first()
+            )
+            found_name = previous_log_with_name.guest_name if previous_log_with_name else None
+
             WhatsAppMessageLog.objects.create(
                 wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
-                recipient_id=wa_id,
+                recipient_id=_norm_digits(wa_id)[
+                    -15:
+                ],  # [FIX] Normalize to digits only for consistency
                 status="received",
                 sent_at=responded_on,
                 direction="inbound",
                 body=raw_status,  # [FIX] Log exact text, don't prefix with "RSVP:" unless it IS one
                 message_type="custom",
                 flow_type="standalone",
+                guest_name=found_name,  # [NEW] Persist name if known
             )
             
             log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id}")
@@ -662,8 +682,8 @@ def message_status_lookup(request):
         return JsonResponse({"ok": False, "error": str(e)}, status=500)
 
 
-@csrf_exempt
-@require_http_methods(["GET"])
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def message_logs(request):
     """
     Get message logs filtered by registration, event, guest, or recipient phone.
@@ -704,7 +724,7 @@ def message_logs(request):
     token = _get_header_token(request)
     secret = _get_secret()
     if not secret or token != secret:
-        return HttpResponseForbidden("invalid token")
+        return JsonResponse({"detail": "Invalid token"}, status=403)
 
     registration_id = request.GET.get("registration_id")
     event_id = request.GET.get("event_id")
@@ -713,7 +733,7 @@ def message_logs(request):
     template_name = request.GET.get("template_name")
     standalone_only = request.GET.get("standalone", "").lower() == "true"
 
-    queryset = WhatsAppMessageLog.objects.all()
+    queryset = WhatsAppMessageLog.objects.all().order_by("-sent_at")
 
     if registration_id:
         queryset = queryset.filter(event_registration_id=registration_id)
@@ -724,7 +744,8 @@ def message_logs(request):
     if recipient_id:
         # Normalize phone number (keep last 10-15 digits)
         normalized = _norm_digits(recipient_id)
-        queryset = queryset.filter(recipient_id__endswith=normalized[-10:])
+        if normalized:
+             queryset = queryset.filter(recipient_id__endswith=normalized[-10:])
     if template_name:
         queryset = queryset.filter(template_name=template_name)
     if standalone_only:
@@ -732,39 +753,16 @@ def message_logs(request):
             event_id__isnull=True, event_registration_id__isnull=True
         )
 
-    # Limit to 50 most recent
-    queryset = queryset.order_by("-sent_at")[:50]
-
-    logs = []
-    for msg_log in queryset:
-        logs.append(
-            {
-                "id": str(msg_log.id),
-                "wamid": msg_log.wamid,
-                "recipient_id": msg_log.recipient_id,
-                "status": msg_log.status,
-                "message_type": msg_log.message_type,
-                "template_name": msg_log.template_name,
-                "event_id": msg_log.event_id,
-                "registration_id": msg_log.event_registration_id,
-                "guest_id": msg_log.guest_id,
-                "guest_name": msg_log.guest_name,
-                "sent_at": msg_log.sent_at.isoformat() if msg_log.sent_at else None,
-                "delivered_at": msg_log.delivered_at.isoformat()
-                if msg_log.delivered_at
-                else None,
-                "read_at": msg_log.read_at.isoformat() if msg_log.read_at else None,
-                "failed_at": msg_log.failed_at.isoformat()
-                if msg_log.failed_at
-                else None,
-                "error_code": msg_log.error_code,
-                "error_message": msg_log.error_message,
-                "direction": msg_log.direction,
-                "body": msg_log.body,
-            }
-        )
-
-    return JsonResponse({"logs": logs})
+    # Pagination
+    paginator = PageNumberPagination()
+    # Default 20, max 100
+    paginator.page_size = int(request.GET.get("limit", 20)) 
+    paginator.max_page_size = 100
+    
+    result_page = paginator.paginate_queryset(queryset, request)
+    serializer = WhatsAppMessageLogSerializer(result_page, many=True)
+    
+    return paginator.get_paginated_response(serializer.data)
 
 
 @csrf_exempt
