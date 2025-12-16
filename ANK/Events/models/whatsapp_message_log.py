@@ -56,6 +56,11 @@ class WhatsAppMessageLog(models.Model):
 
     # Content (new)
     body = models.TextField(null=True, blank=True)
+    
+    # Media details
+    media_url = models.TextField(null=True, blank=True)
+    media_type = models.CharField(max_length=20, null=True, blank=True)  # e.g. image, video, document
+    media_id = models.CharField(max_length=255, null=True, blank=True)
 
     # Timestamps
     sent_at = models.DateTimeField(default=timezone.now)

@@ -40,6 +40,11 @@ class ConversationMessage(models.Model):
     # WhatsApp specific - NOT unique since we may not always have actual message IDs
     wa_message_id = models.CharField(max_length=100, blank=True, null=True)
     template_name = models.CharField(max_length=100, blank=True, null=True)
+
+    # Media details
+    media_url = models.TextField(null=True, blank=True)
+    media_type = models.CharField(max_length=20, null=True, blank=True)  # e.g. image, video
+    media_id = models.CharField(max_length=255, null=True, blank=True)
     
     # Generic metadata
     metadata = models.JSONField(default=dict, blank=True)

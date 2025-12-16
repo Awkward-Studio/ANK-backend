@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class SendFreeformInput(serializers.Serializer):
-    message = serializers.CharField(max_length=4096, required=True)
+    message = serializers.CharField(max_length=4096, required=False, allow_blank=True)
+    media_url = serializers.CharField(required=False, allow_blank=True)
+    media_type = serializers.CharField(required=False, allow_blank=True)  # image, video
+    caption = serializers.CharField(required=False, allow_blank=True)
 
 
 class SendFreeformMessageView(APIView):
@@ -55,7 +58,31 @@ class SendFreeformMessageView(APIView):
 
         # Send via existing WhatsApp service
         try:
-            wa_message_id = send_freeform_text(phone, message)
+            wa_message_id = ""
+            media_url = serializer.validated_data.get("media_url")
+            media_type = serializer.validated_data.get("media_type")
+            caption = serializer.validated_data.get("caption")
+
+            if media_url and media_type:
+                # Send Media
+                wa_message_id = MessageLogger.send_media_message(
+                    reg, media_type, media_url, caption=message or caption
+                )
+            else:
+                # Send Text
+                if not message:
+                     return Response(
+                        {"ok": False, "status": "failed", "error": "Message text is required if no media attached"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                wa_message_id = send_freeform_text(phone, message)
+                # Log usage
+                MessageLogger.log_outbound(
+                    event_registration=reg,
+                    content=message,
+                    wa_message_id=wa_message_id,
+                    message_type="content",
+                )
 
             # Pause any active travel session so user replies aren't treated as travel answers
             try:
@@ -67,14 +94,6 @@ class SendFreeformMessageView(APIView):
                     session.save(update_fields=["step"])
             except Exception as pause_exc:
                 logger.warning(f"[FREEFORM] Failed to pause session: {pause_exc}")
-
-            # Log outbound message
-            MessageLogger.log_outbound(
-                event_registration=reg,
-                content=message,
-                wa_message_id=wa_message_id,
-                message_type="content",
-            )
 
             return Response(
                 {"ok": True, "status": "sent", "message_id": wa_message_id},
