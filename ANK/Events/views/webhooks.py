@@ -94,29 +94,53 @@ def track_send(request):
     is_standalone = not event_id and not reg_id
 
     if is_standalone:
-        # For standalone messages, we MUST create a WaSendMap to "break stickiness"
-        # of previous event sessions. This makes the bulk message the active context.
-        if not template_wamid:
+        # For standalone messages, we create a log entry.
+        # - OUTBOUND: Requires template_wamid to create WaSendMap and break stickiness
+        # - INBOUND: No template_wamid needed, just log the message
+
+        is_inbound = direction == "inbound"
+
+        if not is_inbound and not template_wamid:
+            # Outbound standalone messages require template_wamid
             return HttpResponseBadRequest(
-                "missing template_wamid for standalone message"
+                "missing template_wamid for outbound standalone message"
             )
 
         try:
             template_name = body.get("template_name")
             guest_name = body.get("guest_name")
 
+            # For inbound messages, generate a unique wamid if not provided
+            effective_wamid = template_wamid
+            if is_inbound and not effective_wamid:
+                effective_wamid = f"inbound-{wa_id}-{dj_tz.now().timestamp()}"
+
+            # Try to find guest name from previous logs if not provided
+            if not guest_name and is_inbound:
+                previous_log = (
+                    WhatsAppMessageLog.objects.filter(
+                        recipient_id__endswith=wa_id[-10:], guest_name__isnull=False
+                    )
+                    .exclude(guest_name="")
+                    .order_by("-sent_at")
+                    .first()
+                )
+                if previous_log:
+                    guest_name = previous_log.guest_name
+
             # 1. Create Message Log
+            log_status = "received" if is_inbound else "sent"
             WhatsAppMessageLog.objects.update_or_create(
-                wamid=template_wamid,
+                wamid=effective_wamid,
                 defaults={
                     "recipient_id": wa_id,
-                    "status": "sent",
+                    "status": log_status,
                     "sent_at": dj_tz.now(),
                     "event_registration_id": None,
                     "event_id": None,
                     "template_name": template_name,
                     "flow_type": flow_type or "standalone",
-                    "message_type": message_type or "template",
+                    "message_type": message_type or ("text" if is_inbound else "template"),
                     "direction": direction,
                     "guest_id": None,
                     "guest_name": guest_name,
@@ -127,22 +151,23 @@ def track_send(request):
                 },
             )
             log.info(
-                f"[TRACK-SEND][STANDALONE] Created message log for wamid={template_wamid[:30]}..."
+                f"[TRACK-SEND][STANDALONE] Created message log for wamid={effective_wamid[:30]}... direction={direction}"
             )
 
-            # 2. Create WaSendMap (Standalone Context)
-            # We set event=None, event_registration=None
-            defaults = {
-                "wa_id": wa_id,
-                "event": None,
-                "event_registration": None,
-                "expires_at": dj_tz.now() + timedelta(days=4),
-                "flow_type": flow_type or "standalone",
-            }
-            obj, _ = WaSendMap.objects.update_or_create(
-                template_wamid=template_wamid, defaults=defaults
-            )
-            log.info(f"[TRACK-SEND][STANDALONE] Created WaSendMap for {wa_id}")
+            # 2. Create WaSendMap (Standalone Context) - Only for OUTBOUND
+            # For inbound, we don't need to break stickiness
+            if not is_inbound and template_wamid:
+                defaults = {
+                    "wa_id": wa_id,
+                    "event": None,
+                    "event_registration": None,
+                    "expires_at": dj_tz.now() + timedelta(days=4),
+                    "flow_type": flow_type or "standalone",
+                }
+                obj, _ = WaSendMap.objects.update_or_create(
+                    template_wamid=template_wamid, defaults=defaults
+                )
+                log.info(f"[TRACK-SEND][STANDALONE] Created WaSendMap for {wa_id}")
 
         except Exception as log_err:
             log.warning(
@@ -150,7 +175,7 @@ def track_send(request):
             )
             return JsonResponse({"ok": False, "error": str(log_err)}, status=500)
 
-        return JsonResponse({"ok": True, "standalone": True, "wamid": template_wamid})
+        return JsonResponse({"ok": True, "standalone": True, "wamid": effective_wamid})
 
     # Regular flow - requires event_id for event-based messages
     if not event_id:
