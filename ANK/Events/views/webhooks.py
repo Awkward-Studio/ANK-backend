@@ -90,6 +90,7 @@ def track_send(request):
 
     # Check if this is a standalone message (no event/registration context)
     # This supports bulk-send and other template messages sent outside event flows
+    direction = body.get("direction") or "outbound"
     is_standalone = not event_id and not reg_id
 
     if is_standalone:
@@ -116,6 +117,7 @@ def track_send(request):
                     "template_name": template_name,
                     "flow_type": flow_type or "standalone",
                     "message_type": message_type or "template",
+                    "direction": direction,
                     "guest_id": None,
                     "guest_name": guest_name,
                     "body": body_text,
@@ -241,6 +243,7 @@ def track_send(request):
                     "template_name": template_name,
                     "flow_type": flow_type,
                     "message_type": message_type,
+                    "direction": direction,
                     "guest_id": str(guest_id) if guest_id else None,
                     "guest_name": guest_name,
                     "body": body_text,
