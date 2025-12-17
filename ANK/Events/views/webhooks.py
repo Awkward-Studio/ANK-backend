@@ -387,6 +387,57 @@ def whatsapp_rsvp(request):
                  # If no map, we definitely shouldn't update RSVP based on random "Yes".
                  er = None
 
+
+        # [Universal Command Handling]
+        # Intercept "menu", "hi", "help", etc. to show options regardless of flow state.
+        universal_commands = {"menu", "options", "help", "hi", "hello", "start", "restart", "test"}
+        is_menu_command = raw_status.lower() in universal_commands
+
+        if is_menu_command and not er:
+            # Try global lookup by phone if context is missing
+            if wa_id:
+                wa_digits = _norm_digits(wa_id)
+                # Find latest future event or recent past
+                er = EventRegistration.objects.filter(
+                    guest__phone__endswith=wa_digits
+                ).order_by("-event__start_date", "-created_at").first()
+                if er:
+                    log.info(f"[MENU-LOOKUP] Found reg {er.id} for {wa_id}")
+
+        if is_menu_command and er:
+            from Events.services.message_logger import MessageLogger
+            
+            # Log the inbound command
+            MessageLogger.log_inbound(
+                event_registration=er,
+                content=raw_status,
+                message_type="custom",
+                wa_message_id=body.get("wa_id", ""),
+                metadata=body
+            )
+            
+            # Send Menu Buttons
+            event_name = er.event.name if er.event else "the event"
+            msg = f"👋 Hello! Here are your options for {event_name}:"
+            buttons = [
+                {"id": f"tc|start_travel|{er.id}", "title": "✈️ Add Travel Info"},
+                {"id": f"tc|update_rsvp_menu|{er.id}", "title": "📝 Update RSVP"},
+                {"id": f"tc|remind_later|{er.id}", "title": "⏰ Remind Later"},
+            ]
+            MessageLogger.send_buttons(er, msg, buttons, "system")
+            
+            return JsonResponse({"ok": True, "menu_sent": True})
+        
+        elif is_menu_command and not er:
+            # Command sent but user unknown -> Send helpful text + fall through to logging
+            if wa_id:
+                from MessageTemplates.services.whatsapp import send_freeform_text
+                try:
+                    send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.")
+                except Exception:
+                    pass
+            # Fall through to 'if not er' block below for standard standalone logging
+
         if not er:
             # STANDALONE / UNREGISTERED MESSAGE HANDLING
             # If we cannot resolve a registration, we still want to log this message
