@@ -2,7 +2,6 @@ import uuid
 from django.db import models
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
-from Events.models.event_model import Event
 
 
 class CustomFieldDefinition(models.Model):
@@ -31,14 +30,13 @@ class CustomFieldDefinition(models.Model):
         help_text="The model this custom field applies to",
     )
     event = models.ForeignKey(
-        Event,
+        'Events.Event',
         on_delete=models.CASCADE,
         related_name='custom_field_definitions',
-        help_text="The event this custom field belongs to"
+        help_text="The event this custom field belongs to",
+        blank=True,
+        null=True
     )
-    # if you want to restrict choices, you could add:
-    # choices   = models.JSONField(blank=True, null=True,
-    #                               help_text="For select‐style fields; list of options")
 
     class Meta:
         unique_together = ('event', 'content_type', 'name')
