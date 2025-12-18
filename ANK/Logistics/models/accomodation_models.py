@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.fields import GenericRelation
 import uuid
 from Logistics.models.hotel_models import EventHotel, EventHotelRoomType
 from Guest.models import Guest
@@ -50,6 +51,14 @@ class Accommodation(models.Model):
     rooming_remarks = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # GenericRelation for custom field values
+    custom_field_values = GenericRelation(
+        'CustomField.CustomFieldValue',
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='accommodation'
+    )
 
     def clean(self):
         super().clean()

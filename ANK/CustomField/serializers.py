@@ -16,6 +16,8 @@ class CustomFieldDefinitionSerializer(serializers.ModelSerializer):
         help_text="Model name (e.g., 'eventregistration', 'event', 'session')",
     )
     model_name = serializers.SerializerMethodField(read_only=True)
+    event_id = serializers.UUIDField(write_only=True, required=True)
+    event_name = serializers.CharField(source='event.name', read_only=True)
 
     class Meta:
         model = CustomFieldDefinition
@@ -28,8 +30,11 @@ class CustomFieldDefinitionSerializer(serializers.ModelSerializer):
             "content_type",
             "content_type_model",
             "model_name",
+            "event",
+            "event_id",
+            "event_name",
         ]
-        read_only_fields = ["id", "content_type"]
+        read_only_fields = ["id", "content_type", "event"]
 
     def get_model_name(self, obj):
         """Return the model name for display purposes"""
@@ -44,16 +49,24 @@ class CustomFieldDefinitionSerializer(serializers.ModelSerializer):
         return value.lower()
 
     def create(self, validated_data):
-        """Create a CustomFieldDefinition with proper ContentType"""
+        """Create a CustomFieldDefinition with proper ContentType and Event"""
         content_type_model = validated_data.pop(
             "content_type_model", "eventregistration"
         )
+        event_id = validated_data.pop('event_id')
+
+        # Get Event instance
+        from Events.models.event_model import Event
+        event = Event.objects.get(id=event_id)
 
         # Map model names to actual model classes
         model_map = {
             "eventregistration": "Events.EventRegistration",
-            "event": "Events.Event",
+            "sessionregistration": "Events.SessionRegistration",
+            "accommodation": "Logistics.Accommodation",
+            "traveldetail": "Logistics.TravelDetail",
             "session": "Events.Session",
+            "event": "Events.Event",
         }
 
         # Get the app and model name
@@ -71,6 +84,7 @@ class CustomFieldDefinitionSerializer(serializers.ModelSerializer):
         )
 
         validated_data["content_type"] = content_type
+        validated_data["event"] = event
         return super().create(validated_data)
 
 
@@ -179,12 +193,19 @@ class BulkCustomFieldValueSerializer(serializers.Serializer):
         """Validate that all field names exist for the event's EventRegistration model"""
         from django.contrib.contenttypes.models import ContentType
         from Events.models.event_registration_model import EventRegistration
+        from Events.models.event_model import Event
+
+        # Verify event exists
+        event_id = data['event_id']
+        if not Event.objects.filter(id=event_id).exists():
+            raise serializers.ValidationError({"event_id": "Event not found"})
 
         # Get ContentType for EventRegistration
         content_type = ContentType.objects.get_for_model(EventRegistration)
 
-        # Get all valid field definitions for EventRegistration
+        # Get all valid field definitions for EventRegistration IN THIS EVENT
         valid_fields = CustomFieldDefinition.objects.filter(
+            event_id=event_id,
             content_type=content_type
         ).values_list("name", flat=True)
 
@@ -192,7 +213,30 @@ class BulkCustomFieldValueSerializer(serializers.Serializer):
         invalid_fields = set(data["custom_fields"].keys()) - set(valid_fields)
         if invalid_fields:
             raise serializers.ValidationError(
-                {"custom_fields": f"Invalid field names: {', '.join(invalid_fields)}"}
+                {"custom_fields": f"Invalid field names for this event: {', '.join(invalid_fields)}"}
             )
 
         return data
+
+
+class CustomFieldMixin:
+    """
+    Mixin to add custom_fields to any serializer.
+    Automatically includes custom field values in the serialized output.
+    """
+
+    def get_custom_fields(self, obj):
+        """Return all custom field values as a dictionary"""
+        if not hasattr(obj, 'custom_field_values'):
+            return {}
+
+        custom_values = obj.custom_field_values.select_related("definition").all()
+        return {
+            cv.definition.name: {
+                "label": cv.definition.label,
+                "value": cv.value,
+                "type": cv.definition.field_type,
+                "value_id": str(cv.id),
+            }
+            for cv in custom_values
+        }

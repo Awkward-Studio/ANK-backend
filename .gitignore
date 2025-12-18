@@ -10,6 +10,10 @@ media
 .env
 *.env
 env
+myEnv
+myenv
+
+
 
 # Django stuff:
 *.mo
@@ -34,3 +38,5 @@ env
 # VS Code
 .vscode/
 c
+
+*.md

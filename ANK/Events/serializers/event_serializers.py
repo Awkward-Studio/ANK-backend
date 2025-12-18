@@ -7,8 +7,11 @@ from Events.models.event_registration_model import (
     ExtraAttendee,
 )
 from Guest.models import Guest
+from CustomField.serializers import CustomFieldMixin
 
-class EventSerializer(serializers.ModelSerializer):
+class EventSerializer(CustomFieldMixin, serializers.ModelSerializer):
+    custom_fields = serializers.SerializerMethodField()
+
     class Meta:
         model = Event
         fields = [
@@ -24,6 +27,7 @@ class EventSerializer(serializers.ModelSerializer):
             "type",
             "location_type",
             "client_name",
+            "custom_fields",
         ]
 
 
@@ -39,14 +43,15 @@ class EventRegistrationFieldSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "label"]
 
 
-class EventRegistrationSerializer(serializers.ModelSerializer):
+class EventRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer):
     guest = GuestSerializer(read_only=True)
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
     guest_id = serializers.PrimaryKeyRelatedField(
-        queryset=Guest.objects.all(), 
+        queryset=Guest.objects.all(),
         source='guest',       # content of guest_id saves to 'guest' field
         write_only=True       # used only for input, not output
     )
+    custom_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = EventRegistration
@@ -67,6 +72,7 @@ class EventRegistrationSerializer(serializers.ModelSerializer):
             "visa_oci",
             "hamper_count",
             "additional_guest_count",
+            "custom_fields",
         ]
         read_only_fields = ["initiated_on"]
 

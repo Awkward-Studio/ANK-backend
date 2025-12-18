@@ -3,10 +3,12 @@ from Events.models.session_model import Session, SessionField
 from Events.models.session_registration import SessionRegistration
 from Guest.models import Guest
 from Events.models.event_model import Event
+from CustomField.serializers import CustomFieldMixin
 
 
-class SessionSerializer(serializers.ModelSerializer):
+class SessionSerializer(CustomFieldMixin, serializers.ModelSerializer):
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
+    custom_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -22,6 +24,7 @@ class SessionSerializer(serializers.ModelSerializer):
             "location",
             "entertainment",
             "unique_string",
+            "custom_fields",
         ]
 
 
@@ -31,11 +34,12 @@ class SessionFieldSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "label"]
 
 
-class SessionRegistrationSerializer(serializers.ModelSerializer):
+class SessionRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer):
     guest = serializers.PrimaryKeyRelatedField(queryset=Guest.objects.all())
     session = serializers.PrimaryKeyRelatedField(queryset=Session.objects.all())
+    custom_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = SessionRegistration
-        fields = ["id", "guest", "session", "registered_on"]
+        fields = ["id", "guest", "session", "registered_on", "custom_fields"]
         read_only_fields = ["registered_on"]
