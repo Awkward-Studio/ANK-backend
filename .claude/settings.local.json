@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(aws logs:*)",
+      "Bash(aws secretsmanager list-secrets:*)",
+      "Bash(aws ecs describe-task-definition:*)",
+      "Bash(aws ec2 describe-vpc-endpoints:*)",
+      "Bash(aws amplify get-app:*)",
+      "Bash(aws lambda list-functions:*)",
+      "Bash(aws apigateway get-rest-apis:*)",
+      "Bash(aws elasticache describe-cache-clusters:*)",
+      "Bash(aws ce get-cost-and-usage:*)",
+      "Bash(aws elasticache describe-replication-groups:*)",
+      "Bash(aws ec2 describe-nat-gateways:*)",
+      "Bash(aws ec2 describe-transit-gateways:*)",
+      "Bash(aws ec2 describe-vpc-peering-connections:*)",
+      "Bash(aws ec2 describe-network-interfaces:*)",
+      "Bash(aws ecr describe-repositories:*)",
+      "Bash(aws ecr describe-images:*)",
+      "Bash(aws ecr list-images:*)",
+      "Bash(aws rds describe-db-instances:*)",
+      "Bash(aws ecs list-tasks:*)",
+      "Bash(aws ecs list-clusters:*)",
+      "Bash(aws elbv2 describe-load-balancers:*)"
+    ]
+  }
+}

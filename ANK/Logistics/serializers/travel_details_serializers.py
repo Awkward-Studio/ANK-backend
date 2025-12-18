@@ -1,15 +1,17 @@
 from rest_framework import serializers
 from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
+from CustomField.serializers import CustomFieldMixin
 
 
-class TravelDetailSerializer(serializers.ModelSerializer):
+class TravelDetailSerializer(CustomFieldMixin, serializers.ModelSerializer):
     event_registrations = serializers.PrimaryKeyRelatedField(
         queryset=EventRegistration.objects.all(), many=True, required=False
     )
     extra_attendees = serializers.PrimaryKeyRelatedField(
         queryset=ExtraAttendee.objects.all(), many=True, required=False
     )
+    custom_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = TravelDetail
@@ -36,6 +38,7 @@ class TravelDetailSerializer(serializers.ModelSerializer):
             "flight_number",
             "airline",
             "pnr",
+            "custom_fields",
         ]
 
     def validate(self, data):

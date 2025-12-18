@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.fields import GenericRelation
 import uuid
 from Events.models.event_model import Event
 from Events.models.session_registration import SessionRegistration
@@ -23,6 +24,14 @@ class TravelDetail(models.Model):
         blank=True,
         on_delete=models.CASCADE,
         related_name="travel_details",
+    )
+
+    # GenericRelation for custom field values
+    custom_field_values = GenericRelation(
+        'CustomField.CustomFieldValue',
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='traveldetail'
     )
 
     ARRIVAL_CHOICES = [

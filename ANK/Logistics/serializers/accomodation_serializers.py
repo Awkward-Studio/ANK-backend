@@ -8,13 +8,15 @@ from Logistics.models.accomodation_models import (
 from Logistics.serializers.hotel_serializers import (
     EventHotelRoomTypeSerializer,
 )
+from CustomField.serializers import CustomFieldMixin
 
 
-class AccommodationSerializer(serializers.ModelSerializer):
+class AccommodationSerializer(CustomFieldMixin, serializers.ModelSerializer):
 
     event_room_type = serializers.PrimaryKeyRelatedField(
         queryset=EventHotelRoomType.objects.all()
     )
+    custom_fields = serializers.SerializerMethodField()
 
     class Meta:
         model = Accommodation
@@ -33,6 +35,7 @@ class AccommodationSerializer(serializers.ModelSerializer):
             "rooming_remarks",
             "created_at",
             "updated_at",
+            "custom_fields",
         ]
         read_only_fields = ["created_at", "updated_at"]
 
