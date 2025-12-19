@@ -22,7 +22,8 @@
       "Bash(aws rds describe-db-instances:*)",
       "Bash(aws ecs list-tasks:*)",
       "Bash(aws ecs list-clusters:*)",
-      "Bash(aws elbv2 describe-load-balancers:*)"
+      "Bash(aws elbv2 describe-load-balancers:*)",
+      "Bash(\"..\\env\\Scripts\\python.exe\" manage.py shell -c \"from django.contrib.contenttypes.models import ContentType; cts = ContentType.objects.all(); print(''\\n''.join([f''{ct.app_label}.{ct.model}'' for ct in cts]))\")"
     ]
   }
 }
