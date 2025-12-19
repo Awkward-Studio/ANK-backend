@@ -79,8 +79,9 @@ class CustomFieldDefinitionSerializer(serializers.ModelSerializer):
         app_label, model = model_path.split(".")
 
         # Get or create ContentType
+        # Note: app_label is case-sensitive (Events, Logistics), model is lowercase
         content_type = ContentType.objects.get(
-            app_label=app_label.lower(), model=model.lower()
+            app_label=app_label, model=model.lower()
         )
 
         validated_data["content_type"] = content_type

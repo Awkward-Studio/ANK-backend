@@ -3,7 +3,6 @@ from django.db import models
 from django.contrib.contenttypes.fields import GenericRelation
 from Logistics.models.hotel_models import Hotel
 from Events.models.event_model import Event
-from CustomField.models import CustomFieldValue
 
 
 class Session(models.Model):
@@ -34,11 +33,12 @@ class Session(models.Model):
         null=True,
         blank=True,
     )
-    # allow querying session.custom_field_values
+    # GenericRelation for custom field values
     custom_field_values = GenericRelation(
-        CustomFieldValue,
-        content_type_field="content_type",
-        object_id_field="object_id",
+        'CustomField.CustomFieldValue',
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='session'
     )
 
     class Meta:

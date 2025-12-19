@@ -1,10 +1,7 @@
 import uuid
-
-from CustomField.models import CustomFieldValue
-from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
+from django.contrib.contenttypes.fields import GenericRelation
 from Guest.models import Guest
-
 from Events.models.event_model import Event
 
 
@@ -48,12 +45,12 @@ class EventRegistration(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Dynamic custom fields support
+    # GenericRelation for custom field values
     custom_field_values = GenericRelation(
-        CustomFieldValue,
-        content_type_field="content_type",
-        object_id_field="object_id",
-        related_query_name="event_registration",
+        'CustomField.CustomFieldValue',
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='eventregistration'
     )
 
     class Meta:

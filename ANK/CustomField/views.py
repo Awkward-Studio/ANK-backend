@@ -90,8 +90,9 @@ class CustomFieldDefinitionListCreateView(APIView):
 
                 if model_filter.lower() in model_map:
                     app_label, model = model_map[model_filter.lower()]
+                    # Note: app_label is case-sensitive (Events, Logistics), model is lowercase
                     content_type = ContentType.objects.get(
-                        app_label=app_label.lower(), model=model
+                        app_label=app_label, model=model
                     )
                     queryset = queryset.filter(content_type=content_type)
                 else:
