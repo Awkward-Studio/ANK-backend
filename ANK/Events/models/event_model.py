@@ -1,7 +1,6 @@
 import uuid
 from django.db import models
 from django.contrib.contenttypes.fields import GenericRelation
-from CustomField.models import CustomFieldValue
 
 
 class Event(models.Model):
@@ -38,10 +37,13 @@ class Event(models.Model):
     )
     bride_name = models.CharField(max_length=200, blank=True, null=True)
     groom_name = models.CharField(max_length=200, blank=True, null=True)
+
+    # GenericRelation for custom field values
     custom_field_values = GenericRelation(
-        CustomFieldValue,
-        content_type_field="content_type",
-        object_id_field="object_id",
+        'CustomField.CustomFieldValue',
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='event'
     )
 
     def __str__(self):

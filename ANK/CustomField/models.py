@@ -33,16 +33,15 @@ class CustomFieldDefinition(models.Model):
         'Events.Event',
         on_delete=models.CASCADE,
         related_name='custom_field_definitions',
-        help_text="The event this custom field belongs to",
-        blank=True,
-        null=True
+        help_text="The event this custom field belongs to"
     )
 
     class Meta:
         unique_together = ('event', 'content_type', 'name')
 
     def __str__(self):
-        return f"{self.label} (for {self.content_type.model} in {self.event.name})"
+        event_name = self.event.name if self.event else "No Event"
+        return f"{self.label} (for {self.content_type.model} in {event_name})"
 
 
 class CustomFieldValue(models.Model):
@@ -51,7 +50,8 @@ class CustomFieldValue(models.Model):
         CustomFieldDefinition, on_delete=models.CASCADE, related_name="values"
     )
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveIntegerField()
+    # Use CharField to support UUID primary keys (all models use UUIDField)
+    object_id = models.CharField(max_length=36)
     content_object = GenericForeignKey("content_type", "object_id")
     # store everything as text and cast later if needed
     value = models.TextField()
