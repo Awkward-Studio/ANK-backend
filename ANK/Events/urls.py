@@ -59,6 +59,8 @@ from Events.views.staff_event_fields_permissions_views import (
 from Events.views.webhooks import whatsapp_rsvp
 from Events.views.conversation_views import ConversationHistoryView, ServiceWindowStatusView
 from Events.views.send_freeform_view import SendFreeformMessageView
+from Events.views.opt_in_views import resolve_opt_in_token, confirm_opt_in
+
 
 urlpatterns = [
     # ─── Conversation Components ───────────────────────────────────────────
@@ -77,6 +79,18 @@ urlpatterns = [
         SendFreeformMessageView.as_view(),
         name="send-freeform-message",
     ),
+    # ─── Public Opt-In ─────────────────────────────────────────────────────
+    path(
+        "public/opt-in/resolve/<str:token>/",
+        resolve_opt_in_token,
+        name="opt-in-resolve",
+    ),
+    path(
+        "public/opt-in/confirm/",
+        confirm_opt_in,
+        name="opt-in-confirm",
+    ),
+
     # ─── Events ────────────────────────────────────────────────────────────
     path("events/", EventListCreateView.as_view(), name="event-list"),
     path("events/<uuid:pk>/", EventDetailView.as_view(), name="event-detail"),

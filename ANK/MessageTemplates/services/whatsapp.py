@@ -260,3 +260,32 @@ def send_choice_buttons(
     logger.warning(f"[WA-BUTTON-RESPONSE] {data}")
 
     return (data.get("messages") or [{}])[0].get("id", "")
+
+
+def send_template(
+    to_wa_id: str,
+    template_name: str,
+    language_code: str = "en_US",
+    components: List[Dict[str, Any]] = None,
+) -> str:
+    """
+    Sends a specific template message.
+    """
+    logger.warning(
+        f"[WA-SEND-TEMPLATE] TO={to_wa_id} TEMP={template_name} COMPS={len(components or [])}"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": _norm_digits(to_wa_id),
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},
+            "components": components or [],
+        },
+    }
+
+    data = _post("messages", payload)
+    return (data.get("messages") or [{}])[0].get("id", "")
+
