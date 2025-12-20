@@ -42,6 +42,24 @@ class EventRegistration(models.Model):
     additional_guest_count = models.PositiveIntegerField(
         default=0, null=True, blank=True
     )
+    
+    # WhatsApp Opt-In Fields
+    whatsapp_opt_in_token = models.CharField(
+        max_length=100, unique=True, null=True, blank=True
+    )
+    whatsapp_opt_in_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("pending", "Pending"),
+            ("sent", "Sent"),
+            ("verified", "Verified"),
+            ("opt_out", "Opt Out"),
+        ],
+        default="pending",
+    )
+    whatsapp_opt_in_sent_at = models.DateTimeField(null=True, blank=True)
+    whatsapp_opted_in_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

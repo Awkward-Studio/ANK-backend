@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as tz
 
@@ -284,7 +285,45 @@ def track_send(request):
             # Non-fatal - don't fail the request if logging fails
             log.warning(f"[TRACK-SEND] Failed to create message log: {log_err}")
 
+    # [NEW] Opt-In Request Logic
+    if message_type == "utility":
+        try:
+            if not er.whatsapp_opt_in_token:
+                er.whatsapp_opt_in_token = str(uuid.uuid4())
+            
+            # Update status
+            er.whatsapp_opt_in_status = 'sent'
+            er.whatsapp_opt_in_sent_at = dj_tz.now()
+            er.save(update_fields=['whatsapp_opt_in_token', 'whatsapp_opt_in_status', 'whatsapp_opt_in_sent_at'])
+            
+            # Construct URL
+            domain = os.getenv("FRONTEND_URL", "https://ank-events.com")
+            # Frontend URL that will consume the token
+            opt_in_link = f"{domain}/opt-in?token={er.whatsapp_opt_in_token}"
+            
+            # Send Template
+            from MessageTemplates.services.whatsapp import send_template
+            
+            send_template(
+                to_wa_id=wa_id,
+                template_name="event_opt_in_request",
+                components=[
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": opt_in_link}
+                        ]
+                    }
+                ]
+            )
+            log.info(f"[OPT-IN] Sent request to {wa_id} for reg {er.id}")
+            
+        except Exception as e:
+            log.exception(f"[OPT-IN] Failed to process utility message: {e}")
+            # We don't return error to avoid breaking the caller if logging succeeded above
+
     return JsonResponse({"ok": True, "map_id": str(obj.id)})
+
 
 
 #
@@ -416,7 +455,30 @@ def whatsapp_rsvp(request):
         # [Universal Command Handling]
         # Intercept "menu", "hi", "help", etc. to show options regardless of flow state.
         universal_commands = {"menu", "options", "help", "hi", "hello", "start", "restart", "test"}
-        is_menu_command = raw_status.lower() in universal_commands
+        stop_commands = {"stop", "unsubscribe"}
+        
+        normalized_cmd = raw_status.lower().strip()
+        is_menu_command = normalized_cmd in universal_commands
+        is_stop_command = normalized_cmd in stop_commands
+
+        if is_stop_command:
+             # Handle Opt-Out
+             if er:
+                 er.whatsapp_opt_in_status = 'opt_out'
+                 er.save(update_fields=['whatsapp_opt_in_status'])
+                 
+                 from MessageTemplates.services.whatsapp import send_freeform_text
+                 try:
+                     send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.")
+                 except Exception:
+                     pass
+                 
+                 log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
+                 return JsonResponse({"ok": True, "status": "opt_out"})
+             else:
+                 # TODO: Global unsubscribe if no ER found?
+                 # For now, just log it.
+                 log.info(f"[OPT-OUT] Received STOP from {wa_id} but no active registration context found.")
 
         if is_menu_command and not er:
             # Try global lookup by phone if context is missing
