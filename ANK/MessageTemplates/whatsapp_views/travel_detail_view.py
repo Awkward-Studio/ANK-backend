@@ -415,10 +415,10 @@ def whatsapp_travel_webhook(request):
                     msg_body += f"• *{evt_name}* (RSVP: {status})\n"
                 
                 msg_body += "\nReply with specific commands or wait for an admin to reply."
-                
+
                 # We can also send a helper button if desired, but simple text is safe.
-                from Events.services.message_logger import MessageLogger
-                
+                # MessageLogger is already imported at module level
+
                 # Use the first registration as a proxy for sending the message
                 # (MessageLogger requires a registration to link the log to)
                 proxy_reg = active_regs[0]
