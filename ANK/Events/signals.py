@@ -103,7 +103,11 @@ def sync_extra_guests(sender, instance: EventRegistration, created, **kwargs):
             
             # Calculate required number of extra guests
             # estimated_pax includes the primary guest, so subtract 1
-            required_extras = max(0, instance.estimated_pax - 1)
+            # If estimated_pax is None, treat as no extra guests needed
+            if instance.estimated_pax is None:
+                required_extras = 0
+            else:
+                required_extras = max(0, instance.estimated_pax - 1)
             
             # Get current count of extra attendees
             current_extras = instance.extra_attendees.all()
