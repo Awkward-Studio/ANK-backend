@@ -60,6 +60,7 @@ from Events.views.webhooks import whatsapp_rsvp
 from Events.views.conversation_views import ConversationHistoryView, ServiceWindowStatusView
 from Events.views.send_freeform_view import SendFreeformMessageView
 from Events.views.opt_in_views import resolve_opt_in_token, confirm_opt_in
+from Events.views.public_views import ClientViewAPIView
 
 
 urlpatterns = [
@@ -89,6 +90,11 @@ urlpatterns = [
         "public/opt-in/confirm/",
         confirm_opt_in,
         name="opt-in-confirm",
+    ),
+    path(
+        "public/events/<uuid:event_id>/client-view/",
+        ClientViewAPIView.as_view(),
+        name="public-client-view",
     ),
 
     # ─── Events ────────────────────────────────────────────────────────────
