@@ -24,6 +24,12 @@ class Session(models.Model):
         related_name="sessions",
         db_index=True,
     )
+    venue_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Specific venue within the hotel (e.g., 'Grand Ballroom')"
+    )
     location = models.CharField(max_length=200, null=True, blank=True)
     entertainment = models.TextField(
         blank=True, help_text="Describe the entertainment planned"
