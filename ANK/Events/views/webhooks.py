@@ -354,6 +354,46 @@ def whatsapp_rsvp(request):
     raw_status = (body.get("rsvp_status") or body.get("body") or "").strip()
     media_id = body.get("media_id")
     media_type = body.get("media_type")
+    
+    # [FIX] Check for Travel Capture (tc|) buttons that might be sent here
+    # This happens when a user clicks "Add Travel Details" on the RSVP confirmation message
+    button_id = body.get("button_id") or ""
+    effective_payload = button_id if button_id.startswith("tc|") else (raw_status if raw_status.startswith("tc|") else "")
+
+    if effective_payload:
+        from MessageTemplates.services.travel_info_capture import apply_button_choice
+        
+        parts = effective_payload.split("|", 2)
+        if len(parts) >= 2:
+            step = parts[1]
+            value = parts[2] if len(parts) > 2 else ""
+            
+            # We need the registration to apply the choice
+            er_target = None
+            req_reg_id = body.get("event_registration_id")
+            
+            if req_reg_id:
+                try:
+                    er_target = EventRegistration.objects.get(pk=req_reg_id)
+                except EventRegistration.DoesNotExist:
+                    pass
+            
+            if not er_target:
+                 # Try resolve by wa_id if reg_id missing in payload
+                 w_id = _norm_digits(body.get("wa_id", ""))
+                 if w_id:
+                     er_target = EventRegistration.objects.filter(guest__phone__endswith=w_id).order_by("-created_at").first()
+
+            if er_target:
+                log.info(f"[RSVP-WEBHOOK] Delegating button {effective_payload} to Travel Capture for reg {er_target.id}")
+                try:
+                    apply_button_choice(er_target, step, value)
+                    return JsonResponse({"ok": True, "delegated": True})
+                except Exception as e:
+                    log.exception(f"[RSVP-WEBHOOK] Travel delegation failed: {e}")
+                    # Fall through to standard logging? Or return error?
+                    pass
+
 
     # ✅ Normalize to title case
     status_map = {
