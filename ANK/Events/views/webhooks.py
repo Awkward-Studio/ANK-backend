@@ -814,6 +814,11 @@ def message_status_webhook(request):
                     msg_log.error_message = errors[0].get("title", "") or errors[0].get(
                         "message", ""
                     )
+                log.warning(
+                    f"[MESSAGE-STATUS] FAILED wamid={wamid[:50]}... "
+                    f"recipient={recipient_id} error_code={msg_log.error_code} "
+                    f"error_message={msg_log.error_message} raw_errors={errors}"
+                )
 
             msg_log.save()
             log.info(f"[MESSAGE-STATUS] Updated {wamid[:30]}... to {status}")
