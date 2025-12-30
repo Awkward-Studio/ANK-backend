@@ -364,13 +364,13 @@ class BulkGuestUploadAPIView(APIView):
                             )
 
                         # === DUPLICATE DETECTION IN DATABASE ===
-                        # Check if UID already exists in database (EventRegistration.uid is unique)
-                        uid_conflict = EventRegistration.objects.filter(uid=uid).first()
+                        # Check if UID already exists in this event (UID must be unique per event)
+                        uid_conflict = EventRegistration.objects.filter(event=event, uid=uid).first()
                         if uid_conflict:
-                            # UID exists - check if it's for a different guest
+                            # UID exists in this event - check if it's for a different guest
                             if uid_conflict.guest.email != email:
                                 raise ValueError(
-                                    f"UID '{uid}' already exists for a different guest: {uid_conflict.guest.email}"
+                                    f"UID '{uid}' already exists in this event for a different guest: {uid_conflict.guest.email}"
                                 )
 
                         # Check for phone number conflicts (warning only, as phone is not unique in model)

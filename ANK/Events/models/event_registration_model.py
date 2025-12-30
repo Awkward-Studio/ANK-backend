@@ -7,7 +7,7 @@ from Events.models.event_model import Event
 
 class EventRegistration(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    uid = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    uid = models.CharField(max_length=50, blank=True, null=True)  # Unique per event, not globally
     guest = models.ForeignKey(Guest, on_delete=models.CASCADE)
     event = models.ForeignKey(
         Event, on_delete=models.CASCADE, related_name="registrations"
@@ -74,6 +74,13 @@ class EventRegistration(models.Model):
     class Meta:
         unique_together = ("guest", "event")
         # ↑ ensures a given guest has exactly one RSVP row per Event
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'uid'],
+                name='unique_uid_per_event',
+                condition=models.Q(uid__isnull=False),  # Only apply when uid is not null
+            )
+        ]
 
     def __str__(self):
         return f"{self.guest} → {self.event}: {self.rsvp_status}"
