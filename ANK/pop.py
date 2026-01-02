@@ -30,6 +30,9 @@ FIELD_SETS = {
     ],
     "EventField": [
         ("name", "Name"),
+        ("client_name", "Client Name"),
+        ("type", "Event Type"),
+        ("location_type", "Location Type"),
         ("location", "Location"),
         ("venue", "Venue"),
         ("start_date", "Start Date"),
@@ -46,9 +49,12 @@ FIELD_SETS = {
         ("pax", "Expected Pax"),
         ("date", "Date"),
         ("venue", "Venue"),
+        ("venue_name", "Venue Name"),
         ("location", "Location"),
+        ("entertainment", "Entertainment"),
     ],
     "EventRegistrationField": [
+        ("uid", "UID"),
         ("guest_group", "Guest Group"),
         ("sub_guest_group", "Sub Guest Group"),
         ("name_on_message", "Name on Message"),
@@ -61,6 +67,7 @@ FIELD_SETS = {
         ("initiated_on", "Initiated On"),
         ("responded_on", "Responded On"),
         ("additional_guest_count", "Additional Guest Count"),
+        ("whatsapp_opt_in_status", "WhatsApp Opt-in Status"),
     ],
     "AccommodationField": [
         ("room_count", "Room Count"),
@@ -81,15 +88,23 @@ FIELD_SETS = {
     ],
     "TravelDetailField": [
         ("travel_type", "Travel Type"),
-        ("arrival", "Arrival"),
+        ("arrival", "Arrival Mode"),
         ("arrival_date", "Arrival Date"),
-        ("flight_number", "Flight Number"),
-        ("airline", "Airline"),
-        ("pnr", "PNR"),
+        ("flight_number", "Arrival Flight Number"),
+        ("airline", "Arrival Airline"),
+        ("pnr", "Arrival PNR"),
         ("arrival_time", "Arrival Time"),
+        ("arrival_details", "Arrival Details"),
         ("hotel_arrival_time", "Hotel Arrival Time"),
+        ("hotel_departure_time", "Hotel Departure Time"),
+        
+        ("return_travel", "Return Travel Required"),
+        ("departure", "Departure Mode"),
         ("departure_date", "Departure Date"),
+        ("source_departure_time", "Source Departure Time"),
         ("departure_time", "Departure Time"),
+        ("departure_details", "Departure Details"),
+        ("departure_flight_number", "Departure Flight Number"),
         ("departure_airline", "Departure Airline"),
         ("departure_pnr", "Departure PNR"),
     ],
@@ -102,13 +117,16 @@ def main():
         url = f"{BASE_URL}/{endpoint}"
         for name, label in FIELD_SETS[model]:
             data = {"name": name, "label": label}
-            resp = requests.post(url, headers=HEADERS, json=data)
-            if resp.status_code in [200, 201]:
-                print(f"✅ Created {name}")
-            elif resp.status_code == 400 and "unique" in resp.text.lower():
-                print(f"⚪ Skipped {name} (already exists)")
-            else:
-                print(f"❌ Failed {name}: {resp.status_code} {resp.text}")
+            try:
+                resp = requests.post(url, headers=HEADERS, json=data)
+                if resp.status_code in [200, 201]:
+                    print(f"✅ Created {name}")
+                elif resp.status_code == 400 and "unique" in resp.text.lower():
+                    print(f"⚪ Skipped {name} (already exists)")
+                else:
+                    print(f"❌ Failed {name}: {resp.status_code} {resp.text}")
+            except Exception as e:
+                print(f"❌ Error connecting: {e}")
 
 
 if __name__ == "__main__":
