@@ -541,27 +541,19 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
         
         if total_extras == 1:
             buttons = [
-                {"id": "tc|extra_attendees_count|1", "title": "Yes, 1 Guest"},
-                {"id": "tc|extra_attendees_count|0", "title": "No, just me"},
+                {"id": "tc|extra_attendees_count|1", "title": "All of us (2)"},
+                {"id": "tc|extra_attendees_count|0", "title": "Just me"},
             ]
         else:
-            buttons.append({"id": f"tc|extra_attendees_count|{total_extras}", "title": f"All {total_extras} Guests"})
+            # e.g. "All 5 People"
+            buttons.append({"id": f"tc|extra_attendees_count|{total_extras}", "title": f"All {total_pax} People"})
             if total_extras > 1:
                 buttons.append({"id": "tc|extra_attendees_count|0", "title": "Just me"})
             
-        # Build guest list if ExtraAttendee records exist
-        guest_list = ""
-        extras = list(reg.extra_attendees.all()[:5])
-        if extras:
-            guest_list = "\n\nRegistered guests:\n"
-            for i, ex in enumerate(extras, 1):
-                guest_list += f"  {i}. {ex.name}\n"
-            if len(extras) < extras_count:
-                guest_list += f"  ... and {extras_count - len(extras)} more\n"
-        
         msg = (
-            f"📋 We have recorded *{total_pax}* guests total for you.{guest_list}\n\n"
-            "How many of the *extra guests* are traveling with you on this journey?"
+            f"📋 We have recorded *{total_pax}* guests total for your group (including you).\n\n"
+            "How many of these guests should these travel details apply to? 🚌\n\n"
+            f"(You can reply with any number between *1* and *{total_pax}*)"
         )
         
         MessageLogger.send_buttons(reg, msg, buttons, "travel")
@@ -1272,6 +1264,55 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
             sess.state["departure_details_done"] = True
             state_changed = True
             td.save(update_fields=["departure_details"])
+
+        elif step == "extra_attendees_count":
+            # Handle numeric input for extra guests count
+            # User typically types TOTAL number of people traveling
+            # We convert this to extra_attendees_count (Total - 1)
+            try:
+                val = int(t)
+                # Valid range: 1 to (estimated_pax OR likely large number if open)
+                # But logical max is total registered.
+                
+                estimated = reg.estimated_pax or 1
+                extras_count = reg.extra_attendees.count()
+                total_pax = max(estimated, 1 + extras_count)
+                
+                if val < 1:
+                    return (
+                        "Please enter a valid number (at least 1 person must be traveling).",
+                        False
+                    )
+                
+                if val > total_pax:
+                    # Soft warning if they say more than we have on record, but handle it?
+                    # For now, let's just cap it or allow it?
+                    # Let's trust them but cap it at reasonable limit if needed.
+                    # Actually, if they say 10 but we have 5 recorded, we can't link 9 extras.
+                    # So we should probably cap at total_pax or ask them to clarify?
+                    # User request: "should be under the estimated_pax"
+                    return (
+                        f"We only have *{total_pax}* guests recorded for you. 📋\n"
+                        f"Please enter a number between 1 and {total_pax}.",
+                        False
+                    )
+                
+                # Logic: extra_attendees_count = val - 1
+                # If they say 1 (just me), extra = 0
+                extra_pax = val - 1
+                
+                sess.state = sess.state or {}
+                sess.state["extra_attendees_count"] = extra_pax
+                sess.state["extra_attendees_count_done"] = True
+                state_changed = True
+                sess.save(update_fields=["state"])
+                
+            except ValueError:
+                return (
+                    f"I didn't understand '{t}' as a number. 🤔\n"
+                    "Please reply with the number of people traveling (e.g., 1, 2, 3).",
+                    False
+                )
 
         elif step == "awaiting_pax_count":
             # Handle guest count input
