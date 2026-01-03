@@ -639,19 +639,54 @@ def whatsapp_rsvp(request):
         event_name = er.event.name if er.event else "the event"
 
         if normalized_status == "Yes":
-            # For "Yes" - send confirmation with travel details option
-            message = (
-                f"✅ Perfect! Your RSVP has been confirmed for {event_name}.\n\n"
-                "We're looking forward to seeing you! 🎉\n\n"
-                "What would you like to do next?"
-            )
-            buttons = [
-                {"id": f"tc|start_travel|{er.id}", "title": "Add Travel Details"},
-                {"id": f"tc|update_rsvp_menu|{er.id}", "title": "Update RSVP"},
-                {"id": f"tc|remind_later|{er.id}", "title": "Remind Me Later"},
-            ]
-            MsgLogger.send_buttons(er, message, buttons, "rsvp")
-            log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
+            # Check if user has extra pax to confirm
+            estimated = er.estimated_pax or 1
+            has_extras = er.extra_attendees.exists()
+            
+            if estimated > 1 or has_extras:
+                # Ask for pax confirmation before final RSVP confirmation
+                extra_count = estimated - 1 if estimated > 1 else er.extra_attendees.count()
+                total_pax = estimated if estimated > 1 else (1 + er.extra_attendees.count())
+                
+                # Build guest list if ExtraAttendee records exist
+                guest_list = ""
+                extras = list(er.extra_attendees.all()[:5])  # Limit to 5 for message length
+                if extras:
+                    guest_list = "\n\nRegistered guests:\n"
+                    for i, ex in enumerate(extras, 1):
+                        guest_list += f"  {i}. {ex.name}\n"
+                    if er.extra_attendees.count() > 5:
+                        guest_list += f"  ... and {er.extra_attendees.count() - 5} more\n"
+                
+                message = (
+                    f"✅ Great! We have recorded *{total_pax}* guests for your party.{guest_list}\n\n"
+                    f"How many of you are attending {event_name}?"
+                )
+                
+                buttons = [
+                    {"id": f"tc|rsvp_pax_confirm|{total_pax}", "title": f"All {total_pax} guests"},
+                    {"id": f"tc|rsvp_pax_confirm|1", "title": "Just me (1)"},
+                ]
+                # Add a third option if there's room and pax > 2
+                if total_pax > 2:
+                    buttons.append({"id": f"tc|rsvp_pax_custom|{er.id}", "title": "Different number"})
+                
+                MsgLogger.send_buttons(er, message, buttons, "rsvp")
+                log.info(f"[RSVP] Sent pax confirmation request to {er.guest.phone} (recorded: {total_pax})")
+            else:
+                # No extra pax - send direct confirmation
+                message = (
+                    f"✅ Perfect! Your RSVP has been confirmed for {event_name}.\n\n"
+                    "We're looking forward to seeing you! 🎉\n\n"
+                    "What would you like to do next?"
+                )
+                buttons = [
+                    {"id": f"tc|start_travel|{er.id}", "title": "Add Travel Details"},
+                    {"id": f"tc|update_rsvp_menu|{er.id}", "title": "Update RSVP"},
+                    {"id": f"tc|remind_later|{er.id}", "title": "Remind Me Later"},
+                ]
+                MsgLogger.send_buttons(er, message, buttons, "rsvp")
+                log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
 
         elif normalized_status == "No":
             # For "No" - simple confirmation
