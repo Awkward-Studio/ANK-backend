@@ -78,12 +78,8 @@ FIELD_SETS = {
         ("event", "Event"),
         ("event_registrations", "Event Registrations"),
         ("extra_attendees", "Extra Attendees"),
-        ("hotel", "Hotel (General)"),
         ("event_hotel", "Event Hotel"),
-        ("hotel_name", "Hotel Name"),
-        ("hotel_city", "Hotel City"),
         ("sharing_with", "Sharing With"),
-        ("room_type", "Room Type (Legacy)"),
         ("event_room_type", "Room Type"),
     ],
     "TravelDetailField": [

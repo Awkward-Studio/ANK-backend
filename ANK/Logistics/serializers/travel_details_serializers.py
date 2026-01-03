@@ -31,6 +31,7 @@ class TravelDetailSerializer(CustomFieldMixin, serializers.ModelSerializer):
             "departure",
             "departure_date",
             "departure_time",
+            "source_departure_time",
             "departure_details",
             "departure_flight_number",
             "departure_airline",
