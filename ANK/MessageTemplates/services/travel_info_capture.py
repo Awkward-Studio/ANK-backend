@@ -346,13 +346,16 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
     # --- Extra Guests Check ---
     # Ask this immediately after travel type
     if td.travel_type and not state.get("extra_attendees_count_done"):
-        # Only ask if they actually have extra attendees
-        if reg.extra_attendees.exists():
+        # Check if they have extra attendees (either via estimated_pax or linked ExtraAttendee)
+        estimated = reg.estimated_pax or 1
+        has_extras = reg.extra_attendees.exists()
+        
+        if (estimated > 1) or has_extras:
             pending.append("extra_attendees_count")
         else:
             # Auto-mark as done if no extras
             state["extra_attendees_count_done"] = True
-            state["extra_attendees_count"] = 0
+            state["extra_attendees_count"] = 1
             # Ensure state is assigned back to session before saving
             sess.state = state
             sess.save(update_fields=["state"])
@@ -525,15 +528,16 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
         return
 
     if step == "extra_attendees_count":
-        total_extras = reg.extra_attendees.count()
-        buttons = []
-        # Offer buttons for 0 up to min(total, 2) to keep it simple, or maybe up to 3
-        # WhatsApp allows max 3 buttons usually in some templates, but list messages allow more.
-        # send_choice_buttons uses interactive buttons (max 3).
+        # Determine total expected guests (including primary)
+        # Priority: estimated_pax -> 1 + extra_attendees.count() -> 1
+        estimated = reg.estimated_pax or 1
+        extras_count = reg.extra_attendees.count()
+        total_pax = max(estimated, 1 + extras_count)
         
-        # If they have 1 extra: [0, 1]
-        # If they have 2 extras: [0, 1, 2]
-        # If they have 3+ extras: [0, All(N), Type] -> actually let's just give common options
+        # Calculate how many "extras" (guests excluding primary)
+        total_extras = total_pax - 1
+        
+        buttons = []
         
         if total_extras == 1:
             buttons = [
@@ -544,14 +548,20 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
             buttons.append({"id": f"tc|extra_attendees_count|{total_extras}", "title": f"All {total_extras} Guests"})
             if total_extras > 1:
                 buttons.append({"id": "tc|extra_attendees_count|0", "title": "Just me"})
-            # Add a 'Type' option? Or just let them type. 
-            # If we have space for a 3rd button and total > 1, maybe "Some..."?
-            # For now, let's stick to "All" and "Just me" as quick options. 
-            # If they want a specific number, they can type it (we'll mention it in text).
+            
+        # Build guest list if ExtraAttendee records exist
+        guest_list = ""
+        extras = list(reg.extra_attendees.all()[:5])
+        if extras:
+            guest_list = "\n\nRegistered guests:\n"
+            for i, ex in enumerate(extras, 1):
+                guest_list += f"  {i}. {ex.name}\n"
+            if len(extras) < extras_count:
+                guest_list += f"  ... and {extras_count - len(extras)} more\n"
         
         msg = (
-            f"You have {total_extras} extra guests registered with you. 👥\n\n"
-            "How many of them are traveling with you on this journey?"
+            f"📋 We have recorded *{total_pax}* guests total for you.{guest_list}\n\n"
+            "How many of the *extra guests* are traveling with you on this journey?"
         )
         
         MessageLogger.send_buttons(reg, msg, buttons, "travel")
@@ -887,6 +897,49 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             start_section_update(reg, raw_value)
             return  # start_section_update handles sending the next prompt
 
+
+        elif step == "rsvp_pax_confirm":
+            # User confirmed how many guests are attending
+            try:
+                count = int(raw_value)
+                reg.estimated_pax = count
+                reg.save(update_fields=["estimated_pax"])
+                logger.info(f"[RSVP-PAX] Updated estimated_pax to {count} for reg {reg.id}")
+            except ValueError:
+                logger.error(f"[RSVP-PAX] Invalid pax count: {raw_value}")
+                count = reg.estimated_pax or 1
+            
+            # Now send the final RSVP confirmation with next steps
+            event_name = reg.event.name if reg.event else "the event"
+            pax_text = f"for *{count}* {'person' if count == 1 else 'people'}" if count else ""
+            message = (
+                f"✅ Perfect! Your RSVP {pax_text} has been confirmed for {event_name}.\n\n"
+                "We're looking forward to seeing you! 🎉\n\n"
+                "What would you like to do next?"
+            )
+            buttons = [
+                {"id": f"tc|start_travel|{reg.id}", "title": "Add Travel Details"},
+                {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
+                {"id": f"tc|remind_later|{reg.id}", "title": "Remind Me Later"},
+            ]
+            MessageLogger.send_buttons(reg, message, buttons, "rsvp")
+            return
+
+        elif step == "rsvp_pax_custom":
+            # User wants to enter a custom pax count
+            sess.step = "awaiting_rsvp_pax_count"
+            sess.state = sess.state or {}
+            sess.save(update_fields=["step", "state"])
+            
+            estimated = reg.estimated_pax or 1
+            MessageLogger.send_text(
+                reg,
+                f"👥 How many guests are attending (including yourself)?\n\n"
+                f"We have recorded *{estimated}* guests.\n"
+                f"Please reply with a number (1 to {estimated}).",
+                "rsvp"
+            )
+            return
 
         elif step.startswith("rsvp_"):
             status = step.replace("rsvp_", "")
