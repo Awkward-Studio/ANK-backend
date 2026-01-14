@@ -59,6 +59,12 @@ USE_JWT = get_bool_env("USE_JWT", False)
 if not DEBUG and not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG=False")
 
+# WhatsApp Multi-Number Support
+# Encryption key for storing WhatsApp access tokens (Fernet key format)
+WHATSAPP_ENCRYPTION_KEY = os.getenv("WHATSAPP_ENCRYPTION_KEY")
+if not WHATSAPP_ENCRYPTION_KEY and not DEBUG:
+    raise ImproperlyConfigured("WHATSAPP_ENCRYPTION_KEY must be set in production")
+
 # ---------------------------
 # Installed apps
 # ---------------------------

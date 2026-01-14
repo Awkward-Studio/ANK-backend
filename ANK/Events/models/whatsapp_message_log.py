@@ -36,6 +36,15 @@ class WhatsAppMessageLog(models.Model):
     recipient_id = models.CharField(
         max_length=50, db_index=True
     )  # Phone number (digits only)
+    
+    # Multi-number support: Track which of OUR numbers sent/received this message
+    sender_phone_number_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Phone Number ID of the sender (which of OUR numbers sent/received this)"
+    )
 
     # Status tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="sent")
@@ -86,6 +95,15 @@ class WhatsAppMessageLog(models.Model):
     # Flow type for categorization (legacy, use message_type instead)
     flow_type = models.CharField(max_length=32, null=True, blank=True)
 
+    # Multi-number support: Track which of OUR numbers sent/received this message
+    sender_phone_number_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Phone Number ID of the sender (which of OUR numbers sent/received this)",
+    )
+
     class Meta:
         ordering = ["-sent_at"]
         indexes = [
@@ -95,6 +113,8 @@ class WhatsAppMessageLog(models.Model):
             models.Index(fields=["event_registration_id", "-sent_at"]),
             models.Index(fields=["event_id", "-sent_at"]),
             models.Index(fields=["guest_id", "-sent_at"]),
+            models.Index(fields=["sender_phone_number_id", "-sent_at"]),
+            models.Index(fields=["recipient_id", "sender_phone_number_id", "-sent_at"]),
         ]
 
     def __str__(self):

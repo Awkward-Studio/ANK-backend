@@ -76,6 +76,7 @@ def track_send(request):
     media_url = body.get("media_url")
     media_type_arg = body.get("media_type") # specific media type (image, video)
     media_id = body.get("media_id")
+    sender_phone_number_id = body.get("sender_phone_number_id") # Multi-number support
 
     log.info(
         "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s",
@@ -149,6 +150,7 @@ def track_send(request):
                     "media_url": media_url,
                     "media_type": media_type_arg,
                     "media_id": media_id,
+                    "sender_phone_number_id": sender_phone_number_id,
                 },
             )
             log.info(
@@ -164,6 +166,7 @@ def track_send(request):
                     "event_registration": None,
                     "expires_at": dj_tz.now() + timedelta(days=4),
                     "flow_type": flow_type or "standalone",
+                    "sender_phone_number_id": sender_phone_number_id,
                 }
                 obj, _ = WaSendMap.objects.update_or_create(
                     template_wamid=template_wamid, defaults=defaults
@@ -207,6 +210,7 @@ def track_send(request):
             "event_registration": er,
             "expires_at": dj_tz.now() + timedelta(days=4),
             "flow_type": flow_type,
+            "sender_phone_number_id": sender_phone_number_id,
         }
         if template_wamid:
             obj, _ = WaSendMap.objects.update_or_create(
@@ -222,9 +226,10 @@ def track_send(request):
                 obj = WaSendMap.objects.create(**defaults)
             else:
                 # This uses the new unique constraint:
-                # (wa_id, event_registration, flow_type, template_wamid=NULL)
+                # (wa_id, sender_phone_number_id, event_registration, flow_type, template_wamid=NULL)
                 obj, _ = WaSendMap.objects.update_or_create(
                     wa_id=wa_id,
+                    sender_phone_number_id=sender_phone_number_id,
                     event_registration=er,
                     flow_type=flow_type,
                     template_wamid__isnull=True,
@@ -430,11 +435,22 @@ def whatsapp_rsvp(request):
         template_wamid = body.get("template_wamid") or None
         event_id = body.get("event_id") or None
         flow_type_expected = "rsvp"
+        # Multi-number support: Parse which of OUR numbers received this reply
+        to_phone_number_id = body.get("to_phone_number_id")
 
         if not wa_id:
             return HttpResponseBadRequest("missing wa_id")
 
         base_qs = WaSendMap.objects.filter(wa_id=wa_id, expires_at__gt=dj_tz.now())
+        
+        # CRITICAL: Filter by sender if provided (multi-number support)
+        # This ensures we match the correct conversation when the same guest
+        # has been contacted from multiple of OUR numbers
+        if to_phone_number_id:
+            base_qs = base_qs.filter(sender_phone_number_id=to_phone_number_id)
+            log.info(
+                f"[RSVP] Multi-number: Filtering by to_phone_number_id={to_phone_number_id}"
+            )
 
         # Priority 1: template_wamid match (strongest)
         if template_wamid:
@@ -540,7 +556,8 @@ def whatsapp_rsvp(request):
                 content=raw_status,
                 message_type="custom",
                 wa_message_id=body.get("wa_id", ""),
-                metadata=body
+                metadata=body,
+                sender_phone_number_id=to_phone_number_id
             )
             
             # Send Menu Buttons
@@ -630,6 +647,7 @@ def whatsapp_rsvp(request):
         media_id=media_id,
         media_type=media_type,
         metadata=body,
+        sender_phone_number_id=body.get("to_phone_number_id"),
     )
 
     # Send immediate WhatsApp confirmation with next steps
@@ -938,6 +956,7 @@ def message_logs(request):
         - event_id: Filter by event
         - guest_id: Filter by guest
         - recipient_id: Filter by recipient phone number (for standalone messages)
+        - sender_phone_number_id: Filter by sender phone number (multi-number support)
         - template_name: Filter by template name
         - standalone: If "true", only return messages without event/registration context
 
@@ -974,6 +993,7 @@ def message_logs(request):
     event_id = request.GET.get("event_id")
     guest_id = request.GET.get("guest_id")
     recipient_id = request.GET.get("recipient_id")
+    sender_phone_number_id = request.GET.get("sender_phone_number_id")  # Multi-number support
     template_name = request.GET.get("template_name")
     standalone_only = request.GET.get("standalone", "").lower() == "true"
 
@@ -990,6 +1010,9 @@ def message_logs(request):
         normalized = _norm_digits(recipient_id)
         if normalized:
              queryset = queryset.filter(recipient_id__endswith=normalized[-10:])
+    if sender_phone_number_id:
+        # Filter by which of OUR numbers sent/received the message (inbox segregation)
+        queryset = queryset.filter(sender_phone_number_id=sender_phone_number_id)
     if template_name:
         queryset = queryset.filter(template_name=template_name)
     if standalone_only:

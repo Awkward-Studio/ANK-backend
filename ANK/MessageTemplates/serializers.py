@@ -1,5 +1,10 @@
 from rest_framework import serializers
-from MessageTemplates.models import MessageTemplate, MessageTemplateVariable
+from MessageTemplates.models import (
+    MessageTemplate,
+    MessageTemplateVariable,
+    WhatsAppBusinessAccount,
+    WhatsAppPhoneNumber,
+)
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -172,3 +177,129 @@ class MessageTemplateWriteSerializer(serializers.ModelSerializer):
             )
 
         return instance
+
+
+class WhatsAppBusinessAccountSerializer(serializers.ModelSerializer):
+    """
+    Serializer for WhatsApp Business Account.
+    Never expose the encrypted token.
+    """
+
+    class Meta:
+        model = WhatsAppBusinessAccount
+        fields = [
+            "id",
+            "waba_id",
+            "name",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for WhatsApp Phone Number.
+    Never expose encrypted tokens or full WABA details.
+    """
+
+    class Meta:
+        model = WhatsAppPhoneNumber
+        fields = [
+            "id",
+            "phone_number_id",
+            "asset_id",
+            "waba_id",
+            "display_phone_number",
+            "verified_name",
+            "quality_rating",
+            "messaging_limit_tier",
+            "is_active",
+            "is_default",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at", "last_used_at"]
+
+
+class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
+    """
+    Write serializer for storing/updating WhatsApp phone numbers.
+    Accepts access_token for storage but never returns it.
+    """
+
+    phone_number_id = serializers.CharField(
+        max_length=100, required=True, help_text="Phone Number ID from Meta"
+    )
+    asset_id = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, default=""
+    )
+    waba_id = serializers.CharField(
+        max_length=100, required=True, help_text="WABA ID"
+    )
+    access_token = serializers.CharField(
+        write_only=True,
+        required=True,
+        help_text="Access token (will be encrypted)",
+    )
+    display_phone_number = serializers.CharField(
+        max_length=20, required=True, help_text="Display format like +919876543210"
+    )
+    verified_name = serializers.CharField(
+        max_length=200, required=False, allow_blank=True, default=""
+    )
+    quality_rating = serializers.ChoiceField(
+        choices=["GREEN", "YELLOW", "RED", "UNKNOWN"],
+        default="UNKNOWN",
+        required=False,
+    )
+    messaging_limit_tier = serializers.CharField(
+        max_length=50, required=False, allow_blank=True, default=""
+    )
+    is_default = serializers.BooleanField(default=False, required=False)
+
+    def create(self, validated_data):
+        """
+        Create or update WhatsAppBusinessAccount and WhatsAppPhoneNumber.
+        """
+        access_token = validated_data.pop("access_token")
+        waba_id = validated_data.get("waba_id")
+        phone_number_id = validated_data.get("phone_number_id")
+
+        # Get or create WABA
+        waba, created = WhatsAppBusinessAccount.objects.get_or_create(
+            waba_id=waba_id,
+            defaults={
+                "name": validated_data.get("verified_name", f"WABA {waba_id}"),
+                "is_active": True,
+            },
+        )
+
+        # Store token at WABA level (permanent system token)
+        try:
+            waba.set_token(access_token)
+            waba.save()
+        except Exception as e:
+            raise serializers.ValidationError(
+                {"access_token": f"Failed to encrypt token: {str(e)}"}
+            )
+
+        # Create or update phone number
+        phone, created = WhatsAppPhoneNumber.objects.update_or_create(
+            phone_number_id=phone_number_id,
+            defaults={
+                "business_account": waba,
+                "asset_id": validated_data.get("asset_id", ""),
+                "waba_id": waba_id,
+                "display_phone_number": validated_data.get("display_phone_number"),
+                "verified_name": validated_data.get("verified_name", ""),
+                "quality_rating": validated_data.get("quality_rating", "UNKNOWN"),
+                "messaging_limit_tier": validated_data.get("messaging_limit_tier", ""),
+                "is_active": True,
+                "is_default": validated_data.get("is_default", False),
+            },
+        )
+
+        return phone
