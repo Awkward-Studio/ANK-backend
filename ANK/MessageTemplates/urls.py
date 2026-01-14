@@ -1,6 +1,11 @@
 from django.urls import path
 from MessageTemplates.whatsapp_views.flush_message import FlushQueuedMessagesView
 from MessageTemplates.whatsapp_views.send_template import SendLocalTemplateView
+from MessageTemplates.whatsapp_views.phone_number_management import (
+    StorePhoneNumberView,
+    ListPhoneNumbersView,
+    PhoneNumberDetailView,
+)
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
     MessageTemplateList,
@@ -44,5 +49,21 @@ urlpatterns = [
         "message-templates/flush-after-resume/",
         FlushQueuedMessagesView.as_view(),
         name="mt-flush-after-resume",
+    ),
+    # WhatsApp Phone Number Management
+    path(
+        "whatsapp/phone-numbers/store/",
+        StorePhoneNumberView.as_view(),
+        name="whatsapp-store-phone-number",
+    ),
+    path(
+        "whatsapp/phone-numbers/",
+        ListPhoneNumbersView.as_view(),
+        name="whatsapp-list-phone-numbers",
+    ),
+    path(
+        "whatsapp/phone-numbers/<str:phone_number_id>/",
+        PhoneNumberDetailView.as_view(),
+        name="whatsapp-phone-number-detail",
     ),
 ]

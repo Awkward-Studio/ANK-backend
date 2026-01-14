@@ -2,7 +2,7 @@ name: Build, Push, and Deploy to ECS
 
 on:
   push:
-    branches: ["main"]
+    branches: ["multi-number-support"]
 
 concurrency:
   group: ecs-prod

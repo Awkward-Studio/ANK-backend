@@ -19,6 +19,7 @@ class MessageLogger:
         media_type: str = None,
         media_id: str = None,
         metadata: dict = None,
+        sender_phone_number_id: str = None,
     ):
         """
         Log an inbound message and update the registration's responded_on timestamp.
@@ -35,6 +36,7 @@ class MessageLogger:
                 media_type=media_type,
                 media_id=media_id,
                 metadata=metadata or {},
+                sender_phone_number_id=sender_phone_number_id,
             )
 
             # [FIX] Log to WhatsAppMessageLog for unified history view
@@ -68,6 +70,7 @@ class MessageLogger:
                             "media_url": media_url,
                             "media_type": media_type,
                             "media_id": media_id,
+                            "sender_phone_number_id": sender_phone_number_id,
                         },
                     )
                 except Exception as log_err:
@@ -95,6 +98,7 @@ class MessageLogger:
         media_type: str = None,
         media_id: str = None,
         metadata: dict = None,
+        sender_phone_number_id: str = None,
     ):
         """
         Log an outbound message to ConversationMessage and WhatsAppMessageLog for delivery tracking.
@@ -112,6 +116,7 @@ class MessageLogger:
                 media_type=media_type,
                 media_id=media_id,
                 metadata=metadata or {},
+                sender_phone_number_id=sender_phone_number_id,
             )
 
             # Also create WhatsAppMessageLog for delivery status tracking
@@ -157,6 +162,7 @@ class MessageLogger:
                             "media_url": media_url,
                             "media_type": media_type,
                             "media_id": media_id,
+                            "sender_phone_number_id": sender_phone_number_id,
                         },
                     )
                     logger.info(
@@ -230,11 +236,22 @@ class MessageLogger:
 
     @staticmethod
     def send_text(
-        reg: EventRegistration, text: str, message_type: str = "content"
+        reg: EventRegistration,
+        text: str,
+        message_type: str = "content",
+        phone_number_id: str = None
     ) -> str:
         """
         Send a freeform text message AND log it.
-        Returns the WhatsApp message ID.
+        
+        Args:
+            reg: EventRegistration
+            text: Message text
+            message_type: Type of message
+            phone_number_id: Optional specific sender number
+            
+        Returns:
+            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_freeform_text
 
@@ -244,8 +261,11 @@ class MessageLogger:
             return ""
 
         try:
-            wa_id = send_freeform_text(phone, text)
-            MessageLogger.log_outbound(reg, text, wa_id, message_type)
+            wa_id, sender_id = send_freeform_text(phone, text, phone_number_id)
+            MessageLogger.log_outbound(
+                reg, text, wa_id, message_type,
+                sender_phone_number_id=sender_id
+            )
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_TEXT] Failed for reg {reg.id}: {e}")
@@ -259,10 +279,22 @@ class MessageLogger:
         message_type: str = "content",
         header: str = None,
         footer: str = None,
+        phone_number_id: str = None
     ) -> str:
         """
         Send an interactive button message AND log it.
-        Returns the WhatsApp message ID.
+        
+        Args:
+            reg: EventRegistration
+            body: Message body
+            choices: Button choices
+            message_type: Type of message
+            header: Optional header
+            footer: Optional footer
+            phone_number_id: Optional specific sender number
+            
+        Returns:
+            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_choice_buttons
 
@@ -272,21 +304,35 @@ class MessageLogger:
             return ""
 
         try:
-            wa_id = send_choice_buttons(phone, body, choices, header, footer)
+            wa_id, sender_id = send_choice_buttons(phone, body, choices, header, footer, phone_number_id)
             # Log the body + button titles for context
             button_titles = ", ".join([c.get("title", "") for c in choices])
             content = f"{body}\n[Buttons: {button_titles}]"
-            MessageLogger.log_outbound(reg, content, wa_id, message_type)
+            MessageLogger.log_outbound(
+                reg, content, wa_id, message_type,
+                sender_phone_number_id=sender_id
+            )
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_BUTTONS] Failed for reg {reg.id}: {e}")
             return ""
 
     @staticmethod
-    def send_resume_template(reg: EventRegistration, opener_param: str = None) -> str:
+    def send_resume_template(
+        reg: EventRegistration,
+        opener_param: str = None,
+        phone_number_id: str = None
+    ) -> str:
         """
         Send the 'resume conversation' template AND log it.
-        Returns the WhatsApp message ID.
+        
+        Args:
+            reg: EventRegistration
+            opener_param: Optional template parameter
+            phone_number_id: Optional specific sender number
+            
+        Returns:
+            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_resume_opener
 
@@ -296,13 +342,14 @@ class MessageLogger:
             return ""
 
         try:
-            wa_id = send_resume_opener(phone, str(reg.id), opener_param)
+            wa_id, sender_id = send_resume_opener(phone, str(reg.id), opener_param, phone_number_id)
             MessageLogger.log_outbound(
                 reg,
                 "Resume Conversation Template",
                 wa_id,
                 "template",
                 "resume_conversation",
+                sender_phone_number_id=sender_id
             )
             return wa_id
         except Exception as e:
@@ -316,10 +363,21 @@ class MessageLogger:
         media_url: str,
         caption: str = None,
         message_type: str = "content",
+        phone_number_id: str = None
     ) -> str:
         """
         Send a media message AND log it.
-        Returns the WhatsApp message ID.
+        
+        Args:
+            reg: EventRegistration
+            media_type: Type of media (image, video, document, audio)
+            media_url: URL of the media
+            caption: Optional caption
+            message_type: Type of message
+            phone_number_id: Optional specific sender number
+            
+        Returns:
+            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_media
 
@@ -329,7 +387,7 @@ class MessageLogger:
             return ""
 
         try:
-            wa_id = send_media(phone, media_type, media_url, caption)
+            wa_id, sender_id = send_media(phone, media_type, media_url, caption, phone_number_id)
             MessageLogger.log_outbound(
                 reg,
                 content=caption,  # Log caption as the main text content
@@ -337,6 +395,7 @@ class MessageLogger:
                 message_type=message_type,
                 media_url=media_url,
                 media_type=media_type,
+                sender_phone_number_id=sender_id
             )
             return wa_id
         except Exception as e:

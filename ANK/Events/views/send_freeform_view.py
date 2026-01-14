@@ -16,6 +16,12 @@ class SendFreeformInput(serializers.Serializer):
     media_url = serializers.CharField(required=False, allow_blank=True)
     media_type = serializers.CharField(required=False, allow_blank=True)  # image, video
     caption = serializers.CharField(required=False, allow_blank=True)
+    sender_phone_number_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Optional: Specify which phone number to send from (multi-number support)"
+    )
 
 
 class SendFreeformMessageView(APIView):
@@ -59,14 +65,18 @@ class SendFreeformMessageView(APIView):
         # Send via existing WhatsApp service
         try:
             wa_message_id = ""
+            sender_id = ""
             media_url = serializer.validated_data.get("media_url")
             media_type = serializer.validated_data.get("media_type")
             caption = serializer.validated_data.get("caption")
+            # Multi-number support: Get optional sender phone number ID
+            sender_phone_number_id = serializer.validated_data.get("sender_phone_number_id") or None
 
             if media_url and media_type:
                 # Send Media
                 wa_message_id = MessageLogger.send_media_message(
-                    reg, media_type, media_url, caption=message or caption
+                    reg, media_type, media_url, caption=message or caption,
+                    phone_number_id=sender_phone_number_id
                 )
             else:
                 # Send Text
@@ -75,13 +85,14 @@ class SendFreeformMessageView(APIView):
                         {"ok": False, "status": "failed", "error": "Message text is required if no media attached"},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                wa_message_id = send_freeform_text(phone, message)
+                wa_message_id, sender_id = send_freeform_text(phone, message, sender_phone_number_id)
                 # Log usage
                 MessageLogger.log_outbound(
                     event_registration=reg,
                     content=message,
                     wa_message_id=wa_message_id,
                     message_type="content",
+                    sender_phone_number_id=sender_id,
                 )
 
             # Pause any active travel session so user replies aren't treated as travel answers

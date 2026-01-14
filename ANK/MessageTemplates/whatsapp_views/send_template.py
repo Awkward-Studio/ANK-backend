@@ -27,6 +27,12 @@ class SendTemplateInput(serializers.Serializer):
     # Path includes event_id and registration_id; we still validate body for template + variables
     template_id = serializers.UUIDField()
     variables = serializers.DictField(child=serializers.JSONField(), required=False)
+    sender_phone_number_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Optional: Specify which phone number to send from (multi-number support)"
+    )
 
 
 class SendLocalTemplateView(APIView):
@@ -48,6 +54,8 @@ class SendLocalTemplateView(APIView):
         serializer.is_valid(raise_exception=True)
         template_id = serializer.validated_data["template_id"]
         variables: Dict[str, Any] = serializer.validated_data.get("variables", {}) or {}
+        # Multi-number support: Get optional sender phone number ID
+        sender_phone_number_id = serializer.validated_data.get("sender_phone_number_id") or None
 
         # Fetch objects
         reg = get_object_or_404(
@@ -89,10 +97,13 @@ class SendLocalTemplateView(APIView):
         if in_window:
             # Send immediately (free-form)
             try:
-                msg_id = send_freeform_text(to_wa, text)
+                msg_id, sender_id = send_freeform_text(to_wa, text, sender_phone_number_id)
                 
                 # Log outbound
-                MessageLogger.log_outbound(reg, text, msg_id, "content", tmpl.name)
+                MessageLogger.log_outbound(
+                    reg, text, msg_id, "content", tmpl.name,
+                    sender_phone_number_id=sender_id
+                )
                 
                 return Response(
                     {"ok": True, "status": "sent", "message_id": msg_id},
@@ -124,10 +135,13 @@ class SendLocalTemplateView(APIView):
             opener_param = (
                 variables.get("guest_name") or getattr(reg.guest, "name", "") or "Guest"
             )
-            opener_id = send_resume_opener(to_wa, str(reg.id))
+            opener_id, sender_id = send_resume_opener(to_wa, str(reg.id), opener_param, sender_phone_number_id)
             
             # Log opener
-            MessageLogger.log_outbound(reg, "Resume Conversation Template", opener_id, "template", "resume_conversation")
+            MessageLogger.log_outbound(
+                reg, "Resume Conversation Template", opener_id, "template", "resume_conversation",
+                sender_phone_number_id=sender_id
+            )
 
             return Response(
                 {"ok": True, "status": "queued", "opener_message_id": opener_id},

@@ -20,6 +20,15 @@ class WaSendMap(models.Model):
 
     # Normalized phone without '+' (store digits only)
     wa_id = models.CharField(max_length=32, db_index=True)
+    
+    # Multi-number support: Track which of OUR numbers sent to this guest
+    sender_phone_number_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Which of OUR phone numbers sent to this guest (for reply routing)"
+    )
 
     event = models.ForeignKey(
         Event,
@@ -71,11 +80,12 @@ class WaSendMap(models.Model):
                 name="unique_template_wamid_check",
             ),
             # 2. Enforce uniqueness for generic (non-template) messages by flow type
-            # This ensures only ONE generic map exists per (WA ID, Registration, Flow Type).
+            # This ensures only ONE generic map exists per (WA ID, Sender, Registration, Flow Type).
+            # Multi-number support: Include sender_phone_number_id for conversation isolation
             models.UniqueConstraint(
-                fields=["wa_id", "event_registration", "flow_type"],
+                fields=["wa_id", "sender_phone_number_id", "event_registration", "flow_type"],
                 condition=Q(template_wamid__isnull=True, flow_type__isnull=False),
-                name="unique_wa_reg_flowtype",
+                name="unique_wa_sender_reg_flowtype",
             ),
         ]
 

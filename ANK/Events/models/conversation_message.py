@@ -41,6 +41,15 @@ class ConversationMessage(models.Model):
     wa_message_id = models.CharField(max_length=100, blank=True, null=True)
     template_name = models.CharField(max_length=100, blank=True, null=True)
 
+    # Multi-number support: Track which of OUR numbers sent/received this
+    sender_phone_number_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Phone Number ID that sent/received this message (for multi-number support)"
+    )
+
     # Media details
     media_url = models.TextField(null=True, blank=True)
     media_type = models.CharField(max_length=20, null=True, blank=True)  # e.g. image, video

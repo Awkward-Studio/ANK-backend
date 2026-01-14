@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger("whatsapp")
 
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 
 WABA_API_BASE = "https://graph.facebook.com/v21.0"
@@ -29,6 +29,118 @@ def _ensure_creds():
         )
 
 
+def _get_credentials(phone_number_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Get (access_token, phone_number_id) for sending messages.
+    
+    Priority:
+      1. If phone_number_id provided → lookup in DB
+      2. Get default phone number from DB
+      3. Fallback to env vars
+    
+    Returns: (access_token, phone_number_id)
+    Raises: WhatsAppError if no credentials found
+    """
+    try:
+        from MessageTemplates.models import WhatsAppPhoneNumber
+        
+        if phone_number_id:
+            # Specific number requested
+            phone = WhatsAppPhoneNumber.objects.filter(
+                phone_number_id=phone_number_id,
+                is_active=True
+            ).first()
+            if phone:
+                token = phone.get_access_token()
+                if token:
+                    logger.info(
+                        f"[WA-CREDS] Using DB credentials for phone_number_id={phone_number_id}"
+                    )
+                    return (token, phone.phone_number_id)
+                else:
+                    logger.warning(
+                        f"[WA-CREDS] No token found for phone_number_id={phone_number_id}"
+                    )
+        else:
+            # Get default number
+            phone = WhatsAppPhoneNumber.objects.filter(
+                is_active=True,
+                is_default=True
+            ).first()
+            if not phone:
+                # If no default, get any active number
+                phone = WhatsAppPhoneNumber.objects.filter(is_active=True).first()
+            if phone:
+                token = phone.get_access_token()
+                if token:
+                    logger.info(
+                        f"[WA-CREDS] Using default DB credentials for phone_number_id={phone.phone_number_id}"
+                    )
+                    return (token, phone.phone_number_id)
+    except Exception as e:
+        logger.warning(f"[WA-CREDS] DB lookup failed: {e}, falling back to env vars")
+    
+    # Fallback to env vars (backward compatibility)
+    if not WABA_TOKEN or not WABA_PHONE_ID:
+        raise WhatsAppError("No WhatsApp credentials available (DB or env vars)")
+    
+    logger.warning("[WA-CREDS] Using environment variable credentials (fallback)")
+    return (WABA_TOKEN, WABA_PHONE_ID)
+
+
+def _get_credentials(phone_number_id: Optional[str] = None) -> tuple:
+    """
+    Get (access_token, phone_number_id) for sending.
+    
+    Priority:
+      1. If phone_number_id provided → lookup in DB
+      2. Get default phone number from DB
+      3. Fallback to env vars
+    
+    Returns: (access_token, phone_number_id)
+    Raises: WhatsAppError if no credentials found
+    """
+    try:
+        from MessageTemplates.models import WhatsAppPhoneNumber
+        
+        if phone_number_id:
+            # Specific number requested
+            phone = WhatsAppPhoneNumber.objects.filter(
+                phone_number_id=phone_number_id,
+                is_active=True
+            ).first()
+            if phone:
+                token = phone.get_access_token()
+                if token:
+                    logger.info(f"[WA-CREDS] Using DB credentials for {phone_number_id}")
+                    return (token, phone.phone_number_id)
+                else:
+                    logger.warning(f"[WA-CREDS] No token available for {phone_number_id}")
+        else:
+            # Get default number
+            phone = WhatsAppPhoneNumber.objects.filter(
+                is_active=True,
+                is_default=True
+            ).first()
+            if not phone:
+                # No default, get any active number
+                phone = WhatsAppPhoneNumber.objects.filter(is_active=True).first()
+            if phone:
+                token = phone.get_access_token()
+                if token:
+                    logger.info(f"[WA-CREDS] Using default DB number {phone.phone_number_id}")
+                    return (token, phone.phone_number_id)
+    except Exception as e:
+        logger.warning(f"[WA-CREDS] DB lookup failed: {e}, falling back to env")
+    
+    # Fallback to env vars (backward compatibility)
+    if not WABA_TOKEN or not WABA_PHONE_ID:
+        raise WhatsAppError("No credentials available (DB or env)")
+    
+    logger.info("[WA-CREDS] Using env var credentials")
+    return (WABA_TOKEN, WABA_PHONE_ID)
+
+
 _digits = re.compile(r"\D+")  # -c add global regex for phone normalization
 
 
@@ -41,14 +153,26 @@ def _norm_digits(s: str) -> str:
     return digits
 
 
-def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    _ensure_creds()
-    url = f"{WABA_API_BASE}/{WABA_PHONE_ID}/{path}"
-    logger.warning(f"[WA-POST] URL={url}")
+def _post(path: str, payload: Dict[str, Any], phone_number_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    POST to WhatsApp Cloud API.
+    
+    Args:
+        path: API endpoint (e.g., "messages")
+        payload: Request body
+        phone_number_id: Optional specific number to send from
+        
+    Returns:
+        Response dict with added '_sender_phone_number_id' key for tracking
+    """
+    token, sender_id = _get_credentials(phone_number_id)
+    
+    url = f"{WABA_API_BASE}/{sender_id}/{path}"
+    logger.warning(f"[WA-POST] URL={url} SENDER={sender_id}")
     logger.warning(f"[WA-POST-PAYLOAD] {payload}")
 
     headers = {
-        "Authorization": f"Bearer {WABA_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
@@ -60,6 +184,9 @@ def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if r.status_code >= 300:
         logger.exception(f"[WA-POST] ERROR {r.status_code}: {data}")
         raise WhatsAppError(f"WABA error {r.status_code}: {data}")
+    
+    # Add sender info for tracking
+    data['_sender_phone_number_id'] = sender_id
     return data
 
 
@@ -90,12 +217,19 @@ def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 #     return data
 
 
-def send_freeform_text(to_wa_id: str, text: str) -> str:
+def send_freeform_text(to_wa_id: str, text: str, phone_number_id: Optional[str] = None) -> tuple:
     """
     Sends a free-form WhatsApp text (must be within 24h window).
-    Returns provider message id (if any).
+    
+    Args:
+        to_wa_id: Recipient phone number
+        text: Message text
+        phone_number_id: Optional specific sender number
+        
+    Returns:
+        Tuple of (message_id, sender_phone_number_id)
     """
-    logger.warning(f"[WA-SEND-FREEFORM] TO={to_wa_id} TEXT={text}")
+    logger.warning(f"[WA-SEND-FREEFORM] TO={to_wa_id} TEXT={text} SENDER={phone_number_id or 'default'}")
     logger.warning(f"[WA-FREEFORM-PAYLOAD] {text}")
     data = _post(
         "messages",
@@ -105,20 +239,32 @@ def send_freeform_text(to_wa_id: str, text: str) -> str:
             "type": "text",
             "text": {"body": text or ""},
         },
+        phone_number_id=phone_number_id
     )
     logger.warning(f"[WA-FREEFORM-RESPONSE] {data}")
-    return (data.get("messages") or [{}])[0].get("id", "")
+    msg_id = (data.get("messages") or [{}])[0].get("id", "")
+    sender_id = data.get('_sender_phone_number_id', '')
+    return (msg_id, sender_id)
 
 
 def send_media(
-    to_wa_id: str, media_type: str, media_url: str, caption: Optional[str] = None
-) -> str:
+    to_wa_id: str, media_type: str, media_url: str, caption: Optional[str] = None, phone_number_id: Optional[str] = None
+) -> tuple:
     """
     Sends a media message (image, video, document, audio) via WhatsApp.
-    media_type should be one of: 'image', 'video', 'document', 'audio'.
+    
+    Args:
+        to_wa_id: Recipient phone number
+        media_type: One of 'image', 'video', 'document', 'audio'
+        media_url: URL of the media file
+        caption: Optional caption text
+        phone_number_id: Optional specific sender number
+        
+    Returns:
+        Tuple of (message_id, sender_phone_number_id)
     """
     logger.warning(
-        f"[WA-SEND-MEDIA] TO={to_wa_id} TYPE={media_type} URL={media_url} CAPTION={caption}"
+        f"[WA-SEND-MEDIA] TO={to_wa_id} TYPE={media_type} URL={media_url} CAPTION={caption} SENDER={phone_number_id or 'default'}"
     )
 
     valid_types = {"image", "video", "document", "audio"}
@@ -129,10 +275,6 @@ def send_media(
     # Audio does not support caption
     if caption and media_type != "audio":
         payload_media["caption"] = caption
-        # Document needs 'filename' sometimes, but caption is usually supported as caption? 
-        # Actually for document, 'caption' field represents the filename in some contexts or caption text. 
-        # Meta API: document object supports 'caption' and 'filename'. 
-        # We will map caption to 'caption'.
 
     data = _post(
         "messages",
@@ -142,19 +284,30 @@ def send_media(
             "type": media_type,
             media_type: payload_media,
         },
+        phone_number_id=phone_number_id
     )
     logger.warning(f"[WA-MEDIA-RESPONSE] {data}")
-    return (data.get("messages") or [{}])[0].get("id", "")
+    msg_id = (data.get("messages") or [{}])[0].get("id", "")
+    sender_id = data.get('_sender_phone_number_id', '')
+    return (msg_id, sender_id)
 
 
 def send_resume_opener(
-    to_wa_id: str, registration_uuid: str, opener_body_param: Optional[str] = None
-) -> str:
+    to_wa_id: str, registration_uuid: str, opener_body_param: Optional[str] = None, phone_number_id: Optional[str] = None
+) -> tuple:
     """
     Sends the approved 'resume conversation' template with a single quick-reply button.
-    The button payload embeds the reg_id: `resume|<reg_uuid>`.
+    
+    Args:
+        to_wa_id: Recipient phone number
+        registration_uuid: Registration ID for button payload
+        opener_body_param: Optional template body parameter
+        phone_number_id: Optional specific sender number
+        
+    Returns:
+        Tuple of (message_id, sender_phone_number_id)
     """
-    logger.warning(f"[WA-SEND-RESUME] TO={to_wa_id} REG={registration_uuid}")
+    logger.warning(f"[WA-SEND-RESUME] TO={to_wa_id} REG={registration_uuid} SENDER={phone_number_id or 'default'}")
     
     components = []
     if opener_body_param:
@@ -188,12 +341,13 @@ def send_resume_opener(
     
     logger.warning(f"[WA-RESUME-PAYLOAD] Template={RESUME_TEMPLATE_NAME}, Components={len(components)}")
 
-    data = _post("messages", template_payload)
+    data = _post("messages", template_payload, phone_number_id=phone_number_id)
     
     msg_id = (data.get("messages") or [{}])[0].get("id", "")
-    logger.warning(f"[WA-RESUME-RESPONSE] MessageID={msg_id}")
+    sender_id = data.get('_sender_phone_number_id', '')
+    logger.warning(f"[WA-RESUME-RESPONSE] MessageID={msg_id} SENDER={sender_id}")
     
-    return msg_id
+    return (msg_id, sender_id)
 
 
 def within_24h_window(last_inbound) -> bool:
@@ -216,12 +370,23 @@ def send_choice_buttons(
     choices: List[Dict[str, str]],
     header: Optional[str] = None,
     footer: Optional[str] = None,
-) -> str:
+    phone_number_id: Optional[str] = None
+) -> Tuple[str, str]:
     """
     Send interactive 'button' message with up to 3 choices.
-    choices = [{ "id": "tc|step|value", "title": "Air" }, ...]
+    
+    Args:
+        to_wa_id: Recipient phone number
+        body: Message body text
+        choices: List of button choices [{ "id": "tc|step|value", "title": "Air" }, ...]
+        header: Optional header text
+        footer: Optional footer text
+        phone_number_id: Optional specific sender number
+        
+    Returns:
+        Tuple of (message_id, sender_phone_number_id)
     """
-    logger.warning(f"[WA-SEND-BUTTONS] TO={to_wa_id} TEXT={body}")
+    logger.warning(f"[WA-SEND-BUTTONS] TO={to_wa_id} TEXT={body} SENDER={phone_number_id or 'default'}")
 
     buttons = [
         {
@@ -233,8 +398,7 @@ def send_choice_buttons(
 
     logger.warning(f"[WA-BUTTONS-LIST] {buttons}")
     if not buttons:
-
-        return send_freeform_text(to_wa_id, body)
+        return send_freeform_text(to_wa_id, body, phone_number_id)
 
     interactive: Dict[str, Any] = {
         "type": "button",
@@ -256,10 +420,13 @@ def send_choice_buttons(
             "type": "interactive",
             "interactive": interactive,
         },
+        phone_number_id=phone_number_id
     )
     logger.warning(f"[WA-BUTTON-RESPONSE] {data}")
 
-    return (data.get("messages") or [{}])[0].get("id", "")
+    msg_id = (data.get("messages") or [{}])[0].get("id", "")
+    sender_id = data.get('_sender_phone_number_id', '')
+    return (msg_id, sender_id)
 
 
 def send_template(
@@ -267,12 +434,23 @@ def send_template(
     template_name: str,
     language_code: str = "en_US",
     components: List[Dict[str, Any]] = None,
-) -> str:
+    phone_number_id: Optional[str] = None
+) -> Tuple[str, str]:
     """
     Sends a specific template message.
+    
+    Args:
+        to_wa_id: Recipient phone number
+        template_name: Template name
+        language_code: Language code (default: en_US)
+        components: Template components
+        phone_number_id: Optional specific sender number
+        
+    Returns:
+        Tuple of (message_id, sender_phone_number_id)
     """
     logger.warning(
-        f"[WA-SEND-TEMPLATE] TO={to_wa_id} TEMP={template_name} COMPS={len(components or [])}"
+        f"[WA-SEND-TEMPLATE] TO={to_wa_id} TEMP={template_name} COMPS={len(components or [])} SENDER={phone_number_id or 'default'}"
     )
 
     payload = {
@@ -286,6 +464,8 @@ def send_template(
         },
     }
 
-    data = _post("messages", payload)
-    return (data.get("messages") or [{}])[0].get("id", "")
+    data = _post("messages", payload, phone_number_id=phone_number_id)
+    msg_id = (data.get("messages") or [{}])[0].get("id", "")
+    sender_id = data.get('_sender_phone_number_id', '')
+    return (msg_id, sender_id)
 
