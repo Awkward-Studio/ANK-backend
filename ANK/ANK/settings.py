@@ -10,9 +10,18 @@ Django settings for ANK project.
 from pathlib import Path
 from datetime import timedelta
 import os
+import warnings
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 import dj_database_url
+
+# Suppress model reload warnings (happens with ASGI/Daphne multi-process initialization)
+warnings.filterwarnings(
+    'ignore',
+    message='.*was already registered.*',
+    category=RuntimeWarning,
+    module='django.db.models.base'
+)
 
 # ---------------------------
 # Load .env for local dev
