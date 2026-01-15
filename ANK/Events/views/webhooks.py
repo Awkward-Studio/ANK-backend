@@ -582,76 +582,126 @@ def whatsapp_rsvp(request):
                     pass
             # Fall through to 'if not er' block below for standard standalone logging
 
-        if not er:
-            # STANDALONE / UNREGISTERED MESSAGE HANDLING
-            # If we cannot resolve a registration, we still want to log this message
-            # so it appears in the Bulk Chat History (standalone view).
-            
-            # Create a log entry for this unknown inbound message
-            from Events.models.whatsapp_message_log import WhatsAppMessageLog
-
-            # [NEW] Try to find a name from previous logs for this number
-            previous_log_with_name = (
-                WhatsAppMessageLog.objects.filter(
-                    recipient_id=_norm_digits(wa_id)[-15:], guest_name__isnull=False
-                )
-                .exclude(guest_name="")
-                .order_by("-sent_at")
-                .first()
-            )
-            found_name = previous_log_with_name.guest_name if previous_log_with_name else None
-
-            WhatsAppMessageLog.objects.create(
-                wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
-                recipient_id=_norm_digits(wa_id)[
-                    -15:
-                ],  # [FIX] Normalize to digits only for consistency
-                status="received",
-                sent_at=responded_on,
-                direction="inbound",
-                body=raw_status,
-                message_type="custom",
-                flow_type="standalone",
-                guest_name=found_name,
-                media_id=media_id,
-                media_type=media_type,
-            )
-            
-            log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id} (media={bool(media_id)})")
-            return JsonResponse({"ok": True, "standalone": True})
-            
-            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
-
-            return JsonResponse({"ok": True, "standalone": True})
-            
-            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
-
-    # [FIX] STRICT FLOW CHECK
-    # Even if we resolved 'er' (e.g. via an old RSVP map), we must check if the user is CURRENTLY in a different flow.
-    # If the LATEST map says "travel", we must NOT interpret "Yes"/"No" as RSVP.
-    if er and is_rsvp:
-        # Check latest map for this specific user/sender combo
+    # [FIX] DELEGATE TO TRAVEL CAPTURE IF ACTIVE FLOW IS TRAVEL
+    # Check latest map for this specific user/sender combo
+    latest_map = None
+    if wa_id:
         latest_map_qs = WaSendMap.objects.filter(
-            wa_id=_norm_digits(wa_id or getattr(er.guest, 'phone', '')),
+            wa_id=_norm_digits(wa_id),
             expires_at__gt=dj_tz.now()
         )
         if to_phone_number_id:
             latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
-            
-        latest_map = latest_map_qs.order_by("-created_at").values("flow_type").first()
-        
-        if latest_map:
-            current_flow = latest_map.get("flow_type")
-            if current_flow and current_flow != "rsvp":
-                log.info(f"[RSVP] IGNORED '{normalized_status}' because active flow is '{current_flow}' (not rsvp)")
-                # We stop processing here. We don't error, just return OK (as it might be processed by the other flow)
-                return JsonResponse({"ok": True, "ignored": True, "reason": f"active_flow_{current_flow}"})
+        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration").first()
 
-    # Update RSVP only if it's a valid RSVP command
-    if is_rsvp:
-        er.rsvp_status = normalized_status
-        er.save(update_fields=["rsvp_status"])
-        log.info(f"Updated RSVP status to '{normalized_status}' for registration {er.id}")
+    if latest_map and latest_map.get("flow_type") == "travel":
+        # We are in Travel Flow -> All text input should go to the travel orchestrator
+        # unless it's a specialized command like "menu" (handled above)
+        
+        # Ensure we have the registration
+        er_travel = er
+        if not er_travel and latest_map.get("event_registration"):
+            try:
+                er_travel = EventRegistration.objects.get(pk=latest_map["event_registration"])
+            except EventRegistration.DoesNotExist:
+                pass
+        
+        if er_travel and not is_menu_command:
+            try:
+                from MessageTemplates.services.travel_info_capture import handle_inbound_answer
+                log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Travel Flow for reg {er_travel.id}")
+                
+                reply_text, flow_done = handle_inbound_answer(er_travel, raw_status)
+                
+                # If the handler returned a validation error or question, send it
+                if reply_text:
+                    from Events.services.message_logger import MessageLogger
+                    MessageLogger.send_text(er_travel, reply_text, "travel")
+                
+                return JsonResponse({"ok": True, "delegated_travel": True})
+            except Exception as e:
+                log.exception(f"[WEBHOOK] Failed to delegate to travel flow: {e}")
+                # Fall through to logging
+
+    
+    # [RESTORED] STANDALONE / UNREGISTERED MESSAGE HANDLING
+    if not er:
+        # If we cannot resolve a registration, we still want to log this message
+        # so it appears in the Bulk Chat History (standalone view).
+        
+        # Create a log entry for this unknown inbound message
+        from Events.models.whatsapp_message_log import WhatsAppMessageLog
+        
+        # Try to find a name from previous logs for this number
+        previous_log_with_name = (
+            WhatsAppMessageLog.objects.filter(
+                recipient_id=_norm_digits(wa_id)[-15:], guest_name__isnull=False
+            )
+            .exclude(guest_name="")
+            .order_by("-sent_at")
+            .first()
+        )
+        found_name = previous_log_with_name.guest_name if previous_log_with_name else None
+
+        WhatsAppMessageLog.objects.create(
+            wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
+            recipient_id=_norm_digits(wa_id)[-15:], 
+            status="received",
+            sent_at=dj_tz.now(),
+            direction="inbound",
+            body=raw_status,
+            message_type="custom",
+            flow_type="standalone",
+            guest_name=found_name,
+            media_id=media_id,
+            media_type=media_type,
+        )
+        
+        log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id}")
+        return JsonResponse({"ok": True, "standalone": True})
+
+    # [CHANGED] User requested: "only accept button inputs maybe for rsvp and not text"
+    # We DISABLE the implicit text RSVP logic below.
+    # To re-enable, one would check 'if is_rsvp and flow_type == "rsvp": ...'
+    
+    # ✅ Normalize to title case
+    status_map = {
+        "yes": "Yes",
+        "no": "No",
+        "maybe": "Maybe",
+        "pending": "Pending",
+        "not_sent": "Not_Sent",
+    }
+    normalized_status = status_map.get(raw_status.lower())
+
+    # FORCE DISABLE TEXT RSVP
+    # is_rsvp = normalized_status in {"Yes", "No", "Maybe"}
+    is_rsvp = False 
+    
+    # NOTE: Buttons with 'tc|rsvp_yes' etc. are handled at the TOP of this function via apply_button_choice.
+    # So valid button RSVPs are already processed/delegated. 
+    # This block was only for "Yes" typed text.
+
+    responded_on = None
+    if body.get("responded_on"):
+        parsed = parse_datetime(body["responded_on"])
+        responded_on = _ensure_aware(parsed) if parsed else datetime.now(tz=tz.utc)
+    else:
+        responded_on = datetime.now(tz=tz.utc)
+
+    # Resolve registration if not yet found
+    if not er:
+        reg_id = body.get("event_registration_id")
+        if reg_id:
+             try:
+                 er = EventRegistration.objects.get(pk=reg_id)
+             except EventRegistration.DoesNotExist:
+                 return HttpResponseBadRequest("registration not found")
+        
+        # If still no ER, try legacy resolution (wa_id + event_id)
+        if not er and wa_id and event_id:
+             # Only if we really need to find context for logging
+             pass
 
     # Log inbound message
     from Events.services.message_logger import MessageLogger
@@ -664,122 +714,41 @@ def whatsapp_rsvp(request):
         display_content = raw_status # Generic text
         msg_type = "custom"
 
-    MessageLogger.log_inbound(
-        event_registration=er,
-        content=display_content,
-        message_type=msg_type,
-        wa_message_id=body.get("wa_id", ""),
-        media_id=media_id,
-        media_type=media_type,
-        metadata=body,
-        sender_phone_number_id=body.get("to_phone_number_id"),
-    )
+    if er:
+        MessageLogger.log_inbound(
+            event_registration=er,
+            content=display_content,
+            message_type=msg_type,
+            wa_message_id=body.get("wa_id", ""),
+            media_id=media_id,
+            media_type=media_type,
+            metadata=body,
+            sender_phone_number_id=body.get("to_phone_number_id"),
+        )
 
     # Send immediate WhatsApp confirmation with next steps
-    try:
-        from Events.services.message_logger import MessageLogger as MsgLogger
+    # (DISABLED/SKIPPED because is_rsvp is now forced False for text)
+    if is_rsvp and er:
+       # ... legacy confirmation code ...
+       pass
 
-        event_name = er.event.name if er.event else "the event"
-
-        if normalized_status == "Yes":
-            # Check if user has extra pax to confirm
-            estimated = er.estimated_pax or 1
-            has_extras = er.extra_attendees.exists()
-            
-            if estimated > 1 or has_extras:
-                # Ask for pax confirmation before final RSVP confirmation
-                extra_count = estimated - 1 if estimated > 1 else er.extra_attendees.count()
-                total_pax = estimated if estimated > 1 else (1 + er.extra_attendees.count())
-                
-                # Build guest list if ExtraAttendee records exist
-                guest_list = ""
-                extras = list(er.extra_attendees.all()[:5])  # Limit to 5 for message length
-                if extras:
-                    guest_list = "\n\nRegistered guests:\n"
-                    for i, ex in enumerate(extras, 1):
-                        guest_list += f"  {i}. {ex.name}\n"
-                    if er.extra_attendees.count() > 5:
-                        guest_list += f"  ... and {er.extra_attendees.count() - 5} more\n"
-                
-                message = (
-                    f"✅ Great! We have recorded *{total_pax}* guests for your party.{guest_list}\n\n"
-                    f"How many of you are attending {event_name}?"
-                )
-                
-                buttons = [
-                    {"id": f"tc|rsvp_pax_confirm|{total_pax}", "title": f"All {total_pax} guests"},
-                    {"id": f"tc|rsvp_pax_confirm|1", "title": "Just me (1)"},
-                ]
-                # Add a third option if there's room and pax > 2
-                if total_pax > 2:
-                    buttons.append({"id": f"tc|rsvp_pax_custom|{er.id}", "title": "Different number"})
-                
-                MsgLogger.send_buttons(er, message, buttons, "rsvp")
-                log.info(f"[RSVP] Sent pax confirmation request to {er.guest.phone} (recorded: {total_pax})")
-            else:
-                # No extra pax - send direct confirmation
-                message = (
-                    f"✅ Perfect! Your RSVP has been confirmed for {event_name}.\n\n"
-                    "We're looking forward to seeing you! 🎉\n\n"
-                    "What would you like to do next?"
-                )
-                buttons = [
-                    {"id": f"tc|start_travel|{er.id}", "title": "Add Travel Details"},
-                    {"id": f"tc|update_rsvp_menu|{er.id}", "title": "Update RSVP"},
-                    {"id": f"tc|remind_later|{er.id}", "title": "Remind Me Later"},
-                ]
-                MsgLogger.send_buttons(er, message, buttons, "rsvp")
-                log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
-
-        elif normalized_status == "No":
-            # For "No" - simple confirmation
-            message = (
-                f"Thank you for letting us know.\n\n"
-                f"Your RSVP has been updated to: Not Attending ❌\n\n"
-                "We hope to see you at future events!"
-            )
-            MsgLogger.send_text(er, message, "rsvp")
-            log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
-
-        elif normalized_status == "Maybe":
-            # For "Maybe" - simple confirmation
-            message = (
-                f"No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
-                "Please let us know when you decide!"
-            )
-            MsgLogger.send_text(er, message, "rsvp")
-            log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
-
-    except Exception as msg_err:
-        log.exception(f"[RSVP] Failed to send confirmation message: {msg_err}")
-        # Don't fail the request if message sending fails
 
     # Mark WaSendMap consumed (non-fatal if it fails)
     try:
-        wa_id = _norm_digits(body.get("wa_id", ""))
-        template_wamid = body.get("template_wamid") or None
-        event_id = body.get("event_id") or None
-
-        qs = WaSendMap.objects.filter(event_registration=er)
-        if template_wamid:
-            qs = qs.filter(template_wamid=template_wamid)
-        elif wa_id and event_id:
-            qs = qs.filter(wa_id=wa_id, event_id=event_id)
-        elif wa_id:
-            qs = qs.filter(wa_id=wa_id)
-
-        qs.update(consumed_at=dj_tz.now())
+        if er:
+            qs = WaSendMap.objects.filter(event_registration=er)
+            if template_wamid:
+                qs = qs.filter(template_wamid=template_wamid)
+            
+            qs.update(consumed_at=dj_tz.now())
     except Exception as e:
         log.warning("Failed to mark WaSendMap consumed: %s", e)
 
     return JsonResponse(
         {
             "ok": True,
-            "id": str(er.id),
-            "event": str(er.event_id),
-            "guest": str(er.guest_id),  # ensure JSON-safe
-            "rsvp_status": er.rsvp_status,
-            "responded_on": er.responded_on.isoformat() if er.responded_on else None,
+            "id": str(er.id) if er else None,
+            "rsvp_status": er.rsvp_status if er else None,
         }
     )
 
