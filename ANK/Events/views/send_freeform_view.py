@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 
 from Events.models.event_registration_model import EventRegistration
 from Events.services.message_logger import MessageLogger
-from MessageTemplates.services.whatsapp import send_freeform_text, within_24h_window
+from MessageTemplates.services.whatsapp import within_24h_window
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,6 @@ class SendFreeformMessageView(APIView):
         # Send via existing WhatsApp service
         try:
             wa_message_id = ""
-            sender_id = ""
             media_url = serializer.validated_data.get("media_url")
             media_type = serializer.validated_data.get("media_type")
             caption = serializer.validated_data.get("caption")
@@ -85,14 +84,8 @@ class SendFreeformMessageView(APIView):
                         {"ok": False, "status": "failed", "error": "Message text is required if no media attached"},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                wa_message_id, sender_id = send_freeform_text(phone, message, sender_phone_number_id)
-                # Log usage
-                MessageLogger.log_outbound(
-                    event_registration=reg,
-                    content=message,
-                    wa_message_id=wa_message_id,
-                    message_type="content",
-                    sender_phone_number_id=sender_id,
+                wa_message_id = MessageLogger.send_text(
+                    reg, message, message_type="content", phone_number_id=sender_phone_number_id
                 )
 
             # Pause any active travel session so user replies aren't treated as travel answers

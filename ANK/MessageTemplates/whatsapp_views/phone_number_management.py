@@ -1,8 +1,9 @@
+import os
 import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 
 from MessageTemplates.models import WhatsAppPhoneNumber, WhatsAppBusinessAccount
@@ -12,11 +13,13 @@ from MessageTemplates.serializers import (
 )
 
 logger = logging.getLogger(__name__)
+WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
 
 
 class StorePhoneNumberView(APIView):
     """
     POST /api/whatsapp/phone-numbers/store/
+    Headers: X-Webhook-Token: <DJANGO_RSVP_SECRET>
     
     Store WhatsApp phone number credentials after embedded signup.
     Body: {
@@ -32,9 +35,18 @@ class StorePhoneNumberView(APIView):
     }
     """
 
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
 
     def post(self, request):
+        # Verify webhook token
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            logger.warning("[STORE_PHONE] Invalid or missing webhook token")
+            return Response(
+                {"success": False, "error": "Invalid authentication token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
         logger.info("[STORE_PHONE] Received request to store phone number")
         
         serializer = WhatsAppPhoneNumberWriteSerializer(data=request.data)
@@ -73,6 +85,7 @@ class StorePhoneNumberView(APIView):
 class ListPhoneNumbersView(APIView):
     """
     GET /api/whatsapp/phone-numbers/
+    Headers: X-Webhook-Token: <DJANGO_RSVP_SECRET>
     
     Query params:
       - is_active (bool, default: true)
@@ -81,9 +94,18 @@ class ListPhoneNumbersView(APIView):
     Returns list of available phone numbers.
     """
 
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
 
     def get(self, request):
+        # Verify webhook token
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            logger.warning("[LIST_PHONES] Invalid or missing webhook token")
+            return Response(
+                {"success": False, "error": "Invalid authentication token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
         logger.info("[LIST_PHONES] Fetching phone numbers")
 
         # Parse query params
@@ -112,14 +134,24 @@ class PhoneNumberDetailView(APIView):
     """
     GET /api/whatsapp/phone-numbers/<phone_number_id>/
     PATCH /api/whatsapp/phone-numbers/<phone_number_id>/
+    Headers: X-Webhook-Token: <DJANGO_RSVP_SECRET>
     
     Get or update a specific phone number.
     """
 
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
 
     def get(self, request, phone_number_id: str):
         """Get details of a specific phone number"""
+        # Verify webhook token
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            logger.warning(f"[PHONE_DETAIL] Invalid or missing webhook token")
+            return Response(
+                {"success": False, "error": "Invalid authentication token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
         logger.info(f"[PHONE_DETAIL] Fetching phone_number_id={phone_number_id}")
 
         phone = get_object_or_404(WhatsAppPhoneNumber, phone_number_id=phone_number_id)
@@ -132,6 +164,15 @@ class PhoneNumberDetailView(APIView):
 
     def patch(self, request, phone_number_id: str):
         """Update phone number settings (is_active, is_default, etc.)"""
+        # Verify webhook token
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            logger.warning(f"[PHONE_UPDATE] Invalid or missing webhook token")
+            return Response(
+                {"success": False, "error": "Invalid authentication token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
         logger.info(f"[PHONE_UPDATE] Updating phone_number_id={phone_number_id}")
 
         phone = get_object_or_404(WhatsAppPhoneNumber, phone_number_id=phone_number_id)
