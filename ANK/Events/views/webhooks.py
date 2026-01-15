@@ -411,10 +411,23 @@ def whatsapp_rsvp(request):
 
     normalized_status = status_map.get(raw_status.lower())
 
-    # If it's a valid RSVP, we use that. If not, we treat it as generic content.
-    # We no longer reject unknown status if it might be a media message or generic text.
-    is_rsvp = normalized_status in {"Yes", "No", "Maybe"}
+    # [CHANGED] User requested: "only accept button inputs maybe for rsvp and not text"
+    # We define 'button inputs' as payloads that resulted in 'rsvp_status' key in the body 
+    # (via upstream forwarder or internal recursion).
+    # Generic text usually comes in 'body' or 'text'.
     
+    # Check if 'rsvp_status' was explicitly provided in the JSON body
+    explicit_rsvp_status = body.get("rsvp_status")
+    
+    if explicit_rsvp_status and normalized_status:
+        # Trusted source (API/Button Payload mapped by forwarder)
+        is_rsvp = True
+    else:
+        # Inferred from text body
+        # User wants to DISABLE this for "Yes"/"No" to avoid accidental triggers
+        # is_rsvp = normalized_status in {"Yes", "No", "Maybe"}
+        is_rsvp = False
+
     responded_on = None
     if body.get("responded_on"):
         parsed = parse_datetime(body["responded_on"])
@@ -626,6 +639,49 @@ def whatsapp_rsvp(request):
             
             # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
+    
+    # [FIX] DELEGATE TO TRAVEL CAPTURE IF ACTIVE FLOW IS TRAVEL
+    # Check latest map for this specific user/sender combo
+    latest_map = None
+    if wa_id:
+        latest_map_qs = WaSendMap.objects.filter(
+            wa_id=_norm_digits(wa_id),
+            expires_at__gt=dj_tz.now()
+        )
+        if to_phone_number_id:
+            latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
+        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration").first()
+
+    if latest_map and latest_map.get("flow_type") == "travel":
+        # We are in Travel Flow -> All text input should go to the travel orchestrator
+        # unless it's a specialized command like "menu" (handled above)
+        
+        # Ensure we have the registration
+        er_travel = er
+        if not er_travel and latest_map.get("event_registration"):
+            try:
+                er_travel = EventRegistration.objects.get(pk=latest_map["event_registration"])
+            except EventRegistration.DoesNotExist:
+                pass
+        
+        if er_travel and not is_menu_command:
+            try:
+                from MessageTemplates.services.travel_info_capture import handle_inbound_answer
+                log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Travel Flow for reg {er_travel.id}")
+                
+                reply_text, flow_done = handle_inbound_answer(er_travel, raw_status)
+                
+                # If the handler returned a validation error or question, send it
+                if reply_text:
+                    from Events.services.message_logger import MessageLogger
+                    MessageLogger.send_text(er_travel, reply_text, "travel")
+                
+                return JsonResponse({"ok": True, "delegated_travel": True})
+            except Exception as e:
+                log.exception(f"[WEBHOOK] Failed to delegate to travel flow: {e}")
+                # Fall through to logging
+
+
     # [FIX] STRICT FLOW CHECK
     # Even if we resolved 'er' (e.g. via an old RSVP map), we must check if the user is CURRENTLY in a different flow.
     # If the LATEST map says "travel", we must NOT interpret "Yes"/"No" as RSVP.
@@ -645,7 +701,11 @@ def whatsapp_rsvp(request):
             if current_flow and current_flow != "rsvp":
                 log.info(f"[RSVP] IGNORED '{normalized_status}' because active flow is '{current_flow}' (not rsvp)")
                 # We stop processing here. We don't error, just return OK (as it might be processed by the other flow)
-                return JsonResponse({"ok": True, "ignored": True, "reason": f"active_flow_{current_flow}"})
+                current_rsvp_status = body.get("rsvp_status")
+                if not current_rsvp_status:
+                    # Only ignore if it is inferred from text. 
+                    # If explicit 'rsvp_status' (button payload/API) was passed, we TRUST it.
+                    return JsonResponse({"ok": True, "ignored": True, "reason": f"active_flow_{current_flow}"})
 
     # Update RSVP only if it's a valid RSVP command
     if is_rsvp:
