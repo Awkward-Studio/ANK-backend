@@ -622,6 +622,31 @@ def whatsapp_rsvp(request):
             
             # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
+            return JsonResponse({"ok": True, "standalone": True})
+            
+            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
+
+    # [FIX] STRICT FLOW CHECK
+    # Even if we resolved 'er' (e.g. via an old RSVP map), we must check if the user is CURRENTLY in a different flow.
+    # If the LATEST map says "travel", we must NOT interpret "Yes"/"No" as RSVP.
+    if er and is_rsvp:
+        # Check latest map for this specific user/sender combo
+        latest_map_qs = WaSendMap.objects.filter(
+            wa_id=_norm_digits(wa_id or getattr(er.guest, 'phone', '')),
+            expires_at__gt=dj_tz.now()
+        )
+        if to_phone_number_id:
+            latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
+            
+        latest_map = latest_map_qs.order_by("-created_at").values("flow_type").first()
+        
+        if latest_map:
+            current_flow = latest_map.get("flow_type")
+            if current_flow and current_flow != "rsvp":
+                log.info(f"[RSVP] IGNORED '{normalized_status}' because active flow is '{current_flow}' (not rsvp)")
+                # We stop processing here. We don't error, just return OK (as it might be processed by the other flow)
+                return JsonResponse({"ok": True, "ignored": True, "reason": f"active_flow_{current_flow}"})
+
     # Update RSVP only if it's a valid RSVP command
     if is_rsvp:
         er.rsvp_status = normalized_status
