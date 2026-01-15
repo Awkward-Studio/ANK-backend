@@ -178,8 +178,9 @@ def whatsapp_travel_webhook(request):
             wa_phone = wa_id if wa_id else body.get("wa_id", "")
             if wa_phone:
                 fallback_msg = get_fallback_message("no_registration")
-                send_freeform_text(wa_phone, fallback_msg)
-                logger.warning(f"[FALLBACK] Sent no_registration message to {wa_phone}")
+                # Multi-number support: Use default number, no specific sender tracking for error messages
+                msg_id, sender_id = send_freeform_text(wa_phone, fallback_msg, phone_number_id=None)
+                logger.warning(f"[FALLBACK] Sent no_registration message to {wa_phone} from {sender_id}")
         except Exception as exc:
             logger.exception(f"[FALLBACK-ERR] Failed sending fallback for wa_id={wa_id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
@@ -439,9 +440,9 @@ def whatsapp_travel_webhook(request):
                     "If you believe this is a mistake, please contact the event admin directly."
                 )
                 try:
-                    from MessageTemplates.services.whatsapp import send_freeform_text
-                    send_freeform_text(wa_id, msg_body)
-                    logger.info(f"[TEXT] Sent Unknown User generic reply to {wa_id}")
+                    # Multi-number support: Use default number for unknown user replies
+                    msg_id, sender_id = send_freeform_text(wa_id, msg_body, phone_number_id=None)
+                    logger.info(f"[TEXT] Sent Unknown User generic reply to {wa_id} from {sender_id}")
                 except Exception as e:
                     logger.error(f"[TEXT] Failed to send Unknown User reply: {e}")
 

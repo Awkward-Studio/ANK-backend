@@ -71,7 +71,6 @@ def track_send(request):
     template_wamid = body.get("template_wamid") or None
     flow_type = (body.get("flow_type") or "").strip() or None
     message_type = body.get("message_type") or flow_type or "rsvp"
-    message_type = body.get("message_type") or flow_type or "rsvp"
     body_text = body.get("body") or body.get("message") or body.get("text")
     media_url = body.get("media_url")
     media_type_arg = body.get("media_type") # specific media type (image, video)
@@ -518,19 +517,21 @@ def whatsapp_rsvp(request):
         is_stop_command = normalized_cmd in stop_commands
 
         if is_stop_command:
-             # Handle Opt-Out
-             if er:
-                 er.whatsapp_opt_in_status = 'opt_out'
-                 er.save(update_fields=['whatsapp_opt_in_status'])
-                 
-                 from MessageTemplates.services.whatsapp import send_freeform_text
-                 try:
-                     send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.")
-                 except Exception:
-                     pass
-                 
-                 log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
-                 return JsonResponse({"ok": True, "status": "opt_out"})
+            # Handle Opt-Out
+            if er:
+                er.whatsapp_opt_in_status = 'opt_out'
+                er.save(update_fields=['whatsapp_opt_in_status'])
+                
+                from MessageTemplates.services.whatsapp import send_freeform_text
+                try:
+                    # Multi-number support: Use default number for system messages
+                    msg_id, sender_id = send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.", phone_number_id=None)
+                    log.info(f"[OPT-OUT] Sent unsubscribe confirmation to {wa_id} from {sender_id}")
+                except Exception:
+                    pass
+                
+                log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
+                return JsonResponse({"ok": True, "status": "opt_out"})
              else:
                  # TODO: Global unsubscribe if no ER found?
                  # For now, just log it.
@@ -577,7 +578,9 @@ def whatsapp_rsvp(request):
             if wa_id:
                 from MessageTemplates.services.whatsapp import send_freeform_text
                 try:
-                    send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.")
+                    # Multi-number support: Use default number for unknown user messages
+                    msg_id, sender_id = send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.", phone_number_id=None)
+                    log.info(f"[UNKNOWN-USER] Sent help message to {wa_id} from {sender_id}")
                 except Exception:
                     pass
             # Fall through to 'if not er' block below for standard standalone logging

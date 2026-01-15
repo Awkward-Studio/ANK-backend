@@ -938,8 +938,9 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             if status in ["yes", "no", "maybe"]:
                 # Call existing RSVP webhook to trigger WebSocket broadcasts
                 try:
-                    # We use localhost because we are calling our own API
-                    webhook_url = "http://127.0.0.1:8000/api/webhooks/whatsapp-rsvp/"
+                    # Internal API call - use env var or localhost fallback
+                    base_url = os.getenv("INTERNAL_API_URL", "http://127.0.0.1:8000")
+                    webhook_url = f"{base_url}/api/webhooks/whatsapp-rsvp/"
                     response = requests.post(
                         webhook_url,
                         json={

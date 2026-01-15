@@ -64,7 +64,10 @@ class FlushQueuedMessagesView(APIView):
 
         for qm in qs:
             try:
-                send_freeform_text(to_wa, qm.rendered_text)
+                # Multi-number support: Use default number for queued messages
+                # TODO: Store sender_phone_number_id in QueuedMessage model for correct routing
+                msg_id, sender_id = send_freeform_text(to_wa, qm.rendered_text, phone_number_id=None)
+                logger.info(f"[FLUSH] Sent queued message {qm.id} from {sender_id}")
                 qm.mark_sent()
                 sent += 1
             except Exception as e:
