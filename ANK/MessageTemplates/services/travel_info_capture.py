@@ -650,8 +650,12 @@ def send_next_prompt(reg: EventRegistration) -> None:
     # This ensures that when the user replies, resolve_wa finds this map
     # and identifies the flow as 'travel'.
     try:
+        # [FIX] Strict normalization for WaSendMap key to match webhooks.py lookup
+        raw_phone = reg.guest.phone or ""
+        wa_digits = "".join(c for c in raw_phone if c.isdigit())[-15:]
+        
         WaSendMap.objects.update_or_create(
-            wa_id=reg.guest.phone.replace("+", ""),  # normalize if needed, model expects digits
+            wa_id=wa_digits,
             event_registration=reg,
             flow_type="travel",
             defaults={

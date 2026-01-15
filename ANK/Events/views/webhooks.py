@@ -420,9 +420,12 @@ def whatsapp_rsvp(request):
         )
         if to_phone_number_id:
             latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
-        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration").first()
+        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration", "created_at").first()
     
     current_flow = latest_map.get("flow_type") if latest_map else None
+
+    # [DEBUG LOGGING]
+    log.warning(f"[RSVP-CONTEXT] wa_id={wa_id} | latest_map_id={latest_map} | current_flow={current_flow}")
 
     # [FIX] CHECK FOR EXPLICIT SOURCE (Trust Levels)
     # 1. Internal API Call (from buttons code) -> TRUSTED
@@ -437,6 +440,8 @@ def whatsapp_rsvp(request):
          is_explicit_action = True
     else:
          is_explicit_action = False
+
+    log.warning(f"[RSVP-CHECK] is_internal={is_internal_button} | has_btn={has_button_id} | explicit_status={explicit_rsvp_status} | is_explicit={is_explicit_action}")
 
     # Determine is_rsvp
     # If Explicit Action -> True (if status present)
@@ -456,17 +461,19 @@ def whatsapp_rsvp(request):
     if explicit_rsvp_status and normalized_status:
         if is_explicit_action:
              is_rsvp = True
+             log.info("[RSVP-DECISION] ALLOWED (Explicit Source)")
         else:
              # Text / Implicit
              if current_flow == "rsvp":
                   is_rsvp = True
-                  log.info(f"[RSVP] Accepted text '{raw_status}' because current_flow='rsvp'")
+                  log.info(f"[RSVP-DECISION] ALLOWED (Context: rsvp) | text='{raw_status}'")
              else:
                   is_rsvp = False
-                  if current_flow != "travel": # If travel, we delegate below. If generic, we just log.
-                       log.info(f"[RSVP-IGNORE] Ignored text '{raw_status}' because current_flow='{current_flow}' (not rsvp)")
+                  log.warning(f"[RSVP-DECISION] BLOCKED (Context Mismatch) | text='{raw_status}' | current_flow='{current_flow}'")
     else:
         is_rsvp = False
+
+    log.info(f"[RSVP-FINAL] is_rsvp={is_rsvp}")
 
 
     responded_on = None
