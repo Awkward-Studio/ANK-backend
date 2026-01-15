@@ -556,7 +556,9 @@ def whatsapp_rsvp(request):
              
              from MessageTemplates.services.whatsapp import send_freeform_text
              try:
-                 send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.")
+                 # Multi-number support: Use default number for system messages
+                 msg_id, sender_id = send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.", phone_number_id=None)
+                 log.info(f"[OPT-OUT] Sent unsubscribe confirmation to {wa_id} from {sender_id}")
              except Exception:
                  pass
              
