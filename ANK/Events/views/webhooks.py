@@ -352,6 +352,13 @@ def whatsapp_rsvp(request):
     # Parse body
     try:
         body = json.loads(request.body.decode("utf-8"))
+        # [DEBUG] Log exact keys to diagnose "Yes" text vs "rsvp_status" payload
+        log.warning(
+            f"[RSVP-DEBUG] Incoming keys: {list(body.keys())} | "
+            f"rsvp_status={body.get('rsvp_status')} | "
+            f"body={body.get('body')} | "
+            f"reg_id={body.get('event_registration_id')}"
+        )
     except Exception:
         return HttpResponseBadRequest("invalid json")
 
@@ -412,20 +419,24 @@ def whatsapp_rsvp(request):
     normalized_status = status_map.get(raw_status.lower())
 
     # [CHANGED] User requested: "only accept button inputs maybe for rsvp and not text"
-    # We define 'button inputs' as payloads that resulted in 'rsvp_status' key in the body 
-    # (via upstream forwarder or internal recursion).
-    # Generic text usually comes in 'body' or 'text'.
     
     # Check if 'rsvp_status' was explicitly provided in the JSON body
     explicit_rsvp_status = body.get("rsvp_status")
     
-    if explicit_rsvp_status and normalized_status:
+    # We also check for 'event_registration_id'. 
+    # Internal API calls (from buttons) always include this.
+    # Generic text webhooks (from user typing) usually do not.
+    explicit_reg_id = body.get("event_registration_id")
+    
+    if explicit_rsvp_status and normalized_status and explicit_reg_id:
         # Trusted source (API/Button Payload mapped by forwarder)
+        # It has both the status AND the target ID.
         is_rsvp = True
     else:
-        # Inferred from text body
-        # User wants to DISABLE this for "Yes"/"No" to avoid accidental triggers
-        # is_rsvp = normalized_status in {"Yes", "No", "Maybe"}
+        # If missing either, we treat it as generic text/unknown.
+        # This blocks:
+        # 1. Typed "Yes" (missing reg_id)
+        # 2. Typed "Yes" (missing rsvp_status, if strictly parsed)
         is_rsvp = False
 
     responded_on = None
