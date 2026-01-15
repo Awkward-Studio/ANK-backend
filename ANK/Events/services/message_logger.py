@@ -102,6 +102,7 @@ class MessageLogger:
     ):
         """
         Log an outbound message to ConversationMessage and WhatsAppMessageLog for delivery tracking.
+        Also updates WaSendMap to ensure conversation stickiness (flow tracking).
         """
         try:
             msg = ConversationMessage.objects.create(
@@ -173,6 +174,71 @@ class MessageLogger:
                     logger.warning(
                         f"[MESSAGE-LOG] Failed to create delivery tracking: {log_err}"
                     )
+
+            # [FIX] Update WaSendMap for Flow Stickiness
+            # This ensures that if we send a 'travel' message, the next reply is treated as 'travel'
+            # (or at least NOT 'rsvp' if the user types 'Yes')
+            try:
+                from Events.models.wa_send_map import WaSendMap
+                from datetime import timedelta
+                
+                # Determine effective flow type
+                # Map generic types if possible, but usually the caller (Travel View) sends 'travel'
+                flow_type = message_type
+                if flow_type == "content":
+                    flow_type = "custom"
+                
+                # We only want to track specific flows that need context
+                if flow_type in ["travel", "rsvp"]:
+                    
+                    phone = getattr(event_registration.guest, "phone", "") or ""
+                    wa_id = "".join(c for c in phone if c.isdigit())[-15:]
+                    
+                    defaults = {
+                        "event": event_registration.event,
+                        "expires_at": timezone.now() + timedelta(days=4),
+                        # If it's a template, we might want to store template_wamid, 
+                        # but for general flow stickiness, we care about the (wa_id, sender_id, reg) tuple.
+                        # Since we generate a new WaSendMap entry for templates in track_send anyway,
+                        # this is primarily for NON-TEMPLATE (text/button) messages to maintain state.
+                    }
+                    
+                    # If this message IS a template (e.g. Resume), we might have a conflict if we try to use it as a generic map key.
+                    # But usually log_outbound is called AFTER sending, and if it was a template, track_send might have already run?
+                    # Actually, MessageLogger sends usually call internal services which call _post directly, NOT track_send webhook.
+                    # So we are responsible for creating the map here!
+                    
+                    template_wamid = wa_message_id if message_type == "template" else None
+
+                    if template_wamid:
+                         # Template-based map
+                         WaSendMap.objects.update_or_create(
+                            template_wamid=template_wamid,
+                            defaults={
+                                "wa_id": wa_id,
+                                "sender_phone_number_id": sender_phone_number_id,
+                                "event_registration": event_registration,
+                                "flow_type": flow_type,
+                                **defaults
+                            }
+                         )
+                    else:
+                        # Session/Context-based map (Generic)
+                        # Ensure we update the single active generic map for this scope
+                        WaSendMap.objects.update_or_create(
+                            wa_id=wa_id,
+                            sender_phone_number_id=sender_phone_number_id,
+                            event_registration=event_registration,
+                            flow_type=flow_type,
+                            template_wamid__isnull=True,
+                            defaults=defaults
+                        )
+                    
+                    logger.info(f"[MESSAGE-LOG] Updated WaSendMap flow_type={flow_type} for reg {event_registration.id}")
+
+            except Exception as map_err:
+                 logger.warning(f"[MESSAGE-LOG] Failed to update WaSendMap: {map_err}")
+
 
             return msg
         except Exception as e:
