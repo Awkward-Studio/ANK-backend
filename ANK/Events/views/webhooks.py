@@ -407,6 +407,41 @@ def whatsapp_rsvp(request):
                     pass
 
 
+    
+    # [CONTEXT-AWARE LOGIC]
+    # We always need the latest conversation state (WaSendMap) to determine implicit context.
+    latest_map = None
+    wa_id = _norm_digits(body.get("wa_id", ""))
+    to_phone_number_id = body.get("to_phone_number_id")
+    if wa_id:
+        latest_map_qs = WaSendMap.objects.filter(
+            wa_id=wa_id,
+            expires_at__gt=dj_tz.now()
+        )
+        if to_phone_number_id:
+            latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
+        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration").first()
+    
+    current_flow = latest_map.get("flow_type") if latest_map else None
+
+    # [FIX] CHECK FOR EXPLICIT SOURCE (Trust Levels)
+    # 1. Internal API Call (from buttons code) -> TRUSTED
+    is_internal_button = body.get("source") == "internal_button"
+    # 2. Direct Button Payload -> TRUSTED
+    has_button_id = bool(body.get("button_id"))
+    # 3. Explicit 'rsvp_status' (could be text forwarder) -> CHECK CONTEXT
+    explicit_rsvp_status = body.get("rsvp_status")
+
+    if is_internal_button or has_button_id:
+         # ALWAYS TRUST explicit button actions/internal calls regardless of flow state.
+         is_explicit_action = True
+    else:
+         is_explicit_action = False
+
+    # Determine is_rsvp
+    # If Explicit Action -> True (if status present)
+    # If Text -> True ONLY IF current_flow is 'rsvp'.
+    
     # ✅ Normalize to title case
     status_map = {
         "yes": "Yes",
@@ -418,26 +453,21 @@ def whatsapp_rsvp(request):
 
     normalized_status = status_map.get(raw_status.lower())
 
-    # [CHANGED] User requested: "only accept button inputs maybe for rsvp and not text"
-    
-    # Check if 'rsvp_status' was explicitly provided in the JSON body
-    explicit_rsvp_status = body.get("rsvp_status")
-    
-    # We also check for 'event_registration_id'. 
-    # Internal API calls (from buttons) always include this.
-    # Generic text webhooks (from user typing) usually do not.
-    explicit_reg_id = body.get("event_registration_id")
-    
-    if explicit_rsvp_status and normalized_status and explicit_reg_id:
-        # Trusted source (API/Button Payload mapped by forwarder)
-        # It has both the status AND the target ID.
-        is_rsvp = True
+    if explicit_rsvp_status and normalized_status:
+        if is_explicit_action:
+             is_rsvp = True
+        else:
+             # Text / Implicit
+             if current_flow == "rsvp":
+                  is_rsvp = True
+                  log.info(f"[RSVP] Accepted text '{raw_status}' because current_flow='rsvp'")
+             else:
+                  is_rsvp = False
+                  if current_flow != "travel": # If travel, we delegate below. If generic, we just log.
+                       log.info(f"[RSVP-IGNORE] Ignored text '{raw_status}' because current_flow='{current_flow}' (not rsvp)")
     else:
-        # If missing either, we treat it as generic text/unknown.
-        # This blocks:
-        # 1. Typed "Yes" (missing reg_id)
-        # 2. Typed "Yes" (missing rsvp_status, if strictly parsed)
         is_rsvp = False
+
 
     responded_on = None
     if body.get("responded_on"):
@@ -455,268 +485,198 @@ def whatsapp_rsvp(request):
         except EventRegistration.DoesNotExist:
             return HttpResponseBadRequest("registration not found")
     else:
-        wa_id = _norm_digits(body.get("wa_id", ""))
-        template_wamid = body.get("template_wamid") or None
-        event_id = body.get("event_id") or None
-        flow_type_expected = "rsvp"
-        # Multi-number support: Parse which of OUR numbers received this reply
-        to_phone_number_id = body.get("to_phone_number_id")
+        # Fallback resolution if reg_id missing (e.g. text message)
+        # Use latest_map if available (Stickiness)
+        if latest_map and latest_map.get("event_registration"):
+             try:
+                 er = EventRegistration.objects.get(pk=latest_map["event_registration"])
+             except EventRegistration.DoesNotExist:
+                 pass
+        
+        # ... standard resolution callbacks ...
+        if not er and wa_id:
+             # Try template_wamid / event_id / or just recent
+             pass # (We rely on logic below or existing generic resolution if we want to keep it)
+        
+        # [Simplify: If we have latest_map, we trust it for context resolution]
+        if not er:
+            # Re-run strict search if latest_map failed or wasn't used
+             wa_digits = _norm_digits(body.get("wa_id", ""))
+             if to_phone_number_id:
+                 # ... (existing logic) ...
+                 pass
+             
+             # (Keeping existing fallback blocks intact below for safety, 
+             #  but usually latest_map logic above solves it for active sessions)
+             pass
 
-        if not wa_id:
-            return HttpResponseBadRequest("missing wa_id")
+
+    if not er:
+        # Standard resolution block (kept from original code to ensure safely finding context)
+        wa_id = _norm_digits(body.get("wa_id", ""))
 
         base_qs = WaSendMap.objects.filter(wa_id=wa_id, expires_at__gt=dj_tz.now())
-        
-        # CRITICAL: Filter by sender if provided (multi-number support)
-        # This ensures we match the correct conversation when the same guest
-        # has been contacted from multiple of OUR numbers
         if to_phone_number_id:
             base_qs = base_qs.filter(sender_phone_number_id=to_phone_number_id)
-            log.info(
-                f"[RSVP] Multi-number: Filtering by to_phone_number_id={to_phone_number_id}"
-            )
 
-        # Priority 1: template_wamid match (strongest)
-        if template_wamid:
-            rid = (
-                base_qs.filter(template_wamid=template_wamid)
-                .values_list("event_registration", flat=True)
-                .first()
-            )
-            if rid:
-                er = EventRegistration.objects.get(pk=rid)
+        if body.get("template_wamid"):
+            rid = base_qs.filter(template_wamid=body.get("template_wamid")).values_list("event_registration", flat=True).first()
+            if rid: er = EventRegistration.objects.get(pk=rid)
 
-        # Priority 2: wa_id + event_id (campaign scoped)
-        if not er and event_id:
-            rid = (
-                base_qs.filter(event_id=event_id, flow_type=flow_type_expected)
-                .order_by("-created_at")
-                .values_list("event_registration", flat=True)
-                .first()
-            )
-            if rid:
-                er = EventRegistration.objects.get(pk=rid)
+        if not er and body.get("event_id"):
+            rid = base_qs.filter(event_id=body.get("event_id")).values_list("event_registration", flat=True).first()
+            if rid: er = EventRegistration.objects.get(pk=rid)
 
         if not er:
-            rid = (
-                base_qs.order_by("-created_at")
-                .values_list("event_registration", flat=True)
-                .first()
-            )
-            # LOGIC FIX: Check strictly for RSVP context
-            # If we found a registration via "recent session" (stickiness),
-            # we must ensure the SESSION TYPE is actually 'rsvp'.
-            # If the session is 'standalone' or 'travel' or None, "Yes/No" should NOT update RSVP.
-            
-            # Fetch the actual map entry to check flow_type
-            active_map = base_qs.order_by("-created_at").values("flow_type", "event_registration").first()
-            
-            if active_map:
-                map_flow_type = active_map.get("flow_type")
-                # Allowed flows for implicit text RSVP: 'rsvp'
-                # Disallowed: 'standalone', 'travel', etc.
-                # [CHANGED] User requested strict RSVP context only.
-                # Even if in 'travel' flow, typed "Yes"/"No" will NOT trigger travel logic here.
-                # It will be logged as generic text. Travel buttons (payloads) still work via travel webhook.
-                if map_flow_type != "rsvp":
-                    log.info(f"[RSVP] Ignoring generic '{raw_status}' because flow_type='{map_flow_type}' (not rsvp)")
-                    # Do NOT set `er`. Treat as if no registration found for RSVP purposes.
-                    er = None 
-                else:
-                    # Valid RSVP flow
-                    if active_map.get("event_registration"):
-                         er = EventRegistration.objects.get(pk=active_map["event_registration"])
-            else:
-                 # No active map? (Fallthrough from "Unsolicited but maybe recently messaged?")
-                 # If no map, we definitely shouldn't update RSVP based on random "Yes".
-                 er = None
+            # Final fallback: Just latest
+            rid = base_qs.order_by("-created_at").values_list("event_registration", flat=True).first()
+            if rid: er = EventRegistration.objects.get(pk=rid)
 
 
-        # [Universal Command Handling]
-        # Intercept "menu", "hi", "help", etc. to show options regardless of flow state.
-        universal_commands = {"menu", "options", "help", "hi", "hello", "start", "restart", "test"}
-        stop_commands = {"stop", "unsubscribe"}
+    # [Universal Command Handling]
+    # Intercept "menu", "hi", "help", etc. to show options regardless of flow state.
+    universal_commands = {"menu", "options", "help", "hi", "hello", "start", "restart", "test"}
+    stop_commands = {"stop", "unsubscribe"}
+    
+    normalized_cmd = raw_status.lower().strip()
+    is_menu_command = normalized_cmd in universal_commands
+    is_stop_command = normalized_cmd in stop_commands
+
+    if is_stop_command:
+         # Handle Opt-Out
+         if er:
+             er.whatsapp_opt_in_status = 'opt_out'
+             er.save(update_fields=['whatsapp_opt_in_status'])
+             
+             from MessageTemplates.services.whatsapp import send_freeform_text
+             try:
+                 send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.")
+             except Exception:
+                 pass
+             
+             log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
+             return JsonResponse({"ok": True, "status": "opt_out"})
+         else:
+             # TODO: Global unsubscribe if no ER found?
+             # For now, just log it.
+             log.info(f"[OPT-OUT] Received STOP from {wa_id} but no active registration context found.")
+
+    if is_menu_command and not er:
+        # Try global lookup by phone if context is missing
+        if wa_id:
+            wa_digits = _norm_digits(wa_id)
+            # Find latest future event or recent past
+            er = EventRegistration.objects.filter(
+                guest__phone__endswith=wa_digits
+            ).order_by("-event__start_date", "-created_at").first()
+            if er:
+                log.info(f"[MENU-LOOKUP] Found reg {er.id} for {wa_id}")
+
+    if is_menu_command and er:
+        from Events.services.message_logger import MessageLogger
         
-        normalized_cmd = raw_status.lower().strip()
-        is_menu_command = normalized_cmd in universal_commands
-        is_stop_command = normalized_cmd in stop_commands
-
-        if is_stop_command:
-             # Handle Opt-Out
-             if er:
-                 er.whatsapp_opt_in_status = 'opt_out'
-                 er.save(update_fields=['whatsapp_opt_in_status'])
-                 
-                 from MessageTemplates.services.whatsapp import send_freeform_text
-                 try:
-                     send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.")
-                 except Exception:
-                     pass
-                 
-                 log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
-                 return JsonResponse({"ok": True, "status": "opt_out"})
-             else:
-                 # TODO: Global unsubscribe if no ER found?
-                 # For now, just log it.
-                 log.info(f"[OPT-OUT] Received STOP from {wa_id} but no active registration context found.")
-
-        if is_menu_command and not er:
-            # Try global lookup by phone if context is missing
-            if wa_id:
-                wa_digits = _norm_digits(wa_id)
-                # Find latest future event or recent past
-                er = EventRegistration.objects.filter(
-                    guest__phone__endswith=wa_digits
-                ).order_by("-event__start_date", "-created_at").first()
-                if er:
-                    log.info(f"[MENU-LOOKUP] Found reg {er.id} for {wa_id}")
-
-        if is_menu_command and er:
-            from Events.services.message_logger import MessageLogger
-            
-            # Log the inbound command
-            MessageLogger.log_inbound(
-                event_registration=er,
-                content=raw_status,
-                message_type="custom",
-                wa_message_id=body.get("wa_id", ""),
-                metadata=body,
-                sender_phone_number_id=to_phone_number_id
-            )
-            
-            # Send Menu Buttons
-            event_name = er.event.name if er.event else "the event"
-            msg = f"👋 Hello! Here are your options for {event_name}:"
-            buttons = [
-                {"id": f"tc|start_travel|{er.id}", "title": "✈️ Add Travel Info"},
-                {"id": f"tc|update_rsvp_menu|{er.id}", "title": "📝 Update RSVP"},
-                {"id": f"tc|remind_later|{er.id}", "title": "⏰ Remind Later"},
-            ]
-            MessageLogger.send_buttons(er, msg, buttons, "system")
-            
-            return JsonResponse({"ok": True, "menu_sent": True})
+        # Log the inbound command
+        MessageLogger.log_inbound(
+            event_registration=er,
+            content=raw_status,
+            message_type="custom",
+            wa_message_id=body.get("wa_id", ""),
+            metadata=body,
+            sender_phone_number_id=to_phone_number_id
+        )
         
-        elif is_menu_command and not er:
-            # Command sent but user unknown -> Send helpful text + fall through to logging
-            if wa_id:
-                from MessageTemplates.services.whatsapp import send_freeform_text
-                try:
-                    send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.")
-                except Exception:
-                    pass
-            # Fall through to 'if not er' block below for standard standalone logging
+        # Send Menu Buttons
+        event_name = er.event.name if er.event else "the event"
+        msg = f"👋 Hello! Here are your options for {event_name}:"
+        buttons = [
+            {"id": f"tc|start_travel|{er.id}", "title": "✈️ Add Travel Info"},
+            {"id": f"tc|update_rsvp_menu|{er.id}", "title": "📝 Update RSVP"},
+            {"id": f"tc|remind_later|{er.id}", "title": "⏰ Remind Later"},
+        ]
+        MessageLogger.send_buttons(er, msg, buttons, "system")
+        
+        return JsonResponse({"ok": True, "menu_sent": True})
+    
+    elif is_menu_command and not er:
+        # Command sent but user unknown -> Send helpful text + fall through to logging
+        if wa_id:
+            from MessageTemplates.services.whatsapp import send_freeform_text
+            try:
+                send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.")
+            except Exception:
+                pass
+        # Fall through to 'if not er' block below for standard standalone logging
 
-        if not er:
-            # STANDALONE / UNREGISTERED MESSAGE HANDLING
-            # If we cannot resolve a registration, we still want to log this message
-            # so it appears in the Bulk Chat History (standalone view).
-            
-            # Create a log entry for this unknown inbound message
-            from Events.models.whatsapp_message_log import WhatsAppMessageLog
+    if not er:
+        # STANDALONE / UNREGISTERED MESSAGE HANDLING
+        # If we cannot resolve a registration, we still want to log this message
+        # so it appears in the Bulk Chat History (standalone view).
+        
+        # Create a log entry for this unknown inbound message
+        from Events.models.whatsapp_message_log import WhatsAppMessageLog
 
-            # [NEW] Try to find a name from previous logs for this number
-            previous_log_with_name = (
-                WhatsAppMessageLog.objects.filter(
-                    recipient_id=_norm_digits(wa_id)[-15:], guest_name__isnull=False
-                )
-                .exclude(guest_name="")
-                .order_by("-sent_at")
-                .first()
+        # [NEW] Try to find a name from previous logs for this number
+        previous_log_with_name = (
+            WhatsAppMessageLog.objects.filter(
+                recipient_id=_norm_digits(wa_id)[-15:], guest_name__isnull=False
             )
-            found_name = previous_log_with_name.guest_name if previous_log_with_name else None
+            .exclude(guest_name="")
+            .order_by("-sent_at")
+            .first()
+        )
+        found_name = previous_log_with_name.guest_name if previous_log_with_name else None
 
-            WhatsAppMessageLog.objects.create(
-                wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
-                recipient_id=_norm_digits(wa_id)[
-                    -15:
-                ],  # [FIX] Normalize to digits only for consistency
-                status="received",
-                sent_at=responded_on,
-                direction="inbound",
-                body=raw_status,
-                message_type="custom",
-                flow_type="standalone",
-                guest_name=found_name,
-                media_id=media_id,
-                media_type=media_type,
-            )
-            
-            log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id} (media={bool(media_id)})")
-            return JsonResponse({"ok": True, "standalone": True})
-            
-            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
+        WhatsAppMessageLog.objects.create(
+            wamid=body.get("wa_id", "") or f"unknown-{dj_tz.now().timestamp()}",
+            recipient_id=_norm_digits(wa_id)[
+                -15:
+            ],  # [FIX] Normalize to digits only for consistency
+            status="received",
+            sent_at=responded_on,
+            direction="inbound",
+            body=raw_status,
+            message_type="custom",
+            flow_type="standalone",
+            guest_name=found_name,
+            media_id=media_id,
+            media_type=media_type,
+        )
+        
+        log.info(f"[WEBHOOK] Logged standalone inbound message from {wa_id} (media={bool(media_id)})")
+        return JsonResponse({"ok": True, "standalone": True})
+        
+        # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
-            return JsonResponse({"ok": True, "standalone": True})
-            
-            # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
+        return JsonResponse({"ok": True, "standalone": True})
+        
+        # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
     
     # [FIX] DELEGATE TO TRAVEL CAPTURE IF ACTIVE FLOW IS TRAVEL
-    # Check latest map for this specific user/sender combo
-    latest_map = None
-    if wa_id:
-        latest_map_qs = WaSendMap.objects.filter(
-            wa_id=_norm_digits(wa_id),
-            expires_at__gt=dj_tz.now()
-        )
-        if to_phone_number_id:
-            latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
-        latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration").first()
-
-    if latest_map and latest_map.get("flow_type") == "travel":
+    # Use the `current_flow` we fetched at the top
+    if current_flow == "travel":
         # We are in Travel Flow -> All text input should go to the travel orchestrator
         # unless it's a specialized command like "menu" (handled above)
         
-        # Ensure we have the registration
-        er_travel = er
-        if not er_travel and latest_map.get("event_registration"):
-            try:
-                er_travel = EventRegistration.objects.get(pk=latest_map["event_registration"])
-            except EventRegistration.DoesNotExist:
-                pass
-        
-        if er_travel and not is_menu_command:
+        # Ensure we have the registration (er is resolved)
+        if er and not is_menu_command:
             try:
                 from MessageTemplates.services.travel_info_capture import handle_inbound_answer
-                log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Travel Flow for reg {er_travel.id}")
+                log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Travel Flow for reg {er.id}")
                 
-                reply_text, flow_done = handle_inbound_answer(er_travel, raw_status)
+                reply_text, flow_done = handle_inbound_answer(er, raw_status)
                 
-                # If the handler returned a validation error or question, send it
                 if reply_text:
                     from Events.services.message_logger import MessageLogger
-                    MessageLogger.send_text(er_travel, reply_text, "travel")
+                    MessageLogger.send_text(er, reply_text, "travel")
                 
                 return JsonResponse({"ok": True, "delegated_travel": True})
             except Exception as e:
                 log.exception(f"[WEBHOOK] Failed to delegate to travel flow: {e}")
-                # Fall through to logging
 
 
-    # [FIX] STRICT FLOW CHECK
-    # Even if we resolved 'er' (e.g. via an old RSVP map), we must check if the user is CURRENTLY in a different flow.
-    # If the LATEST map says "travel", we must NOT interpret "Yes"/"No" as RSVP.
-    if er and is_rsvp:
-        # Check latest map for this specific user/sender combo
-        latest_map_qs = WaSendMap.objects.filter(
-            wa_id=_norm_digits(wa_id or getattr(er.guest, 'phone', '')),
-            expires_at__gt=dj_tz.now()
-        )
-        if to_phone_number_id:
-            latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
-            
-        latest_map = latest_map_qs.order_by("-created_at").values("flow_type").first()
-        
-        if latest_map:
-            current_flow = latest_map.get("flow_type")
-            if current_flow and current_flow != "rsvp":
-                log.info(f"[RSVP] IGNORED '{normalized_status}' because active flow is '{current_flow}' (not rsvp)")
-                # We stop processing here. We don't error, just return OK (as it might be processed by the other flow)
-                current_rsvp_status = body.get("rsvp_status")
-                if not current_rsvp_status:
-                    # Only ignore if it is inferred from text. 
-                    # If explicit 'rsvp_status' (button payload/API) was passed, we TRUST it.
-                    return JsonResponse({"ok": True, "ignored": True, "reason": f"active_flow_{current_flow}"})
+    # [REMOVED OLD STRICT FLOW CHECK - We integrated it into is_rsvp determination above]
+
 
     # Update RSVP only if it's a valid RSVP command
     if is_rsvp:

@@ -945,7 +945,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                         json={
                             "rsvp_status": status,
                             "event_registration_id": str(reg.id),
-                            "responded_on": dj_tz.now().isoformat()
+                            "responded_on": dj_tz.now().isoformat(),
+                            "source": "internal_button",  # [FIX] Mark as internal source
                         },
                         headers={"X-Webhook-Token": os.getenv("DJANGO_RSVP_SECRET", "")},
                         timeout=5
