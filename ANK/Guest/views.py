@@ -4,7 +4,9 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.models import ContentType
 from contextlib import nullcontext
+import re
 
 import csv
 import io
@@ -16,6 +18,26 @@ from Guest.models import Guest
 from Events.models.event_registration_model import ExtraAttendee
 from Guest.models import Guest, GuestField
 from Guest.serializers import GuestSerializer, GuestFieldSerializer
+from CustomField.models import CustomFieldDefinition, CustomFieldValue
+
+# Known CSV columns that map to existing Guest/EventRegistration fields
+# Any column NOT in this list will be treated as a custom field
+KNOWN_CSV_COLUMNS = {
+    "UID",
+    "Guest Group",
+    "Sub Guest Group",
+    "Salutation",
+    "First Name",
+    "Last Name",
+    "Pax",
+    "Contact",
+    "Email",
+    "Address",
+    "City",
+    "Pincode",
+    "Country",
+    "unique_strings",
+}
 from utils.swagger import (
     doc_create,
     doc_list,
@@ -270,6 +292,10 @@ class BulkGuestUploadAPIView(APIView):
 
             data = csv_file.read().decode("utf-8-sig")
             csv_reader = csv.DictReader(io.StringIO(data))
+            
+            # Get CSV headers and detect unknown columns (potential custom fields)
+            csv_headers = csv_reader.fieldnames or []
+            unknown_columns = [col for col in csv_headers if col not in KNOWN_CSV_COLUMNS]
 
             # Counters
             guests_created = 0
@@ -279,6 +305,8 @@ class BulkGuestUploadAPIView(APIView):
             extra_attendees_created = 0
             session_regs_created = 0
             session_regs_skipped = 0
+            custom_fields_created = 0
+            custom_field_values_created = 0
             errors = []
             warnings = []
 
@@ -293,10 +321,54 @@ class BulkGuestUploadAPIView(APIView):
             seen_uids_in_csv = set()
             seen_emails_in_csv = set()
             seen_phones_in_csv = set()
+            
+            # Get ContentType for EventRegistration (needed for custom fields)
+            event_registration_ct = ContentType.objects.get_for_model(EventRegistration)
+            
+            # Dictionary to store custom field definitions (column_name -> CustomFieldDefinition)
+            custom_field_definitions = {}
 
             context_manager = transaction.atomic if not dry_run else nullcontext
 
             with context_manager():
+                # === CREATE CUSTOM FIELD DEFINITIONS FOR UNKNOWN COLUMNS ===
+                if unknown_columns:
+                    for column_name in unknown_columns:
+                        # Sanitize column name for internal use (lowercase, underscores)
+                        sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '_', column_name.lower()).strip('_')
+                        sanitized_name = re.sub(r'_+', '_', sanitized_name)  # Remove multiple underscores
+                        
+                        if not sanitized_name:
+                            warnings.append(f"Column '{column_name}' has invalid name, skipping as custom field")
+                            continue
+                        
+                        if not dry_run:
+                            # Get or create the custom field definition for this event
+                            field_def, created = CustomFieldDefinition.objects.get_or_create(
+                                event=event,
+                                content_type=event_registration_ct,
+                                name=sanitized_name,
+                                defaults={
+                                    "label": column_name,  # Keep original column name as label
+                                    "field_type": "text",  # Default to text type
+                                    "help_text": f"Auto-created from CSV column '{column_name}'",
+                                },
+                            )
+                            custom_field_definitions[column_name] = field_def
+                            if created:
+                                custom_fields_created += 1
+                        else:
+                            # Dry run - check if it would be created
+                            existing = CustomFieldDefinition.objects.filter(
+                                event=event,
+                                content_type=event_registration_ct,
+                                name=sanitized_name,
+                            ).exists()
+                            if not existing:
+                                custom_fields_created += 1
+                            # Store a placeholder for dry run tracking
+                            custom_field_definitions[column_name] = sanitized_name
+                
                 for idx, row in enumerate(csv_reader, start=2):  # 2 for header row
                     try:
                         # Extract and clean data
@@ -440,7 +512,21 @@ class BulkGuestUploadAPIView(APIView):
                                 event_regs_created += 1
                                 reg_created = True
 
-                            # === 3) EXTRA ATTENDEES: Handled automatically by signal ===
+                            # === 3) CUSTOM FIELD VALUES: Store unknown column data ===
+                            for column_name, field_def in custom_field_definitions.items():
+                                value = row.get(column_name, "").strip()
+                                if value:  # Only create if there's a value
+                                    # Use update_or_create to handle re-uploads
+                                    _, cfv_created = CustomFieldValue.objects.update_or_create(
+                                        definition=field_def,
+                                        content_type=event_registration_ct,
+                                        object_id=str(reg.id),
+                                        defaults={"value": value},
+                                    )
+                                    if cfv_created:
+                                        custom_field_values_created += 1
+
+                            # === 4) EXTRA ATTENDEES: Handled automatically by signal ===
                             # The sync_extra_guests signal in Events/signals.py automatically
                             # creates/deletes extra attendees based on estimated_pax.
                             # Signal logic: required_extras = max(0, estimated_pax - 1)
@@ -461,7 +547,7 @@ class BulkGuestUploadAPIView(APIView):
                                     if needed_extra > existing_extra_count:
                                         extra_attendees_created += (needed_extra - existing_extra_count)
 
-                            # === 4) SESSION REGISTRATIONS: Create only if not exists ===
+                            # === 5) SESSION REGISTRATIONS: Create only if not exists ===
                             for unique_str in unique_strings:
                                 session = sessions_by_unique.get(unique_str)
                                 if session:
@@ -503,6 +589,14 @@ class BulkGuestUploadAPIView(APIView):
                             else:
                                 event_regs_updated += 1
 
+                            # Count custom field values that would be created
+                            for column_name in custom_field_definitions.keys():
+                                value = row.get(column_name, "").strip()
+                                if value:
+                                    # In dry run, we can't check if it exists without the reg
+                                    # So we count all values with data as potential creates
+                                    custom_field_values_created += 1
+
                             # Session registrations: count only if not already registered
                             for unique_str in unique_strings:
                                 session = sessions_by_unique.get(unique_str)
@@ -541,6 +635,11 @@ class BulkGuestUploadAPIView(APIView):
                 if dry_run:
                     raise RuntimeError("__dry_run_complete__")
 
+            # Build custom fields summary for message
+            custom_fields_msg = ""
+            if custom_fields_created > 0 or custom_field_values_created > 0:
+                custom_fields_msg = f", {custom_fields_created} custom fields, {custom_field_values_created} custom values"
+            
             return Response(
                 {
                     "guests_created": guests_created,
@@ -550,6 +649,9 @@ class BulkGuestUploadAPIView(APIView):
                     "extra_attendees_created": extra_attendees_created,
                     "session_registrations_created": session_regs_created,
                     "session_registrations_skipped": session_regs_skipped,
+                    "custom_fields_created": custom_fields_created,
+                    "custom_field_values_created": custom_field_values_created,
+                    "unknown_columns_detected": unknown_columns,
                     "errors": errors,
                     "warnings": warnings,
                     "dry_run": dry_run,
@@ -560,6 +662,7 @@ class BulkGuestUploadAPIView(APIView):
                         f"{event_regs_created} new registrations, {event_regs_updated} updated registrations, "
                         f"{extra_attendees_created} extra attendees, "
                         f"{session_regs_created} session registrations (skipped {session_regs_skipped} duplicates)"
+                        f"{custom_fields_msg}"
                     ),
                 },
                 status=200 if dry_run else 201,
@@ -567,6 +670,11 @@ class BulkGuestUploadAPIView(APIView):
 
         except RuntimeError as dry_run_marker:
             if str(dry_run_marker) == "__dry_run_complete__":
+                # Build custom fields summary for message
+                custom_fields_msg = ""
+                if custom_fields_created > 0 or custom_field_values_created > 0:
+                    custom_fields_msg = f", {custom_fields_created} custom fields, {custom_field_values_created} custom values"
+                
                 return Response(
                     {
                         "guests_created": guests_created,
@@ -576,6 +684,9 @@ class BulkGuestUploadAPIView(APIView):
                         "extra_attendees_created": extra_attendees_created,
                         "session_registrations_created": session_regs_created,
                         "session_registrations_skipped": session_regs_skipped,
+                        "custom_fields_created": custom_fields_created,
+                        "custom_field_values_created": custom_field_values_created,
+                        "unknown_columns_detected": unknown_columns,
                         "errors": errors,
                         "warnings": warnings,
                         "dry_run": True,
@@ -585,6 +696,7 @@ class BulkGuestUploadAPIView(APIView):
                             f"{event_regs_created} new registrations, {event_regs_updated} updated registrations, "
                             f"{extra_attendees_created} extra attendees, "
                             f"{session_regs_created} session registrations (skipped {session_regs_skipped} duplicates)"
+                            f"{custom_fields_msg}"
                         ),
                     },
                     status=200,
