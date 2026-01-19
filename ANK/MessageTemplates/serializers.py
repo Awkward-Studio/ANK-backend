@@ -228,6 +228,7 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
     """
     Write serializer for storing/updating WhatsApp phone numbers.
     Accepts access_token for storage but never returns it.
+    Token storage is OPTIONAL - phone number will be saved even if encryption fails.
     """
 
     phone_number_id = serializers.CharField(
@@ -237,12 +238,15 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True, default=""
     )
     waba_id = serializers.CharField(
-        max_length=100, required=True, help_text="WABA ID"
+        max_length=100, required=False, allow_blank=True, default="",
+        help_text="WABA ID (optional, may not be available from embedded signup)"
     )
     access_token = serializers.CharField(
         write_only=True,
-        required=True,
-        help_text="Access token (will be encrypted)",
+        required=False,
+        allow_blank=True,
+        default="",
+        help_text="Access token (optional, will be encrypted if WHATSAPP_ENCRYPTION_KEY is set)",
     )
     display_phone_number = serializers.CharField(
         max_length=20, required=True, help_text="Display format like +919876543210"
@@ -263,10 +267,19 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
     def create(self, validated_data):
         """
         Create or update WhatsAppBusinessAccount and WhatsAppPhoneNumber.
+        Token storage is optional - will log warning if encryption fails but still save the phone number.
         """
-        access_token = validated_data.pop("access_token")
-        waba_id = validated_data.get("waba_id")
+        import logging
+        from django.conf import settings
+        logger = logging.getLogger(__name__)
+        
+        access_token = validated_data.pop("access_token", "")
+        waba_id = validated_data.get("waba_id", "") or validated_data.get("asset_id", "")
         phone_number_id = validated_data.get("phone_number_id")
+        
+        # Use asset_id as waba_id fallback if waba_id is empty
+        if not waba_id:
+            waba_id = phone_number_id  # Last resort fallback
 
         # Get or create WABA
         waba, created = WhatsAppBusinessAccount.objects.get_or_create(
@@ -277,16 +290,27 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
             },
         )
 
-        # Store token at WABA level (permanent system token)
-        try:
-            waba.set_token(access_token)
-            waba.save()
-        except Exception as e:
-            raise serializers.ValidationError(
-                {"access_token": f"Failed to encrypt token: {str(e)}"}
-            )
+        # Store token at WABA level (OPTIONAL - don't fail if encryption key is missing)
+        token_stored = False
+        if access_token:
+            encryption_key = getattr(settings, "WHATSAPP_ENCRYPTION_KEY", None)
+            if encryption_key:
+                try:
+                    waba.set_token(access_token)
+                    waba.save()
+                    token_stored = True
+                    logger.info(f"[STORE_PHONE] Successfully encrypted and stored token for WABA {waba_id}")
+                except Exception as e:
+                    logger.warning(f"[STORE_PHONE] Failed to encrypt token for WABA {waba_id}: {e}")
+            else:
+                logger.warning(
+                    f"[STORE_PHONE] WHATSAPP_ENCRYPTION_KEY not set - skipping token storage for WABA {waba_id}. "
+                    "Phone number will be saved without token. Set the encryption key to enable token storage."
+                )
+        else:
+            logger.info(f"[STORE_PHONE] No access_token provided for WABA {waba_id}")
 
-        # Create or update phone number
+        # Create or update phone number (this always succeeds regardless of token storage)
         phone, created = WhatsAppPhoneNumber.objects.update_or_create(
             phone_number_id=phone_number_id,
             defaults={
@@ -300,6 +324,11 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
                 "is_active": True,
                 "is_default": validated_data.get("is_default", False),
             },
+        )
+        
+        logger.info(
+            f"[STORE_PHONE] Phone number {'created' if created else 'updated'}: {phone_number_id}, "
+            f"token_stored={token_stored}"
         )
 
         return phone
