@@ -606,7 +606,7 @@ def whatsapp_rsvp(request):
             {"id": f"tc|update_rsvp_menu|{er.id}", "title": "📝 Update RSVP"},
             {"id": f"tc|remind_later|{er.id}", "title": "⏰ Remind Later"},
         ]
-        MessageLogger.send_buttons(er, msg, buttons, "system")
+        MessageLogger.send_buttons(er, msg, buttons, "system", phone_number_id=to_phone_number_id)
         
         return JsonResponse({"ok": True, "menu_sent": True})
     
@@ -683,7 +683,7 @@ def whatsapp_rsvp(request):
                 
                 if reply_text:
                     from Events.services.message_logger import MessageLogger
-                    MessageLogger.send_text(er, reply_text, "travel")
+                    MessageLogger.send_text(er, reply_text, "travel", phone_number_id=to_phone_number_id)
                 
                 return JsonResponse({"ok": True, "delegated_travel": True})
             except Exception as e:
@@ -761,7 +761,7 @@ def whatsapp_rsvp(request):
                     if total_pax > 2:
                         buttons.append({"id": f"tc|rsvp_pax_custom|{er.id}", "title": "Different number"})
                     
-                    MsgLogger.send_buttons(er, message, buttons, "rsvp")
+                    MsgLogger.send_buttons(er, message, buttons, "rsvp", phone_number_id=to_phone_number_id)
                     log.info(f"[RSVP] Sent pax confirmation request to {er.guest.phone} (recorded: {total_pax})")
                 else:
                     # No extra pax - send direct confirmation
@@ -775,7 +775,7 @@ def whatsapp_rsvp(request):
                         {"id": f"tc|update_rsvp_menu|{er.id}", "title": "Update RSVP"},
                         {"id": f"tc|remind_later|{er.id}", "title": "Remind Me Later"},
                     ]
-                    MsgLogger.send_buttons(er, message, buttons, "rsvp")
+                    MsgLogger.send_buttons(er, message, buttons, "rsvp", phone_number_id=to_phone_number_id)
                     log.info(f"[RSVP] Sent post-RSVP options to {er.guest.phone}")
 
             elif normalized_status == "No":
@@ -785,7 +785,7 @@ def whatsapp_rsvp(request):
                     f"Your RSVP has been updated to: Not Attending ❌\n\n"
                     "We hope to see you at future events!"
                 )
-                MsgLogger.send_text(er, message, "rsvp")
+                MsgLogger.send_text(er, message, "rsvp", phone_number_id=to_phone_number_id)
                 log.info(f"[RSVP] Sent decline confirmation to {er.guest.phone}")
 
             elif normalized_status == "Maybe":
@@ -794,7 +794,7 @@ def whatsapp_rsvp(request):
                     f"No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
                     "Please let us know when you decide!"
                 )
-                MsgLogger.send_text(er, message, "rsvp")
+                MsgLogger.send_text(er, message, "rsvp", phone_number_id=to_phone_number_id)
                 log.info(f"[RSVP] Sent maybe confirmation to {er.guest.phone}")
 
         except Exception as msg_err:
