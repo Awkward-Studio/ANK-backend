@@ -380,3 +380,44 @@ class WhatsAppPhoneNumber(models.Model):
     def __str__(self):
         default_marker = " [DEFAULT]" if self.is_default else ""
         return f"{self.display_phone_number} - {self.verified_name}{default_marker}"
+
+
+class BroadcastCampaign(models.Model):
+    """
+    Groups individual WhatsApp messages into a campaign for aggregate tracking.
+    """
+    STATUS_CHOICES = (
+        ("processing", "Processing"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, help_text="Internal name (e.g. 'Newsletter Jan 22')")
+    
+    # Template used (optional, but good for context)
+    template_name = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Sender ID used
+    sender_phone_number_id = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text="The WABA phone number ID used to send"
+    )
+    
+    total_recipients = models.IntegerField(default=0, help_text="Count of intended targets")
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="processing")
+    
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    
+    metadata = models.JSONField(default=dict, blank=True, help_text="Optional extras (filters used, etc.)")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["sender_phone_number_id", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.status})"

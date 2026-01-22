@@ -67,3 +67,12 @@ urlpatterns = [
         name="whatsapp-phone-number-detail",
     ),
 ]
+
+# ViewSets
+from rest_framework.routers import DefaultRouter
+from MessageTemplates.whatsapp_views.campaign_views import BroadcastCampaignViewSet
+
+router = DefaultRouter()
+router.register(r'whatsapp/campaigns', BroadcastCampaignViewSet, basename='whatsapp-campaigns')
+
+urlpatterns += router.urls

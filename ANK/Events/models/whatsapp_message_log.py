@@ -104,6 +104,17 @@ class WhatsAppMessageLog(models.Model):
         help_text="Phone Number ID of the sender (which of OUR numbers sent/received this)",
     )
 
+    # Campaign Link
+    campaign = models.ForeignKey(
+        "MessageTemplates.BroadcastCampaign",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="logs",
+        db_index=True,
+        help_text="The campaign this message belongs to, if any."
+    )
+
     class Meta:
         ordering = ["-sent_at"]
         indexes = [
