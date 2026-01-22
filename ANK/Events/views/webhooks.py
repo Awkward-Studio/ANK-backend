@@ -415,7 +415,8 @@ def whatsapp_rsvp(request):
     # We always need the latest conversation state (WaSendMap) to determine implicit context.
     latest_map = None
     wa_id = _norm_digits(body.get("wa_id", ""))
-    to_phone_number_id = body.get("to_phone_number_id")
+    # ✅ FIX: Support both field names (frontend sends "sender_phone_number_id")
+    to_phone_number_id = body.get("sender_phone_number_id") or body.get("to_phone_number_id")
     if wa_id:
         latest_map_qs = WaSendMap.objects.filter(
             wa_id=wa_id,
