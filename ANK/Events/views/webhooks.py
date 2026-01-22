@@ -76,14 +76,16 @@ def track_send(request):
     media_type_arg = body.get("media_type") # specific media type (image, video)
     media_id = body.get("media_id")
     sender_phone_number_id = body.get("sender_phone_number_id") # Multi-number support
+    campaign_id = body.get("campaign_id") # Broadcast campaign support
 
     log.info(
-        "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s",
+        "track_send body=%s wa_id=%s event_id=%s reg_id=%s flow_type=%s campaign_id=%s",
         body,
         wa_id,
         event_id,
         reg_id,
         flow_type,
+        campaign_id,
     )
 
     if not wa_id:
@@ -150,6 +152,7 @@ def track_send(request):
                     "media_type": media_type_arg,
                     "media_id": media_id,
                     "sender_phone_number_id": sender_phone_number_id,
+                    "campaign_id": campaign_id,
                 },
             )
             log.info(
@@ -280,6 +283,7 @@ def track_send(request):
                     "media_url": media_url,
                     "media_type": media_type_arg,
                     "media_id": media_id,
+                    "campaign_id": campaign_id,
                 },
             )
             log.info(

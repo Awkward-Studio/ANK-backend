@@ -1,4 +1,5 @@
 from rest_framework import serializers
+import MessageTemplates.models
 from MessageTemplates.models import (
     MessageTemplate,
     MessageTemplateVariable,
@@ -332,3 +333,48 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         )
 
         return phone
+
+
+class BroadcastCampaignSerializer(serializers.ModelSerializer):
+    stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MessageTemplates.models.BroadcastCampaign
+        fields = [
+            "id",
+            "name",
+            "template_name",
+            "sender_phone_number_id",
+            "total_recipients",
+            "status",
+            "created_at",
+            "metadata",
+            "stats",
+        ]
+        read_only_fields = ["id", "created_at", "stats"]
+
+    def get_stats(self, obj):
+        # Perform aggregation if this is a detail view or if needed
+        # For list views, we might want to prefetch or annotate, 
+        # but for now, let's just do a simple aggregation.
+        # This might be costly for large lists, so viewset should invoke annotations.
+        
+        # If the object has 'annotated_stats', use it (optimization for list view)
+        if hasattr(obj, 'annotated_stats'):
+            return obj.annotated_stats
+
+        # Fallback to query
+        logs = obj.logs.all()
+        total = logs.count()
+        delivered = logs.filter(status='delivered').count()
+        read = logs.filter(status='read').count()
+        failed = logs.filter(status='failed').count()
+        sent = logs.filter(status='sent').count()
+        
+        return {
+            "sent": sent,
+            "delivered": delivered,
+            "read": read,
+            "failed": failed,
+            "total": total
+        }
