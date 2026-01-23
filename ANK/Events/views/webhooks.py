@@ -322,7 +322,8 @@ def track_send(request):
                             {"type": "text", "text": opt_in_link}
                         ]
                     }
-                ]
+                ],
+                phone_number_id=sender_phone_number_id
             )
             log.info(f"[OPT-IN] Sent request to {wa_id} for reg {er.id}")
             
@@ -402,7 +403,7 @@ def whatsapp_rsvp(request):
             if er_target:
                 log.info(f"[RSVP-WEBHOOK] Delegating button {effective_payload} to Travel Capture for reg {er_target.id}")
                 try:
-                    apply_button_choice(er_target, step, value)
+                    apply_button_choice(er_target, step, value, sender_phone_number_id=to_phone_number_id)
                     return JsonResponse({"ok": True, "delegated": True})
                 except Exception as e:
                     log.exception(f"[RSVP-WEBHOOK] Travel delegation failed: {e}")
@@ -561,8 +562,8 @@ def whatsapp_rsvp(request):
              
              from MessageTemplates.services.whatsapp import send_freeform_text
              try:
-                 # Multi-number support: Use default number for system messages
-                 msg_id, sender_id = send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.", phone_number_id=None)
+                 # Multi-number support: Use current number for system messages
+                 msg_id, sender_id = send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.", phone_number_id=to_phone_number_id)
                  log.info(f"[OPT-OUT] Sent unsubscribe confirmation to {wa_id} from {sender_id}")
              except Exception:
                  pass
@@ -615,8 +616,8 @@ def whatsapp_rsvp(request):
         if wa_id:
             from MessageTemplates.services.whatsapp import send_freeform_text
             try:
-                # Multi-number support: Use default number for unknown user messages
-                msg_id, sender_id = send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.", phone_number_id=None)
+                # Multi-number support: Use current number for unknown user messages
+                msg_id, sender_id = send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.", phone_number_id=to_phone_number_id)
                 log.info(f"[UNKNOWN-USER] Sent help message to {wa_id} from {sender_id}")
             except Exception:
                 pass
@@ -679,7 +680,7 @@ def whatsapp_rsvp(request):
                 from MessageTemplates.services.travel_info_capture import handle_inbound_answer
                 log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Travel Flow for reg {er.id}")
                 
-                reply_text, flow_done = handle_inbound_answer(er, raw_status)
+                reply_text, flow_done = handle_inbound_answer(er, raw_status, sender_phone_number_id=to_phone_number_id)
                 
                 if reply_text:
                     from Events.services.message_logger import MessageLogger

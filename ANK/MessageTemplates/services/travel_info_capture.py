@@ -418,7 +418,7 @@ def _next_step(sess: TravelCaptureSession, td: TravelDetail) -> Optional[str]:
 # ---------- public API ----------
 
 
-def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False) -> str:
+def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False, sender_phone_number_id: str = None) -> str:
     """
     Called when guest opts in / flow explicitly started.
     If restart=True and there's existing data, show summary + update menu.
@@ -429,7 +429,7 @@ def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False)
 
     # If restarting with existing data, show summary menu instead
     if restart and (td.travel_type or td.arrival_date):
-        send_travel_update_menu(reg)
+        send_travel_update_menu(reg, sender_phone_number_id=sender_phone_number_id)
         return sess.step or "travel_type"
 
     if restart or sess.is_complete:
@@ -442,11 +442,11 @@ def start_capture_after_opt_in(reg: EventRegistration, *, restart: bool = False)
     sess.last_msg_at = dj_tz.now()
     sess.save(update_fields=["step", "is_complete", "state", "last_msg_at"])
 
-    send_next_prompt(reg)
+    send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
     return sess.step
 
 
-def resume_or_start(reg: EventRegistration) -> None:
+def resume_or_start(reg: EventRegistration, sender_phone_number_id: str = None) -> None:
     """
     Called on WAKE/RESUME from WhatsApp.
 
@@ -462,13 +462,13 @@ def resume_or_start(reg: EventRegistration) -> None:
         return
 
     if not sess.step or sess.step in {"opt_in", ""}:
-        start_capture_after_opt_in(reg, restart=False)
+        start_capture_after_opt_in(reg, restart=False, sender_phone_number_id=sender_phone_number_id)
         return
 
-    send_next_prompt(reg)
+    send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
 
 
-def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
+def _send_whatsapp_prompt(reg: EventRegistration, step: str, sender_phone_number_id: str = None) -> None:
     """
     Internal helper: send exactly ONE WA message for this step.
     Uses MessageLogger wrappers for automatic logging.
@@ -485,7 +485,8 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
                 {"id": "tc|travel_type|Train", "title": "Train"},
                 {"id": "tc|travel_type|Car", "title": "Car"},
             ],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
 
@@ -498,7 +499,8 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
                 {"id": "tc|arrival|local_pickup", "title": "Local Pickup"},
                 {"id": "tc|arrival|self", "title": "Self"},
             ],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
 
@@ -510,7 +512,8 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
                 {"id": "tc|return_travel|yes", "title": "Yes"},
                 {"id": "tc|return_travel|no", "title": "No"},
             ],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
 
@@ -523,7 +526,8 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
                 {"id": "tc|departure|local_pickup", "title": "Local Pickup"},
                 {"id": "tc|departure|self", "title": "Self"},
             ],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
 
@@ -556,7 +560,7 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
             f"(You can reply with any number between *1* and *{total_pax}*)"
         )
         
-        MessageLogger.send_buttons(reg, msg, buttons, "travel")
+        MessageLogger.send_buttons(reg, msg, buttons, "travel", phone_number_id=sender_phone_number_id)
         return
 
     # Optional steps with Skip button
@@ -567,7 +571,8 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
             reg,
             text,
             [{"id": f"tc|{step}|__skip__", "title": "⏭️ Skip"}],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
 
@@ -575,10 +580,10 @@ def _send_whatsapp_prompt(reg: EventRegistration, step: str) -> None:
     # Use dynamic prompt text
     td = _get_or_create_detail(reg)
     text = _get_prompt_text(step, td.travel_type)
-    MessageLogger.send_text(reg, text, "travel")
+    MessageLogger.send_text(reg, text, "travel", phone_number_id=sender_phone_number_id)
 
 
-def send_next_prompt(reg: EventRegistration) -> None:
+def send_next_prompt(reg: EventRegistration, sender_phone_number_id: str = None) -> None:
     """
     Decide next step from TravelDetail + session.
     Sends exactly one WA message for that step.
@@ -608,7 +613,8 @@ def send_next_prompt(reg: EventRegistration) -> None:
                     {"id": f"tc|start_travel|{reg.id}", "title": "Edit Travel Details"},
                     {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
                 ],
-                "travel"
+                "travel",
+                phone_number_id=sender_phone_number_id
             )
         except Exception:
             logger.exception("[ERROR] Failed to send DONE message on WhatsApp")
@@ -640,7 +646,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
     # we want to resend it. So we always send whatever _next_step says.
 
     try:
-        _send_whatsapp_prompt(reg, step)
+        _send_whatsapp_prompt(reg, step, sender_phone_number_id=sender_phone_number_id)
     except Exception:
         logger.exception(f"[ERROR] Failed to send WA prompt for step={step}")
         # Do NOT advance; let the next WAKE try again
@@ -658,6 +664,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
             wa_id=wa_digits,
             event_registration=reg,
             flow_type="travel",
+            sender_phone_number_id=sender_phone_number_id,
             defaults={
                 "event": reg.event,
                 "template_wamid": None,  # generic flow
@@ -678,7 +685,7 @@ def send_next_prompt(reg: EventRegistration) -> None:
 
 
 @transaction.atomic
-def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> None:
+def apply_button_choice(reg: EventRegistration, step: str, raw_value: str, sender_phone_number_id: str = None) -> None:
     """
     Applies a button value to the appropriate TravelDetail field and advances to the next prompt.
     """
@@ -735,7 +742,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                     reg,
                     "👥 How many people will be attending (including yourself)?\n\n"
                     "Please reply with a number.",
-                    "travel"
+                    "travel",
+                    phone_number_id=sender_phone_number_id
                 )
                 logger.info(f"Sent pax count prompt to {reg.guest.phone}")
             except Exception as e:
@@ -744,7 +752,7 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
         
         elif step == "start_travel":
             # Explicitly start the travel capture flow from the beginning
-            start_capture_after_opt_in(reg, restart=True)
+            start_capture_after_opt_in(reg, restart=True, sender_phone_number_id=sender_phone_number_id)
             return
 
         elif step == "update_rsvp_menu":
@@ -759,7 +767,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                     {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
                     {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
                 ],
-                "rsvp"
+                "rsvp",
+                phone_number_id=sender_phone_number_id
             )
             return
 
@@ -771,14 +780,15 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 "No problem! 👍\n\n"
                 "We'll remind you later to provide your travel details.\n\n"
                 "Whenever you're ready, just message us or tap the button in your previous message.",
-                "system"
+                "system",
+                phone_number_id=sender_phone_number_id
             )
             return
 
         elif step == "continue_flow":
             # User wants to continue the current flow - resend the current step prompt
             logger.warning(f"[BUTTON] User {reg.id} chose to continue flow")
-            send_next_prompt(reg)
+            send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
             return
 
         elif step == "travel_type" and raw_value in TRAVEL_TYPE_CHOICES:
@@ -884,13 +894,13 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
             sess.save(update_fields=["step", "is_complete", "state"])
 
             # Start the flow
-            send_next_prompt(reg)
+            send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
             return
 
         elif step == "update_section":
             # Handle section-specific update requests from the travel summary menu
             # raw_value contains the section name: travel_type, arrival, hotel, departure, done
-            start_section_update(reg, raw_value)
+            start_section_update(reg, raw_value, sender_phone_number_id=sender_phone_number_id)
             return  # start_section_update handles sending the next prompt
 
 
@@ -918,7 +928,7 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
                 {"id": f"tc|remind_later|{reg.id}", "title": "Remind Me Later"},
             ]
-            MessageLogger.send_buttons(reg, message, buttons, "rsvp")
+            MessageLogger.send_buttons(reg, message, buttons, "rsvp", phone_number_id=sender_phone_number_id)
             return
 
         elif step == "rsvp_pax_custom":
@@ -933,7 +943,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                 f"👥 How many guests are attending (including yourself)?\n\n"
                 f"We have recorded *{estimated}* guests.\n"
                 f"Please reply with a number (1 to {estimated}).",
-                "rsvp"
+                "rsvp",
+                phone_number_id=sender_phone_number_id
             )
             return
 
@@ -978,7 +989,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                             [
                                 {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Provide Travel Details"}
                             ],
-                            "rsvp"
+                            "rsvp",
+                            phone_number_id=sender_phone_number_id
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send confirmation: {exc}")
@@ -990,7 +1002,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                             "Thank you for letting us know.\n\n"
                             "Your RSVP has been updated to: Not Attending ❌\n\n"
                             "We hope to see you at future events!",
-                            "rsvp"
+                            "rsvp",
+                            phone_number_id=sender_phone_number_id
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send decline confirmation: {exc}")
@@ -1001,7 +1014,8 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
                             reg,
                             "No problem! Your RSVP has been updated to: Maybe 🤔\n\n"
                             "Please let us know when you decide!",
-                            "rsvp"
+                            "rsvp",
+                            phone_number_id=sender_phone_number_id
                         )
                     except Exception as exc:
                         logger.exception(f"[RSVP-BUTTON] Failed to send maybe confirmation: {exc}")
@@ -1018,7 +1032,7 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
 
     # After applying choice, move to next step via centralized prompt logic
     try:
-        send_next_prompt(reg)
+        send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
     except Exception:
         logger.exception("[ERROR] Failed in send_next_prompt after button choice")
 
@@ -1027,7 +1041,7 @@ def apply_button_choice(reg: EventRegistration, step: str, raw_value: str) -> No
 
 
 @transaction.atomic
-def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]:
+def handle_inbound_answer(reg: EventRegistration, text: str, sender_phone_number_id: str = None) -> Tuple[str, bool]:
     """
     Handles typed (free-text) answers for the *current* step.
 
@@ -1352,7 +1366,8 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
                         [
                             {"id": f"tc|start_travel|{reg.id}", "title": "✈️ Yes, Add Travel Info"}
                         ],
-                        "travel"
+                        "travel",
+                        phone_number_id=sender_phone_number_id
                     )
                     logger.info(f"Updated estimated_pax to {count} for reg {reg.id}")
                 except Exception as e:
@@ -1403,7 +1418,7 @@ def handle_inbound_answer(reg: EventRegistration, text: str) -> Tuple[str, bool]
 
     # We successfully stored the answer -> now send whatever the *next* prompt is.
     try:
-        send_next_prompt(reg)
+        send_next_prompt(reg, sender_phone_number_id=sender_phone_number_id)
     except Exception:
         logger.exception("[ERROR] Failed in send_next_prompt after inbound answer")
         # Return an error message but keep flow state advanced (as data was saved successfully)
@@ -1558,7 +1573,7 @@ def generate_travel_summary(reg: EventRegistration) -> str:
     return "\n".join(lines)
 
 
-def send_travel_update_menu(reg: EventRegistration) -> None:
+def send_travel_update_menu(reg: EventRegistration, sender_phone_number_id: str = None) -> None:
     """
     Send a summary of travel details with a single edit button to restart the flow.
     """
@@ -1576,13 +1591,13 @@ def send_travel_update_menu(reg: EventRegistration) -> None:
     ]
     
     try:
-        MessageLogger.send_buttons(reg, message, buttons, "travel")
+        MessageLogger.send_buttons(reg, message, buttons, "travel", phone_number_id=sender_phone_number_id)
         logger.warning(f"[UPDATE-MENU] Sent travel summary menu to {reg.guest.phone}")
     except Exception as exc:
         logger.exception(f"[UPDATE-MENU] Failed to send menu: {exc}")
 
 
-def start_section_update(reg: EventRegistration, section: str) -> None:
+def start_section_update(reg: EventRegistration, section: str, sender_phone_number_id: str = None) -> None:
     """
     Handle final confirmation or restart flow.
     """
@@ -1596,7 +1611,8 @@ def start_section_update(reg: EventRegistration, section: str) -> None:
                 {"id": f"tc|start_travel|{reg.id}", "title": "Edit Travel Details"},
                 {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "Update RSVP"},
             ],
-            "travel"
+            "travel",
+            phone_number_id=sender_phone_number_id
         )
         return
     
