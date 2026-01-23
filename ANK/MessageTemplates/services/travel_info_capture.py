@@ -1127,6 +1127,15 @@ def handle_inbound_answer(reg: EventRegistration, text: str, sender_phone_number
 
         # --- Pure free-text / date / time steps ---
         elif step == "arrival_date":
+            # [STRICT-CHECK] Reject times if sent during date step
+            if _parse_time(t):
+                return (
+                    f"It looks like you entered a time ('{t}'). 🕒\n\n"
+                    "We need your *Arrival Date* first.\n"
+                    "Please reply with the date (e.g., 25-12-2025).",
+                    False
+                )
+
             dt, error = _validate_future_date(t)
             if error:
                 return (error, False)
@@ -1134,6 +1143,15 @@ def handle_inbound_answer(reg: EventRegistration, text: str, sender_phone_number
             td.save(update_fields=["arrival_date"])
 
         elif step == "arrival_time":
+            # [STRICT-CHECK] Reject dates if sent during time step
+            if _parse_date(t):
+                return (
+                    f"It looks like you entered a date ('{t}'). 📅\n\n" 
+                    "We have already recorded your arrival date.\n"
+                    "Please reply with your *Arrival Time* (e.g., 14:30 or 2:30pm).",
+                    False
+                )
+
             tm = _parse_time(t)
             if not tm:
                 return (
@@ -1224,6 +1242,15 @@ def handle_inbound_answer(reg: EventRegistration, text: str, sender_phone_number
             td.save(update_fields=["hotel_departure_time"])
 
         elif step == "departure_date":
+            # [STRICT-CHECK] Reject times if sent during date step
+            if _parse_time(t):
+                return (
+                    f"It looks like you entered a time ('{t}'). 🕒\n\n"
+                    "We need your *Departure Date* first.\n"
+                    "Please reply with the date (e.g., 25-12-2025).",
+                    False
+                )
+
             dt, error = _validate_future_date(t)
             if error:
                 return (error, False)
@@ -1231,6 +1258,15 @@ def handle_inbound_answer(reg: EventRegistration, text: str, sender_phone_number
             td.save(update_fields=["departure_date"])
 
         elif step == "departure_time":
+            # [STRICT-CHECK] Reject dates if sent during time step
+            if _parse_date(t):
+                return (
+                    f"It looks like you entered a date ('{t}'). 📅\n\n" 
+                    "We have already recorded your departure date.\n"
+                    "Please reply with your *Departure Time* (e.g., 18:30 or 6:30pm).",
+                    False
+                )
+
             tm = _parse_time(t)
             if not tm:
                 return (

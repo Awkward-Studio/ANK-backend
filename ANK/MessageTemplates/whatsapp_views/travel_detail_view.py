@@ -474,7 +474,7 @@ def whatsapp_travel_webhook(request):
 
         # Process text as travel answer only if session exists and incomplete
         try:
-            reply_text, done = handle_inbound_answer(reg, text)
+            reply_text, done = handle_inbound_answer(reg, text, sender_phone_number_id=sender_id)
         except Exception as exc:
             logger.exception(f"[TEXT-ERR] Unable to process text for {reg.id}: {exc}")
             return JsonResponse({"ok": True}, status=200)
