@@ -98,7 +98,7 @@ def _resolve_travel_reg(wa_id: str, event_id: str):
         return None
 
 
-def _send_post_rsvp_options(reg: EventRegistration):
+def _send_post_rsvp_options(reg: EventRegistration, sender_phone_number_id: str = None):
     """Send options to user who completed RSVP but hasn't started travel."""
     event_name = reg.event.name if reg.event else "the event"
     
@@ -122,7 +122,7 @@ def _send_post_rsvp_options(reg: EventRegistration):
         }
     ]
     
-    MessageLogger.send_buttons(reg, message, buttons, "rsvp")
+    MessageLogger.send_buttons(reg, message, buttons, "rsvp", phone_number_id=sender_phone_number_id)
     logger.info(f"[POST-RSVP] Sent options to registration {reg.id}")
 
 
@@ -140,6 +140,7 @@ def whatsapp_travel_webhook(request):
     kind = (body.get("kind") or "").strip()
     wa_id = _norm_digits(body.get("wa_id") or "")
     reg_id = body.get("registration_id")
+    sender_id = body.get("sender_phone_number_id")
     
     # [FIX] Robust text extraction (Next.js sends 'text', logging tools might send 'body'/'message')
     # Extract this early so we can log it even if user is unknown
@@ -213,7 +214,7 @@ def whatsapp_travel_webhook(request):
         # Update responded_on when guest resumes conversation
         MessageLogger.log_inbound(reg, "Resume / Continue", "system", wa_id, body)
         try:
-            resume_or_start(reg)
+            resume_or_start(reg, sender_phone_number_id=sender_id)
         except Exception as exc:
             logger.exception(f"[RESUME-ERR] Failed resume for {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
@@ -269,9 +270,9 @@ def whatsapp_travel_webhook(request):
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
                 # Log inbound button click
-                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "button", btn_id or wa_id, body)
+                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "button", btn_id or wa_id, body, sender_phone_number_id=sender_id)
                 # Delegate EVERYTHING to the orchestrator
-                apply_button_choice(reg, step, value)
+                apply_button_choice(reg, step, value, sender_phone_number_id=sender_id)
             except Exception as exc:
                 logger.exception(f"[BUTTON-EXCEPTION] Failed for reg={reg.id}: {exc}")
         else:
@@ -300,10 +301,10 @@ def whatsapp_travel_webhook(request):
 
             # If session exists but incomplete, resume
             if sess:
-                resume_or_start(reg)
+                resume_or_start(reg, sender_phone_number_id=sender_id)
             else:
                 # No session - send post-RSVP options
-                _send_post_rsvp_options(reg)
+                _send_post_rsvp_options(reg, sender_phone_number_id=sender_id)
         except Exception as exc:
             logger.exception(f"[WAKE-ERR] Failed resume for {reg.id}: {exc}")
         return JsonResponse({"ok": True}, status=200)
@@ -316,7 +317,7 @@ def whatsapp_travel_webhook(request):
             return JsonResponse({"ok": True}, status=200)
         
         # Update responded_on when guest sends a text message
-        MessageLogger.log_inbound(reg, text, "content", wa_id, body)
+        MessageLogger.log_inbound(reg, text, "content", wa_id, body, sender_phone_number_id=sender_id)
 
         # Check for explicit commands FIRST (before any state checks)
         text_lower = text.lower()
@@ -352,7 +353,8 @@ def whatsapp_travel_webhook(request):
                         {"id": f"tc|rsvp_no|{reg.id}", "title": "❌ No"},
                         {"id": f"tc|rsvp_maybe|{reg.id}", "title": "🤔 Maybe"},
                     ],
-                    "rsvp"
+                    "rsvp",
+                    phone_number_id=sender_id
                 )
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending RSVP buttons: {exc}")
@@ -382,10 +384,11 @@ def whatsapp_travel_webhook(request):
                             {"id": f"tc|start_travel|{reg.id}", "title": "🔄 Restart Travel"},
                             {"id": f"tc|update_rsvp_menu|{reg.id}", "title": "📝 Update RSVP"},
                         ],
-                        "system"
+                        "system",
+                        phone_number_id=sender_id
                     )
                 else:
-                    _send_post_rsvp_options(reg)
+                    _send_post_rsvp_options(reg, sender_phone_number_id=sender_id)
             except Exception as exc:
                 logger.exception(f"[TEXT-ERR] Failed sending greeting response: {exc}")
             return JsonResponse({"ok": True}, status=200)
@@ -427,7 +430,8 @@ def whatsapp_travel_webhook(request):
                 MessageLogger.send_text(
                     event_registration=proxy_reg,
                     content=msg_body,
-                    message_type="bot_reply"
+                    message_type="bot_reply",
+                    phone_number_id=sender_id
                 )
                 logger.info(f"[TEXT] Sent Global Menu to {wa_id} (found {len(active_regs)} events)")
                 return JsonResponse({"ok": True, "menu_sent": True})
@@ -478,7 +482,7 @@ def whatsapp_travel_webhook(request):
         # Always send the textual reply (either next prompt or validation error)
         if reply_text:
             try:
-                MessageLogger.send_text(reg, reply_text, "travel")
+                MessageLogger.send_text(reg, reply_text, "travel", phone_number_id=sender_id)
             except Exception as exc:
                 logger.exception(
                     f"[TEXT-SEND-ERR] Failed sending message to {reg.id}: {exc}"
