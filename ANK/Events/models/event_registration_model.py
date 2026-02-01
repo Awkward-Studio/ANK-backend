@@ -35,6 +35,19 @@ class EventRegistration(models.Model):
     rsvp_status = models.CharField(
         max_length=10, choices=RSVP_CHOICES, default="not_sent"
     )
+    LOGISTICS_STATUS_CHOICES = [
+        ("not_started", "Not Started"),
+        ("in_flight", "In Flight"),
+        ("landed", "Landed"),
+        ("received", "Received"),
+        ("arrived_hotel", "Arrived Hotel"),
+        ("checked_in", "Checked In"),
+    ]
+    logistics_status = models.CharField(
+        max_length=20,
+        choices=LOGISTICS_STATUS_CHOICES,
+        default="not_started",
+    )
     initiated_on = models.DateTimeField(auto_now_add=True)
     responded_on = models.DateTimeField(null=True, blank=True)
 

@@ -61,6 +61,7 @@ class EventRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer)
             "guest_id",
             "event",
             "rsvp_status",
+            "logistics_status",
             "initiated_on",
             "responded_on",
             "guest_group",
@@ -89,6 +90,30 @@ class EventRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer)
             if normalized not in valid_choices:
                 raise serializers.ValidationError(
                     f"Invalid rsvp_status. Must be one of: {', '.join(valid_choices)}"
+                )
+            return normalized
+        return value
+
+    def validate_logistics_status(self, value):
+        """
+        Normalize logistics_status to lowercase for case-insensitive validation.
+        Accepts: "Not Started", "not_started", "In Flight", "in_flight", etc.
+        """
+        if value:
+            # Normalize to lowercase
+            normalized = value.lower()
+            # Check if it's a valid choice
+            valid_choices = [
+                "not_started",
+                "in_flight",
+                "landed",
+                "received",
+                "arrived_hotel",
+                "checked_in",
+            ]
+            if normalized not in valid_choices:
+                raise serializers.ValidationError(
+                    f"Invalid logistics_status. Must be one of: {', '.join(valid_choices)}"
                 )
             return normalized
         return value

@@ -317,6 +317,12 @@ class EventRegistrationListCreateView(APIView):
             description="Update a registration by ID",
             tags=["Event Registrations"],
         ),
+        "patch": doc_update(
+            request=EventRegistrationSerializer,
+            response=EventRegistrationSerializer,
+            description="Partially update a registration by ID (supports logistics_status updates)",
+            tags=["Event Registrations"],
+        ),
         "delete": doc_destroy(description="Delete a registration by ID"),
     }
 )
@@ -334,6 +340,21 @@ class EventRegistrationDetailView(APIView):
             )
 
     def put(self, request, pk):
+        try:
+            reg = get_object_or_404(EventRegistration, pk=pk)
+            ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            reg = ser.save()
+            return Response(EventRegistrationSerializer(reg).data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating registration", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def patch(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
             ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
