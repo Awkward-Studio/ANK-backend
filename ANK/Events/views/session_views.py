@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from Departments.mixins import DepartmentAccessMixin
 
 from Guest.serializers import RestrictedGuestSerializer
 from Events.models.session_model import Session, SessionField
@@ -44,12 +45,16 @@ from utils.swagger import (
         ),
     }
 )
-class SessionListCreateView(APIView):
+class SessionListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Session.objects.all()
 
     def get(self, request):
         try:
-            qs = Session.objects.all()
+            qs = self.get_queryset()
             return Response(SessionSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -90,13 +95,18 @@ class SessionListCreateView(APIView):
         "delete": doc_destroy(description="Delete a session by ID", tags=["Sessions"]),
     }
 )
-class SessionDetailView(APIView):
+class SessionDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Session.objects.all()
 
     def get(self, request, pk):
         try:
-            sess = get_object_or_404(Session, pk=pk)
-            return Response(SessionSerializer(sess).data)
+            qs = self.get_queryset()
+            sess = get_object_or_404(qs, pk=pk)
+            return Response(SessionSerializer(sess, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching session", "error": str(e)},
@@ -251,12 +261,16 @@ class SessionFieldDetail(APIView):
         ),
     }
 )
-class SessionRegistrationListCreateView(APIView):
+class SessionRegistrationListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return SessionRegistration.objects.all()
 
     def get(self, request):
         try:
-            qs = SessionRegistration.objects.all()
+            qs = self.get_queryset()
             return Response(SessionRegistrationSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -300,13 +314,18 @@ class SessionRegistrationListCreateView(APIView):
         ),
     }
 )
-class SessionRegistrationDetailView(APIView):
+class SessionRegistrationDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return SessionRegistration.objects.all()
 
     def get(self, request, pk):
         try:
-            reg = get_object_or_404(SessionRegistration, pk=pk)
-            return Response(SessionRegistrationSerializer(reg).data)
+            qs = self.get_queryset()
+            reg = get_object_or_404(qs, pk=pk)
+            return Response(SessionRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching session registration", "error": str(e)},

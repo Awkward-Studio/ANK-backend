@@ -355,7 +355,9 @@ class UserAssignedEventsAPIView(APIView):
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
-            events = Event.objects.filter(staff_assignments__user=user).distinct()
+            # Use EventDepartmentStaffAssignment (new RBAC system)
+            from Departments.permissions import PermissionChecker
+            events = PermissionChecker.get_user_accessible_events(user)
             return Response(EventSerializer(events, many=True).data)
         except Exception as e:
             return Response(
@@ -379,7 +381,9 @@ class UserAssignedSessionsAPIView(APIView):
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
-            sessions = Session.objects.filter(staff_assignments__user=user).distinct()
+            # Use EventDepartmentStaffAssignment (new RBAC system)
+            from Departments.permissions import PermissionChecker
+            sessions = PermissionChecker.get_user_accessible_sessions(user)
             return Response(SessionSerializer(sessions, many=True).data)
         except Exception as e:
             return Response(
