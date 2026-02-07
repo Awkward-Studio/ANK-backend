@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from Guest.models import Guest, GuestField
+from Departments.serializers_permissions import PermissionAwareSerializer
 
 
-class GuestSerializer(serializers.ModelSerializer):
+class GuestSerializer(PermissionAwareSerializer, serializers.ModelSerializer):
     class Meta:
         model = Guest
         fields = "__all__"

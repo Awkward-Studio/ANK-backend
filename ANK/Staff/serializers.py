@@ -1,7 +1,5 @@
 from rest_framework import serializers
-from Staff.models import User, GuestField
-from Events.models.event_model import EventField
-from Events.models.session_model import SessionField
+from Staff.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import (

@@ -6,9 +6,10 @@ from Events.models.event_model import Event
 from Logistics.models.hotel_models import Hotel
 from Logistics.serializers.hotel_serializers import HotelSerializer
 from CustomField.serializers import CustomFieldMixin
+from Departments.serializers_permissions import PermissionAwareSerializer
 
 
-class SessionSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class SessionSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
     venue = serializers.PrimaryKeyRelatedField(
         queryset=Hotel.objects.all(),
@@ -46,7 +47,7 @@ class SessionFieldSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "label"]
 
 
-class SessionRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class SessionRegistrationSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
     guest = serializers.PrimaryKeyRelatedField(queryset=Guest.objects.all())
     session = serializers.PrimaryKeyRelatedField(queryset=Session.objects.all())
     custom_fields = serializers.SerializerMethodField()

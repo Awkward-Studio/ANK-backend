@@ -20,6 +20,20 @@ from Departments.views import (
     EventDepartmentUserFieldPermsRemoveAPIView,
     UserEventScopedDepartmentFieldAccessAPIView,
 )
+from Departments.rbac_views import (
+    ModelPermissionList,
+    ModelPermissionDetail,
+    ModelPermissionsByEventDepartmentAPIView,
+    ModelPermissionsByUserAPIView,
+    DepartmentModelAccessList,
+    DepartmentModelAccessDetail,
+    DepartmentModelAccessByDepartmentAPIView,
+)
+from Departments.helper_views import (
+    BulkAssignStaffToEventAPIView,
+    BulkAssignPermissionsAPIView,
+    BulkCreateDepartmentModelAccessAPIView,
+)
 
 urlpatterns = [
     # ─── Departments (global) ────────────────────────────────────────────────
@@ -112,5 +126,58 @@ urlpatterns = [
         "users/<uuid:user_pk>/events/<uuid:event_pk>/departments/field-access/",
         UserEventScopedDepartmentFieldAccessAPIView.as_view(),
         name="user-eventdept-field-access-by-event",
+    ),
+    # ─── RBAC: Model Permissions ────────────────────────────────────────────────
+    path(
+        "model-permissions/",
+        ModelPermissionList.as_view(),
+        name="modelpermissions-list",
+    ),
+    path(
+        "model-permissions/<uuid:pk>/",
+        ModelPermissionDetail.as_view(),
+        name="modelpermissions-detail",
+    ),
+    path(
+        "event-departments/<uuid:pk>/model-permissions/",
+        ModelPermissionsByEventDepartmentAPIView.as_view(),
+        name="eventdepartment-modelpermissions-list",
+    ),
+    path(
+        "users/<uuid:pk>/model-permissions/",
+        ModelPermissionsByUserAPIView.as_view(),
+        name="user-modelpermissions-list",
+    ),
+    # ─── RBAC: Department Model Access ─────────────────────────────────────────
+    path(
+        "department-model-access/",
+        DepartmentModelAccessList.as_view(),
+        name="departmentmodelaccess-list",
+    ),
+    path(
+        "department-model-access/<uuid:pk>/",
+        DepartmentModelAccessDetail.as_view(),
+        name="departmentmodelaccess-detail",
+    ),
+    path(
+        "departments/<uuid:pk>/model-access/",
+        DepartmentModelAccessByDepartmentAPIView.as_view(),
+        name="department-modelaccess-list",
+    ),
+    # ─── RBAC: Helper Endpoints ────────────────────────────────────────────────
+    path(
+        "events/<uuid:event_id>/assign-staff/",
+        BulkAssignStaffToEventAPIView.as_view(),
+        name="events-bulk-assign-staff",
+    ),
+    path(
+        "event-departments/<uuid:event_dept_id>/users/<uuid:user_id>/bulk-permissions/",
+        BulkAssignPermissionsAPIView.as_view(),
+        name="eventdepartment-user-bulk-permissions",
+    ),
+    path(
+        "departments/<uuid:department_id>/bulk-model-access/",
+        BulkCreateDepartmentModelAccessAPIView.as_view(),
+        name="department-bulk-model-access",
     ),
 ]

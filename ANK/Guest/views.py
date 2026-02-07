@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
+from Departments.mixins import DepartmentAccessMixin
 from django.contrib.contenttypes.models import ContentType
 from contextlib import nullcontext
 import re
@@ -171,12 +172,16 @@ class GuestFieldDetail(APIView):
         ),
     }
 )
-class GuestList(APIView):
+class GuestList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Guest.objects.all()
 
     def get(self, request):
         try:
-            qs = Guest.objects.all()
+            qs = self.get_queryset()
             return Response(GuestSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -215,13 +220,18 @@ class GuestList(APIView):
         "delete": doc_destroy(description="Delete a guest by ID", tags=["Guests"]),
     }
 )
-class GuestDetail(APIView):
+class GuestDetail(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Guest.objects.all()
 
     def get(self, request, pk):
         try:
-            obj = get_object_or_404(Guest, pk=pk)
-            return Response(GuestSerializer(obj).data)
+            qs = self.get_queryset()
+            obj = get_object_or_404(qs, pk=pk)
+            return Response(GuestSerializer(obj, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching guest", "error": str(e)},

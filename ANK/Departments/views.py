@@ -6,12 +6,16 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
 from Events.models.event_model import Event
+from Departments.mixins import DepartmentAccessMixin
+from Departments.permissions import PermissionChecker
 from Departments.models import (
     Department,
     EventDepartment,
     EventDepartmentStaffAssignment,
     BudgetLineItem,
     BudgetFieldPermission,
+    ModelPermission,
+    DepartmentModelAccess,
     User,
 )
 from Departments.serializers import (
@@ -21,6 +25,8 @@ from Departments.serializers import (
     BudgetLineItemSerializer,
     BudgetFieldPermissionSerializer,
     UserEventDepartmentFieldAccessSerializer,
+    ModelPermissionSerializer,
+    DepartmentModelAccessSerializer,
 )
 from utils.swagger import (
     document_api_view,
@@ -476,12 +482,16 @@ class StaffAssignmentsByEventDepartmentAPIView(APIView):
         ),
     }
 )
-class BudgetLineItemList(APIView):
+class BudgetLineItemList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return BudgetLineItem.objects.select_related("event_department").all()
 
     def get(self, request):
         try:
-            qs = BudgetLineItem.objects.select_related("event_department").all()
+            qs = self.get_queryset()
             ed = request.query_params.get("event_department")
             cat = request.query_params.get("category")
             pstat = request.query_params.get("payment_status")
@@ -500,7 +510,20 @@ class BudgetLineItemList(APIView):
 
     def post(self, request):
         try:
-            ser = BudgetLineItemSerializer(data=request.data)
+            # Check if user has access to the event_department's event
+            event_dept_id = request.data.get('event_department')
+            if event_dept_id:
+                try:
+                    event_dept = EventDepartment.objects.get(id=event_dept_id)
+                    accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+                    if not accessible_events.filter(id=event_dept.event_id).exists() and request.user.role != 'super_admin':
+                        return Response(
+                            {"detail": "You don't have access to this event"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except EventDepartment.DoesNotExist:
+                    pass
+            ser = BudgetLineItemSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data, status=status.HTTP_201_CREATED)
@@ -531,13 +554,18 @@ class BudgetLineItemList(APIView):
         ),
     }
 )
-class BudgetLineItemDetail(APIView):
+class BudgetLineItemDetail(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return BudgetLineItem.objects.select_related("event_department").all()
 
     def get(self, request, pk):
         try:
-            obj = get_object_or_404(BudgetLineItem, pk=pk)
-            return Response(BudgetLineItemSerializer(obj).data)
+            qs = self.get_queryset()
+            obj = get_object_or_404(qs, pk=pk)
+            return Response(BudgetLineItemSerializer(obj, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching budget item", "error": str(e)},
@@ -546,11 +574,12 @@ class BudgetLineItemDetail(APIView):
 
     def put(self, request, pk):
         try:
-            obj = get_object_or_404(BudgetLineItem, pk=pk)
-            ser = BudgetLineItemSerializer(obj, data=request.data, partial=True)
+            qs = self.get_queryset()
+            obj = get_object_or_404(qs, pk=pk)
+            ser = BudgetLineItemSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ser.save()
-            return Response(BudgetLineItemSerializer(obj).data)
+            return Response(BudgetLineItemSerializer(obj, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -580,16 +609,25 @@ class BudgetLineItemDetail(APIView):
         )
     }
 )
-class BudgetItemsByEventDepartmentAPIView(APIView):
+class BudgetItemsByEventDepartmentAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return BudgetLineItem.objects.select_related("event_department").all()
 
     def get(self, request, pk):
         try:
-            get_object_or_404(EventDepartment, pk=pk)
-            qs = BudgetLineItem.objects.filter(event_department_id=pk).select_related(
-                "event_department"
-            )
-            return Response(BudgetLineItemSerializer(qs, many=True).data)
+            # Ensure user has access to this event-department's event
+            event_dept = get_object_or_404(EventDepartment, pk=pk)
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=event_dept.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(event_department_id=pk)
+            return Response(BudgetLineItemSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {
