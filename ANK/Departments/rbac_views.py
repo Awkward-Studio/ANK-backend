@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError, PermissionDenied
+from django.contrib.contenttypes.models import ContentType
 from Departments.models import (
     Department,
     EventDepartment,
@@ -405,5 +406,163 @@ class DepartmentModelAccessByDepartmentAPIView(APIView):
         except Exception as e:
             return Response(
                 {"detail": "Error listing department-model access for department", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# ─────────────────────────────────────────────────────────────
+# Available Models for RBAC
+# ─────────────────────────────────────────────────────────────
+
+
+# Models that can be assigned to departments
+RBAC_AVAILABLE_MODELS = [
+    ('event', 'Event'),
+    ('guest', 'Guest'),
+    ('session', 'Session'),
+    ('eventregistration', 'Event Registration'),
+    ('traveldetail', 'Travel Detail'),
+    ('accommodation', 'Accommodation'),
+    ('budgetlineitem', 'Budget Line Item'),
+    ('extraattendee', 'Extra Attendee'),
+]
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            description="List all available models for RBAC (for department-model access and field permissions)",
+            tags=["RBAC: Helper Endpoints"],
+        ),
+    }
+)
+class AvailableModelsAPIView(APIView):
+    """
+    GET /api/rbac/available-models/
+    
+    Returns a list of all models that can be assigned to departments or used for field permissions.
+    This endpoint helps the frontend display a dropdown/list of available models.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            models = []
+            for model_name, display_name in RBAC_AVAILABLE_MODELS:
+                try:
+                    content_type = ContentType.objects.get(model=model_name)
+                    models.append({
+                        "model": model_name,
+                        "display_name": display_name,
+                        "content_type_id": content_type.id,
+                        "app_label": content_type.app_label,
+                    })
+                except ContentType.DoesNotExist:
+                    # Skip if ContentType doesn't exist (model not installed)
+                    continue
+            
+            return Response({
+                "models": models,
+                "count": len(models)
+            })
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching available models", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            description="Get field names for a specific model (for field permission assignment)",
+            tags=["RBAC: Helper Endpoints"],
+        ),
+    }
+)
+class ModelFieldsAPIView(APIView):
+    """
+    GET /api/rbac/models/<model_name>/fields/
+    
+    Returns a list of all field names for a specific model.
+    This endpoint helps the frontend display available fields when assigning field permissions.
+    
+    Example: GET /api/rbac/models/guest/fields/
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, model_name):
+        try:
+            # Get ContentType for the model
+            try:
+                content_type = ContentType.objects.get(model=model_name)
+            except ContentType.DoesNotExist:
+                return Response(
+                    {"detail": f"Model '{model_name}' not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            
+            # Get model class
+            model_class = content_type.model_class()
+            if not model_class:
+                return Response(
+                    {"detail": f"Model class for '{model_name}' not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            
+            # Get field names using the same function as ModelPermission validation
+            from Departments.models import get_model_fields
+            fields = get_model_fields(model_class)
+            
+            return Response({
+                "model": model_name,
+                "content_type_id": content_type.id,
+                "fields": sorted(fields),
+                "count": len(fields)
+            })
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching model fields", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            description="Get RBAC choices and metadata (roles, permission types, etc.)",
+            tags=["RBAC: Helper Endpoints"],
+        ),
+    }
+)
+class RBACMetadataAPIView(APIView):
+    """
+    GET /api/rbac/metadata/
+    
+    Returns RBAC choices and metadata for frontend UI.
+    Includes role choices, permission type choices, etc.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            from Departments.models import (
+                EventDepartmentStaffAssignment,
+                ModelPermission,
+            )
+            
+            return Response({
+                "roles": [
+                    {"value": choice[0], "label": choice[1]}
+                    for choice in EventDepartmentStaffAssignment.ROLE_CHOICES
+                ],
+                "permission_types": [
+                    {"value": choice[0], "label": choice[1]}
+                    for choice in ModelPermission.PERMISSION_TYPE_CHOICES
+                ],
+            })
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching RBAC metadata", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

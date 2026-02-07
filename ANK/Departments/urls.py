@@ -28,6 +28,9 @@ from Departments.rbac_views import (
     DepartmentModelAccessList,
     DepartmentModelAccessDetail,
     DepartmentModelAccessByDepartmentAPIView,
+    AvailableModelsAPIView,
+    ModelFieldsAPIView,
+    RBACMetadataAPIView,
 )
 from Departments.helper_views import (
     BulkAssignStaffToEventAPIView,
@@ -179,5 +182,21 @@ urlpatterns = [
         "departments/<uuid:department_id>/bulk-model-access/",
         BulkCreateDepartmentModelAccessAPIView.as_view(),
         name="department-bulk-model-access",
+    ),
+    # ─── RBAC: Helper Endpoints ────────────────────────────────────────────────
+    path(
+        "rbac/available-models/",
+        AvailableModelsAPIView.as_view(),
+        name="rbac-available-models",
+    ),
+    path(
+        "rbac/models/<str:model_name>/fields/",
+        ModelFieldsAPIView.as_view(),
+        name="rbac-model-fields",
+    ),
+    path(
+        "rbac/metadata/",
+        RBACMetadataAPIView.as_view(),
+        name="rbac-metadata",
     ),
 ]
