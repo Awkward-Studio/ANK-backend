@@ -485,7 +485,7 @@ class StaffAssignmentsByEventDepartmentAPIView(APIView):
 class BudgetLineItemList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def get_base_queryset(self):
         """Override to provide base queryset for filtering."""
         return BudgetLineItem.objects.select_related("event_department").all()
 
@@ -557,7 +557,7 @@ class BudgetLineItemList(DepartmentAccessMixin, APIView):
 class BudgetLineItemDetail(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def get_base_queryset(self):
         """Override to provide base queryset for filtering."""
         return BudgetLineItem.objects.select_related("event_department").all()
 

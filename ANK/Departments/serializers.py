@@ -89,7 +89,9 @@ class EventDepartmentStaffAssignmentSerializer(serializers.ModelSerializer):
         ]
 
 
-class BudgetLineItemSerializer(serializers.ModelSerializer):
+from Departments.serializers_permissions import PermissionAwareSerializer
+
+class BudgetLineItemSerializer(PermissionAwareSerializer, serializers.ModelSerializer):
     class Meta:
         model = BudgetLineItem
         fields = [

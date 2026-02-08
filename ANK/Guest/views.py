@@ -182,7 +182,7 @@ class GuestList(DepartmentAccessMixin, APIView):
     def get(self, request):
         try:
             qs = self.get_queryset()
-            return Response(GuestSerializer(qs, many=True).data)
+            return Response(GuestSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching guests", "error": str(e)},
@@ -191,7 +191,7 @@ class GuestList(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
-            ser = GuestSerializer(data=request.data)
+            ser = GuestSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data, status=status.HTTP_201_CREATED)
@@ -241,10 +241,10 @@ class GuestDetail(DepartmentAccessMixin, APIView):
     def put(self, request, pk):
         try:
             obj = get_object_or_404(Guest, pk=pk)
-            ser = GuestSerializer(obj, data=request.data, partial=True)
+            ser = GuestSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ser.save()
-            return Response(ser.data)
+            return Response(GuestSerializer(obj, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:

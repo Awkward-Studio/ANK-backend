@@ -62,8 +62,8 @@ def hosts_env(name: str, default: str = "") -> list[str]:
 # Core toggles
 # ---------------------------
 SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG = get_bool_env("DEBUG", False)
-USE_JWT = get_bool_env("USE_JWT", False)
+DEBUG = get_bool_env("DEBUG", True)
+USE_JWT = get_bool_env("USE_JWT", True)
 
 if not DEBUG and not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG=False")
@@ -236,19 +236,18 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 # ---------------------------
 # Host/CORS/CSRF
 # ---------------------------
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["*", "192.168.1.34"]
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = csv_env(
     "DJANGO_CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,https://ank-test.vercel.app,https://ank-test-git-omi-awkwards-projects.vercel.app",
+    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://ank-test.vercel.app",
 )
 
 CSRF_TRUSTED_ORIGINS = csv_env(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    # "http://localhost:3000,http://127.0.0.1:3000,https://ank-test.vercel.app,https://ank-test-git-omi-awkwards-projects.vercel.app",
-    "https://*,http://*",
+    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://*",
 )
 
 CORS_ALLOW_HEADERS = [

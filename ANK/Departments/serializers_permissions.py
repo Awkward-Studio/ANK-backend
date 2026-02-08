@@ -1,6 +1,7 @@
 """
 Permission-aware serializer base class.
 """
+from decimal import Decimal
 from rest_framework import serializers
 from django.contrib.contenttypes.models import ContentType
 from Departments.models import ModelPermission
@@ -9,59 +10,70 @@ from Departments.permissions import PermissionChecker
 
 class PermissionAwareSerializer(serializers.ModelSerializer):
     """
-    Base serializer that filters fields based on ModelPermission.
+    Base serializer that masks unauthorized fields (Ghosting UX).
     """
     
-    def get_fields(self):
+    def to_representation(self, instance):
         """
-        Filter fields based on user permissions.
+        Mask fields that the user doesn't have read access to.
         """
-        fields = super().get_fields()
+        ret = super().to_representation(instance)
         request = self.context.get('request')
         event_department = self.context.get('event_department')
         
-        if not request or not event_department:
-            return fields
-        
+        if not request or not request.user:
+            return ret
+            
         user = request.user
-        if user.role == 'super_admin':
-            return fields
         
-        # Get allowed fields for this user + event_department + model
-        model_type = ContentType.objects.get_for_model(self.Meta.model)
+        if user.role == 'super_admin' or getattr(user, 'is_superuser', False):
+            return ret
+            
+        # Get allowed fields
+        model_class = self.Meta.model
         
-        # Get union of permissions across all user's event_departments for this event
-        if hasattr(self.instance, 'event') if self.instance else False:
-            allowed_fields = PermissionChecker.get_user_allowed_fields(
-                user, self.instance.event, self.Meta.model
+        # If we have an event_department, we can check granular field permissions
+        if event_department:
+            from Departments.models import ModelPermission
+            from django.contrib.contenttypes.models import ContentType
+            
+            content_type = ContentType.objects.get_for_model(model_class)
+            
+            # Use PermissionChecker to get all readable fields for the user in this event context
+            # (Checks both single event_department and global department access)
+            readable_fields = PermissionChecker.get_user_allowed_fields(
+                user, event_department.event, model_class
             )
-        else:
-            # Fallback to single event_department
-            permissions = ModelPermission.objects.filter(
-                user=user,
-                event_department=event_department,
-                content_type=model_type
-            ).values_list('field_name', flat=True)
-            allowed_fields = set(permissions)
+            
+            if readable_fields is None:
+                return ret
+            
+            # Special case for BudgetLineItem which uses its own BudgetFieldPermission model
+            if model_class.__name__ == 'BudgetLineItem':
+                from Departments.models import BudgetFieldPermission
+                budget_perms = set(BudgetFieldPermission.objects.filter(
+                    user=user,
+                    event_department=event_department
+                ).values_list('field_key', flat=True))
+                readable_fields.update(budget_perms)
+
+            # Iterate over fields and mask if not readable
+            for field_name in ret.keys():
+                # Don't mask ID or system fields or already empty/null values
+                if field_name in ['id', 'created_at', 'updated_at', 'event', 'event_department'] or ret[field_name] is None:
+                    continue
+                    
+                if field_name not in readable_fields:
+                    # Mask the value (Ghosting UX)
+                    val = ret[field_name]
+                    if isinstance(val, (int, float, Decimal)):
+                        ret[field_name] = 0
+                    elif isinstance(val, bool):
+                        ret[field_name] = False
+                    else:
+                        ret[field_name] = "********"
         
-        # If None (super_admin) or empty set, handle appropriately
-        if allowed_fields is None:
-            return fields  # All fields
-        
-        if not allowed_fields:
-            # No permissions - return empty dict (user sees nothing)
-            return {}
-        
-        # Filter fields - keep SerializerMethodField fields (computed fields)
-        filtered_fields = {}
-        for field_name, field in fields.items():
-            # Always include SerializerMethodField (computed fields)
-            if isinstance(field, serializers.SerializerMethodField):
-                filtered_fields[field_name] = field
-            elif field_name in allowed_fields:
-                filtered_fields[field_name] = field
-        
-        return filtered_fields
+        return ret
     
     def validate(self, attrs):
         """

@@ -79,7 +79,7 @@ class TravelDetailList(DepartmentAccessMixin, APIView):
                 elif return_travel.lower() in ("false", "0"):
                     qs = qs.filter(return_travel=False)
 
-            return Response(TravelDetailSerializer(qs, many=True).data)
+            return Response(TravelDetailSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching travel details", "error": str(e)},
@@ -88,11 +88,11 @@ class TravelDetailList(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
-            ser = TravelDetailSerializer(data=request.data)
+            ser = TravelDetailSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             td = ser.save()
             return Response(
-                TravelDetailSerializer(td).data, status=status.HTTP_201_CREATED
+                TravelDetailSerializer(td, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
@@ -142,10 +142,10 @@ class TravelDetailDetail(DepartmentAccessMixin, APIView):
     def put(self, request, pk):
         try:
             td = get_object_or_404(TravelDetail, pk=pk)
-            ser = TravelDetailSerializer(td, data=request.data, partial=True)
+            ser = TravelDetailSerializer(td, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             td = ser.save()
-            return Response(TravelDetailSerializer(td).data)
+            return Response(TravelDetailSerializer(td, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
