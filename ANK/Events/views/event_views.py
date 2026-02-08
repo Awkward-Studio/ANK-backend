@@ -74,11 +74,14 @@ from utils.swagger import (
 class EventListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_base_queryset(self):
+        return Event.objects.all()
+
     def get(self, request):
         try:
             # Use DepartmentAccessMixin to filter queryset based on user role
             qs = self.get_queryset()
-            return Response(EventSerializer(qs, many=True).data)
+            return Response(EventSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing events", "error": str(e)},
@@ -87,10 +90,10 @@ class EventListCreateView(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
-            ser = EventSerializer(data=request.data)
+            ser = EventSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ev = ser.save()
-            return Response(EventSerializer(ev).data, status=status.HTTP_201_CREATED)
+            return Response(EventSerializer(ev, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -119,7 +122,7 @@ class EventListCreateView(DepartmentAccessMixin, APIView):
 class EventDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
+    def get_base_queryset(self):
         """Override to provide base queryset for filtering."""
         return Event.objects.all()
 
@@ -138,10 +141,10 @@ class EventDetailView(DepartmentAccessMixin, APIView):
     def put(self, request, pk):
         try:
             ev = get_object_or_404(Event, pk=pk)
-            ser = EventSerializer(ev, data=request.data, partial=True)
+            ser = EventSerializer(ev, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ev = ser.save()
-            return Response(EventSerializer(ev).data)
+            return Response(EventSerializer(ev, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -293,7 +296,7 @@ class EventRegistrationListCreateView(DepartmentAccessMixin, APIView):
     def get(self, request):
         try:
             qs = self.get_queryset()
-            return Response(EventRegistrationSerializer(qs, many=True).data)
+            return Response(EventRegistrationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing registrations", "error": str(e)},
@@ -302,11 +305,11 @@ class EventRegistrationListCreateView(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
-            ser = EventRegistrationSerializer(data=request.data)
+            ser = EventRegistrationSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
             return Response(
-                EventRegistrationSerializer(reg).data, status=status.HTTP_201_CREATED
+                EventRegistrationSerializer(reg, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
@@ -360,10 +363,10 @@ class EventRegistrationDetailView(DepartmentAccessMixin, APIView):
     def put(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
-            ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
+            ser = EventRegistrationSerializer(reg, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
-            return Response(EventRegistrationSerializer(reg).data)
+            return Response(EventRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -375,10 +378,10 @@ class EventRegistrationDetailView(DepartmentAccessMixin, APIView):
     def patch(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
-            ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
+            ser = EventRegistrationSerializer(reg, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
-            return Response(EventRegistrationSerializer(reg).data)
+            return Response(EventRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:

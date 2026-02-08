@@ -64,9 +64,23 @@ class DepartmentAccessMixin:
         """
         Filter queryset based on user role and assignments.
         """
-        qs = super().get_queryset()
-        user = self.request.user
+        # Determine base queryset
+        if hasattr(self, 'get_base_queryset'):
+            qs = self.get_base_queryset()
+        elif hasattr(super(), 'get_queryset'):
+            qs = super().get_queryset()
+        else:
+            # Fallback for APIView without explicit base
+            model = getattr(self, 'model', None)
+            if model:
+                qs = model.objects.all()
+            else:
+                raise AttributeError(
+                    f"{self.__class__.__name__} must define 'get_base_queryset()' or 'model' "
+                    "when using DepartmentAccessMixin with APIView."
+                )
         
+        user = self.request.user
         if user.role == 'super_admin':
             return qs  # No filtering
         
@@ -134,7 +148,14 @@ class DepartmentAccessMixin:
     
     def get_serializer_context(self):
         """Add event_department to serializer context."""
-        context = super().get_serializer_context()
+        context = {}
+        if hasattr(super(), 'get_serializer_context'):
+            context = super().get_serializer_context()
+        
+        # Ensure 'request' is always in context for PermissionAwareSerializer
+        if 'request' not in context:
+            context['request'] = self.request
+            
         obj = None
         if hasattr(self, 'get_object'):
             try:
@@ -143,69 +164,3 @@ class DepartmentAccessMixin:
                 pass
         context['event_department'] = self.get_event_department(self.request, obj)
         return context
-    
-    def post(self, request, *args, **kwargs):
-        """Check create permissions before allowing POST."""
-        event_department = self.get_event_department(request)
-        if event_department:
-            if not PermissionChecker.can_access_model(
-                request.user, event_department, self.get_queryset().model
-            ):
-                return Response(
-                    {"detail": "You don't have permission to create this resource"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        return super().post(request, *args, **kwargs)
-    
-    def put(self, request, *args, **kwargs):
-        """Check write permissions before allowing PUT."""
-        obj = self.get_object()
-        event_department = self.get_event_department(request, obj)
-        if event_department:
-            if not PermissionChecker.can_access_model(
-                request.user, event_department, self.get_queryset().model
-            ):
-                return Response(
-                    {"detail": "You don't have permission to update this resource"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        return super().put(request, *args, **kwargs)
-    
-    def patch(self, request, *args, **kwargs):
-        """Check write permissions before allowing PATCH."""
-        obj = self.get_object()
-        event_department = self.get_event_department(request, obj)
-        if event_department:
-            if not PermissionChecker.can_access_model(
-                request.user, event_department, self.get_queryset().model
-            ):
-                return Response(
-                    {"detail": "You don't have permission to update this resource"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        return super().patch(request, *args, **kwargs)
-    
-    def delete(self, request, *args, **kwargs):
-        """Check delete permissions."""
-        obj = self.get_object()
-        event_department = self.get_event_department(request, obj)
-        if event_department:
-            # Check if user can delete (typically requires write permission)
-            from Departments.models import DepartmentModelAccess
-            from django.contrib.contenttypes.models import ContentType
-            
-            dept = event_department.department
-            model_type = ContentType.objects.get_for_model(self.get_queryset().model)
-            
-            can_delete = DepartmentModelAccess.objects.filter(
-                department=dept,
-                content_type=model_type,
-                can_delete=True
-            ).exists()
-            
-            if not can_delete and request.user.role != 'super_admin':
-                return Response(
-                    {"detail": "You don't have permission to delete this resource"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        return super().delete(request, *args, **kwargs)

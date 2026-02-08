@@ -417,14 +417,14 @@ class DepartmentModelAccessByDepartmentAPIView(APIView):
 
 # Models that can be assigned to departments
 RBAC_AVAILABLE_MODELS = [
-    ('event', 'Event'),
-    ('guest', 'Guest'),
-    ('session', 'Session'),
-    ('eventregistration', 'Event Registration'),
-    ('traveldetail', 'Travel Detail'),
-    ('accommodation', 'Accommodation'),
-    ('budgetlineitem', 'Budget Line Item'),
-    ('extraattendee', 'Extra Attendee'),
+    ('Events', 'event', 'Event'),
+    ('Guest', 'guest', 'Guest'),
+    ('Events', 'session', 'Session'),
+    ('Events', 'eventregistration', 'Event Registration'),
+    ('Logistics', 'traveldetail', 'Travel Detail'),
+    ('Logistics', 'accommodation', 'Accommodation'),
+    ('Departments', 'budgetlineitem', 'Budget Line Item'),
+    ('Events', 'extraattendee', 'Extra Attendee'),
 ]
 
 
@@ -448,9 +448,9 @@ class AvailableModelsAPIView(APIView):
     def get(self, request):
         try:
             models = []
-            for model_name, display_name in RBAC_AVAILABLE_MODELS:
+            for app_label, model_name, display_name in RBAC_AVAILABLE_MODELS:
                 try:
-                    content_type = ContentType.objects.get(model=model_name)
+                    content_type = ContentType.objects.get(app_label=app_label, model=model_name)
                     models.append({
                         "model": model_name,
                         "display_name": display_name,

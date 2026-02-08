@@ -10,6 +10,13 @@ from drf_spectacular.utils import (
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, min_length=8)
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.department:
+            from Departments.serializers import DepartmentSerializer
+            ret["department"] = DepartmentSerializer(instance.department).data
+        return ret
+
     class Meta:
         model = User
         fields = [
@@ -19,14 +26,16 @@ class UserSerializer(serializers.ModelSerializer):
             "name",
             "contact_phone",
             "role",
+            "department",
         ]
         read_only_fields = ["id"]
 
     def create(self, validated_data):
         pwd = validated_data.pop("password", None)
         role = validated_data.pop("role", "staff")
+        department = validated_data.pop("department", None)
 
-        user = User(**validated_data, role=role)
+        user = User(**validated_data, role=role, department=department)
         if pwd:
             user.set_password(pwd)
         else:
