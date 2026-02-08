@@ -1121,8 +1121,8 @@ class UserEventAllAllowedFieldsAPIView(APIView):
                         "can_delete": any(da.can_delete for da in dept_access),
                     }
                     
-                    # Special Case: Super admin bypass
-                    if user.role == 'super_admin':
+                    # Special Case: Super admin / Admin bypass
+                    if user.role in ['super_admin', 'admin']:
                         access = {k: True for k in access}
                         
                     response_data['model_access'][model_name] = access

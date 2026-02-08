@@ -81,7 +81,7 @@ class DepartmentAccessMixin:
                 )
         
         user = self.request.user
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return qs  # No filtering
         
         if user.role == 'department_head':
