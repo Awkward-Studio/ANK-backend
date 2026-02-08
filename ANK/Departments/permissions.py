@@ -117,7 +117,7 @@ class PermissionChecker:
         """
         from Events.models.event_model import Event
         
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return Event.objects.all()
         
         if user.role == 'department_head':
@@ -143,7 +143,7 @@ class PermissionChecker:
         """
         from Events.models.session_model import Session
         
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return Session.objects.all()
         
         if user.role == 'department_head':

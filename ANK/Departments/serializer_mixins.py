@@ -22,8 +22,8 @@ class PermissionAwareMixin:
             
         user = request.user
         
-        # Super admins and Django superusers see everything
-        if user.role == 'super_admin' or getattr(user, 'is_superuser', False):
+        # Super admins, Admins and Django superusers see everything
+        if user.role in ['super_admin', 'admin'] or getattr(user, 'is_superuser', False):
             return ret
             
         # Get permissions for this model and event_department

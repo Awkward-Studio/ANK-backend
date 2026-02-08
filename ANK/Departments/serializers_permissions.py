@@ -26,7 +26,7 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
             
         user = request.user
         
-        if user.role == 'super_admin' or getattr(user, 'is_superuser', False):
+        if user.role in ['super_admin', 'admin'] or getattr(user, 'is_superuser', False):
             return ret
             
         # Get allowed fields
