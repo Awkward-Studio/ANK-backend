@@ -6,20 +6,12 @@ class Migration(migrations.Migration):
         ('Events', '0033_add_logistics_status'),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name='event',
-            name='client_name',
-            field=models.CharField(blank=True, max_length=200, null=True),
-        ),
-        migrations.AddField(
-            model_name='event',
-            name='type',
-            field=models.CharField(
-                choices=[('wedding', 'Wedding'), ('corporate', 'Corporate'), ('social', 'Social')],
-                default='wedding',
-                help_text='Type of event: Wedding, Corporate, or Social',
-                max_length=20,
-            ),
-        ),
-    ]
+    # This migration was originally intended to "force add" missing fields on Event.
+    # However, those fields (`client_name` and `type`) are already present on the
+    # model and in the database in this project, so attempting to add them again
+    # causes "duplicate column name" errors on migrate.
+    #
+    # To keep the migration history consistent without breaking existing databases,
+    # we turn this into a no-op. Applying this migration will simply advance the
+    # migration state without changing the schema.
+    operations = []

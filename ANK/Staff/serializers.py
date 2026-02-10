@@ -45,10 +45,21 @@ class UserSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
-
+        # Handle password separately - it needs to be hashed
+        password = validated_data.pop("password", None)
+        
+        # Update all other fields
         for attr, val in validated_data.items():
             setattr(instance, attr, val)
-
+        
+        # If password is provided and not empty, hash it
+        # Empty string means don't update password
+        if password is not None and password != "":
+            instance.set_password(password)
+        
+        # Save the instance
+        instance.save()
+        
         return instance
 
 
