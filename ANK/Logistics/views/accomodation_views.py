@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from Departments.mixins import DepartmentAccessMixin
 from Logistics.models.accomodation_models import Accommodation, AccommodationField
 from Logistics.serializers.accomodation_serializers import (
     AccommodationFieldSerializer,
@@ -47,12 +48,16 @@ from utils.swagger import (
         ),
     }
 )
-class AccommodationList(APIView):
+class AccommodationList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Accommodation.objects.all()
 
     def get(self, request):
         try:
-            qs = Accommodation.objects.all()
+            qs = self.get_queryset()
             event_registration_id = request.GET.get("event_registration")
             extra_attendee_id = request.GET.get("extra_attendee")
             hotel_id = request.GET.get("hotel")
@@ -64,7 +69,7 @@ class AccommodationList(APIView):
             if hotel_id:
                 qs = qs.filter(hotel__id=hotel_id)
 
-            return Response(AccommodationSerializer(qs, many=True).data)
+            return Response(AccommodationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching accommodations", "error": str(e)},
@@ -73,11 +78,11 @@ class AccommodationList(APIView):
 
     def post(self, request):
         try:
-            ser = AccommodationSerializer(data=request.data)
+            ser = AccommodationSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             acc = ser.save()
             return Response(
-                AccommodationSerializer(acc).data, status=status.HTTP_201_CREATED
+                AccommodationSerializer(acc, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
@@ -107,13 +112,18 @@ class AccommodationList(APIView):
         ),
     }
 )
-class AccommodationDetail(APIView):
+class AccommodationDetail(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Accommodation.objects.all()
 
     def get(self, request, pk):
         try:
-            acc = get_object_or_404(Accommodation, pk=pk)
-            return Response(AccommodationSerializer(acc).data)
+            qs = self.get_queryset()
+            acc = get_object_or_404(qs, pk=pk)
+            return Response(AccommodationSerializer(acc, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching accommodation", "error": str(e)},
@@ -123,10 +133,10 @@ class AccommodationDetail(APIView):
     def put(self, request, pk):
         try:
             acc = get_object_or_404(Accommodation, pk=pk)
-            ser = AccommodationSerializer(acc, data=request.data, partial=True)
+            ser = AccommodationSerializer(acc, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             acc = ser.save()
-            return Response(AccommodationSerializer(acc).data)
+            return Response(AccommodationSerializer(acc, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:

@@ -2,9 +2,10 @@ from rest_framework import serializers
 from Logistics.models.travel_details_models import TravelDetail, TravelDetailField
 from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 from CustomField.serializers import CustomFieldMixin
+from Departments.serializers_permissions import PermissionAwareSerializer
 
 
-class TravelDetailSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class TravelDetailSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
     event_registrations = serializers.PrimaryKeyRelatedField(
         queryset=EventRegistration.objects.all(), many=True, required=False
     )

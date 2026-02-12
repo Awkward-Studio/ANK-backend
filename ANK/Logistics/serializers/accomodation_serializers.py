@@ -9,9 +9,10 @@ from Logistics.serializers.hotel_serializers import (
     EventHotelRoomTypeSerializer,
 )
 from CustomField.serializers import CustomFieldMixin
+from Departments.serializers_permissions import PermissionAwareSerializer
 
 
-class AccommodationSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class AccommodationSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
 
     event_room_type = serializers.PrimaryKeyRelatedField(
         queryset=EventHotelRoomType.objects.all()
