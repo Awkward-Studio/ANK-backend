@@ -7,14 +7,16 @@ db.sqlite3
 media
 
 # Environments
-.env
-*.env
-env
-myEnv
-myenv
+# .env
+# *.env
+env/
+myEnv/
+myenv/
+venv/
+.venv/
 
 
-
+*.claude
 # Django stuff:
 *.mo
 *.py[cod]
@@ -37,6 +39,6 @@ myenv
 
 # VS Code
 .vscode/
-c
 
+# Documentation
 *.md

@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.db import models
+from Departments.mixins import DepartmentAccessMixin
+from Departments.permissions import PermissionChecker
 
 from Events.models.session_model import Session
 from Events.models.session_registration import SessionRegistration
@@ -69,13 +71,17 @@ from utils.swagger import (
         ),
     }
 )
-class EventListCreateView(APIView):
+class EventListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_base_queryset(self):
+        return Event.objects.all()
 
     def get(self, request):
         try:
-            qs = Event.objects.all()
-            return Response(EventSerializer(qs, many=True).data)
+            # Use DepartmentAccessMixin to filter queryset based on user role
+            qs = self.get_queryset()
+            return Response(EventSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing events", "error": str(e)},
@@ -84,10 +90,10 @@ class EventListCreateView(APIView):
 
     def post(self, request):
         try:
-            ser = EventSerializer(data=request.data)
+            ser = EventSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ev = ser.save()
-            return Response(EventSerializer(ev).data, status=status.HTTP_201_CREATED)
+            return Response(EventSerializer(ev, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -113,13 +119,19 @@ class EventListCreateView(APIView):
         "delete": doc_destroy(description="Delete an event by ID", tags=["Events"]),
     }
 )
-class EventDetailView(APIView):
+class EventDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_base_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Event.objects.all()
 
     def get(self, request, pk):
         try:
-            ev = get_object_or_404(Event, pk=pk)
-            return Response(EventSerializer(ev).data)
+            # Use get_queryset to ensure user has access
+            qs = self.get_queryset()
+            ev = get_object_or_404(qs, pk=pk)
+            return Response(EventSerializer(ev, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching event", "error": str(e)},
@@ -129,10 +141,10 @@ class EventDetailView(APIView):
     def put(self, request, pk):
         try:
             ev = get_object_or_404(Event, pk=pk)
-            ser = EventSerializer(ev, data=request.data, partial=True)
+            ser = EventSerializer(ev, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ev = ser.save()
-            return Response(EventSerializer(ev).data)
+            return Response(EventSerializer(ev, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -274,13 +286,17 @@ class EventFieldDetail(APIView):
         ),
     }
 )
-class EventRegistrationListCreateView(APIView):
+class EventRegistrationListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return EventRegistration.objects.all()
 
     def get(self, request):
         try:
-            qs = EventRegistration.objects.all()
-            return Response(EventRegistrationSerializer(qs, many=True).data)
+            qs = self.get_queryset()
+            return Response(EventRegistrationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing registrations", "error": str(e)},
@@ -289,11 +305,11 @@ class EventRegistrationListCreateView(APIView):
 
     def post(self, request):
         try:
-            ser = EventRegistrationSerializer(data=request.data)
+            ser = EventRegistrationSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
             return Response(
-                EventRegistrationSerializer(reg).data, status=status.HTTP_201_CREATED
+                EventRegistrationSerializer(reg, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED
             )
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
@@ -326,13 +342,18 @@ class EventRegistrationListCreateView(APIView):
         "delete": doc_destroy(description="Delete a registration by ID"),
     }
 )
-class EventRegistrationDetailView(APIView):
+class EventRegistrationDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return EventRegistration.objects.all()
 
     def get(self, request, pk):
         try:
-            reg = get_object_or_404(EventRegistration, pk=pk)
-            return Response(EventRegistrationSerializer(reg).data)
+            qs = self.get_queryset()
+            reg = get_object_or_404(qs, pk=pk)
+            return Response(EventRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching registration", "error": str(e)},
@@ -342,10 +363,10 @@ class EventRegistrationDetailView(APIView):
     def put(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
-            ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
+            ser = EventRegistrationSerializer(reg, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
-            return Response(EventRegistrationSerializer(reg).data)
+            return Response(EventRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -357,10 +378,10 @@ class EventRegistrationDetailView(APIView):
     def patch(self, request, pk):
         try:
             reg = get_object_or_404(EventRegistration, pk=pk)
-            ser = EventRegistrationSerializer(reg, data=request.data, partial=True)
+            ser = EventRegistrationSerializer(reg, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             reg = ser.save()
-            return Response(EventRegistrationSerializer(reg).data)
+            return Response(EventRegistrationSerializer(reg, context=self.get_serializer_context()).data)
         except ValidationError as ve:
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -502,12 +523,16 @@ class EventRegistrationFieldDetail(APIView):
         ),
     }
 )
-class ExtraAttendeeListCreateView(APIView):
+class ExtraAttendeeListCreateView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return ExtraAttendee.objects.all()
 
     def get(self, request):
         try:
-            qs = ExtraAttendee.objects.all()
+            qs = self.get_queryset()
             return Response(ExtraAttendeeSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -552,12 +577,17 @@ class ExtraAttendeeListCreateView(APIView):
         ),
     }
 )
-class ExtraAttendeeDetailView(APIView):
+class ExtraAttendeeDetailView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return ExtraAttendee.objects.all()
 
     def get(self, request, pk):
         try:
-            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            qs = self.get_queryset()
+            extra = get_object_or_404(qs, pk=pk)
             return Response(ExtraAttendeeSerializer(extra).data)
         except Exception as e:
             return Response(
@@ -601,11 +631,22 @@ class ExtraAttendeeDetailView(APIView):
         )
     }
 )
-class ExtraAttendeesForRegistrationAPIView(APIView):
+class ExtraAttendeesForRegistrationAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return ExtraAttendee.objects.all()
+
     def get(self, request, pk):
+        # Ensure user has access to this registration's event
+        accessible_events = PermissionChecker.get_user_accessible_events(request.user)
         reg = get_object_or_404(EventRegistration, pk=pk)
+        if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+            return Response(
+                {"detail": "You don't have access to this event"},
+                status=status.HTTP_403_FORBIDDEN
+            )
         try:
             extras = reg.extra_attendees.all()
             return Response(ExtraAttendeeSerializer(extras, many=True).data)
@@ -625,14 +666,25 @@ class ExtraAttendeesForRegistrationAPIView(APIView):
         )
     }
 )
-class EventSessionsAPIView(APIView):
+class EventSessionsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return Session.objects.all()
+
     def get(self, request, pk):
+        # Ensure user has access to this event
+        accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+        if not accessible_events.filter(id=pk).exists() and request.user.role != 'super_admin':
+            return Response(
+                {"detail": "You don't have access to this event"},
+                status=status.HTTP_403_FORBIDDEN
+            )
         event = get_object_or_404(Event, pk=pk)
         try:
-            sessions = event.sessions.all()
-            return Response(SessionSerializer(sessions, many=True).data)
+            qs = self.get_queryset().filter(event_id=pk)
+            return Response(SessionSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing event sessions", "error": str(e)},
@@ -649,13 +701,25 @@ class EventSessionsAPIView(APIView):
         )
     }
 )
-class EventRegistrationsAPIView(APIView):
+class EventRegistrationsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        return EventRegistration.objects.all()
 
     def get(self, request, pk):
         try:
-            regs = EventRegistration.objects.filter(event_id=pk)
-            return Response(EventRegistrationSerializer(regs, many=True).data)
+            # Ensure user has access to this event
+            from Events.models.event_model import Event
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=pk).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(event_id=pk)
+            return Response(EventRegistrationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing event registrations", "error": str(e)},
@@ -674,8 +738,13 @@ class EventRegistrationsAPIView(APIView):
         )
     }
 )
-class EventAccommodationsAPIView(APIView):
+class EventAccommodationsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.accomodation_models import Accommodation
+        return Accommodation.objects.all()
 
     def get(self, request, pk):
         try:
@@ -716,8 +785,13 @@ class EventAccommodationsAPIView(APIView):
         )
     }
 )
-class EventTravelDetailsAPIView(APIView):
+class EventTravelDetailsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.travel_details_models import TravelDetail
+        return TravelDetail.objects.all()
 
     def get(self, request, pk):
         try:
@@ -756,13 +830,26 @@ class EventTravelDetailsAPIView(APIView):
         )
     }
 )
-class EventRegistrationAccommodationsAPIView(APIView):
+class EventRegistrationAccommodationsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.accomodation_models import Accommodation
+        return Accommodation.objects.all()
 
     def get(self, request, pk):
         try:
-            accos = Accommodation.objects.filter(event_registrations__id=pk)
-            return Response(AccommodationSerializer(accos, many=True).data)
+            # Ensure user has access to this registration's event
+            reg = get_object_or_404(EventRegistration, pk=pk)
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(event_registrations__id=pk)
+            return Response(AccommodationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {
@@ -783,13 +870,26 @@ class EventRegistrationAccommodationsAPIView(APIView):
         )
     }
 )
-class EventRegistrationTravelDetailsAPIView(APIView):
+class EventRegistrationTravelDetailsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.travel_details_models import TravelDetail
+        return TravelDetail.objects.all()
 
     def get(self, request, pk):
         try:
-            travels = TravelDetail.objects.filter(event_registrations__id=pk)
-            return Response(TravelDetailSerializer(travels, many=True).data)
+            # Ensure user has access to this registration's event
+            reg = get_object_or_404(EventRegistration, pk=pk)
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(event_registrations__id=pk)
+            return Response(TravelDetailSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {
@@ -810,13 +910,26 @@ class EventRegistrationTravelDetailsAPIView(APIView):
         )
     }
 )
-class ExtraAttendeeAccommodationsAPIView(APIView):
+class ExtraAttendeeAccommodationsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.accomodation_models import Accommodation
+        return Accommodation.objects.all()
 
     def get(self, request, pk):
         try:
-            accos = Accommodation.objects.filter(extra_attendees__id=pk)
-            return Response(AccommodationSerializer(accos, many=True).data)
+            # Ensure user has access to this extra attendee's event
+            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=extra.registration.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(extra_attendees__id=pk)
+            return Response(AccommodationSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {
@@ -837,13 +950,26 @@ class ExtraAttendeeAccommodationsAPIView(APIView):
         )
     }
 )
-class ExtraAttendeeTravelDetailsAPIView(APIView):
+class ExtraAttendeeTravelDetailsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Override to provide base queryset for filtering."""
+        from Logistics.models.travel_details_models import TravelDetail
+        return TravelDetail.objects.all()
 
     def get(self, request, pk):
         try:
-            travels = TravelDetail.objects.filter(extra_attendees__id=pk)
-            return Response(TravelDetailSerializer(travels, many=True).data)
+            # Ensure user has access to this extra attendee's event
+            extra = get_object_or_404(ExtraAttendee, pk=pk)
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=extra.registration.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            qs = self.get_queryset().filter(extra_attendees__id=pk)
+            return Response(TravelDetailSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
                 {
@@ -864,7 +990,7 @@ class ExtraAttendeeTravelDetailsAPIView(APIView):
         )
     }
 )
-class EventAllAttendeesAPIView(APIView):
+class EventAllAttendeesAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     """
@@ -875,6 +1001,13 @@ class EventAllAttendeesAPIView(APIView):
 
     def get(self, request, event_pk):
         try:
+            # Ensure user has access to this event
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=event_pk).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
             # Ensure event exists
             get_object_or_404(Event, pk=event_pk)
             # Get all EventRegistrations for this event (prefetch extras for efficiency)
@@ -925,7 +1058,7 @@ class EventAllAttendeesAPIView(APIView):
         )
     }
 )
-class EventRegistrationAttendeesAPIView(APIView):
+class EventRegistrationAttendeesAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     """
@@ -935,7 +1068,14 @@ class EventRegistrationAttendeesAPIView(APIView):
 
     def get(self, request, registration_pk):
         try:
+            # Ensure user has access to this registration's event
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
             reg = get_object_or_404(EventRegistration, pk=registration_pk)
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
             guest_data = RestrictedGuestSerializer(reg.guest).data
             extras = [
                 {
@@ -971,7 +1111,7 @@ class EventRegistrationAttendeesAPIView(APIView):
         ),
     }
 )
-class EventRegistrationSessionRegistrationsAPIView(APIView):
+class EventRegistrationSessionRegistrationsAPIView(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     """
@@ -981,8 +1121,15 @@ class EventRegistrationSessionRegistrationsAPIView(APIView):
 
     def get(self, request, registration_id):
         try:
+            # Ensure user has access to this registration's event
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
             # 1. Get the EventRegistration (404s if not found)
             event_reg = get_object_or_404(EventRegistration, pk=registration_id)
+            if not accessible_events.filter(id=event_reg.event_id).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
             guest = event_reg.guest
 
             # 2. Get all SessionRegistrations for this guest in this event

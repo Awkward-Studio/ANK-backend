@@ -1075,97 +1075,76 @@ class UserEventAllAllowedFieldsAPIView(APIView):
     def get(self, request, event_pk, user_pk):
         user = get_object_or_404(User, pk=user_pk)
         event = get_object_or_404(Event, pk=event_pk)
+        
         try:
-            # Event fields
-            event_perms = UserEventFieldPermission.objects.filter(
-                user=user, event=event
-            ).select_related("event_field")
-            event_fields = [
-                {
-                    "id": perm.event_field.id,
-                    "name": perm.event_field.name,
-                    "label": perm.event_field.label,
-                }
-                for perm in event_perms
-            ]
-
-            # Guest fields
-            guest_perms = UserEventGuestFieldPermission.objects.filter(
-                user=user, event=event
-            ).select_related("guest_field")
-            guest_fields = [
-                {
-                    "id": perm.guest_field.id,
-                    "name": perm.guest_field.name,
-                    "label": perm.guest_field.label,
-                }
-                for perm in guest_perms
-            ]
-
-            # Session fields
-            session_perms = UserEventSessionFieldPermission.objects.filter(
-                user=user, event=event
-            ).select_related("session_field")
-            session_fields = [
-                {
-                    "id": perm.session_field.id,
-                    "name": perm.session_field.name,
-                    "label": perm.session_field.label,
-                }
-                for perm in session_perms
-            ]
-
-            # Travel Detail fields
-            travel_perms = UserEventTravelDetailFieldPermission.objects.filter(
-                user=user, event=event
-            ).select_related("traveldetail_field")
-            traveldetail_fields = [
-                {
-                    "id": perm.traveldetail_field.id,
-                    "name": perm.traveldetail_field.name,
-                    "label": perm.traveldetail_field.label,
-                }
-                for perm in travel_perms
-            ]
-
-            # Accommodation fields
-            accommodation_perms = UserEventAccommodationFieldPermission.objects.filter(
-                user=user, event=event
-            ).select_related("accommodation_field")
-            accommodation_fields = [
-                {
-                    "id": perm.accommodation_field.id,
-                    "name": perm.accommodation_field.name,
-                    "label": perm.accommodation_field.label,
-                }
-                for perm in accommodation_perms
-            ]
-
-            # Event Registration fields
-            eventregistration_perms = (
-                UserEventEventRegistrationFieldPermission.objects.filter(
-                    user=user, event=event
-                ).select_related("eventregistration_field")
+            from Departments.permissions import PermissionChecker
+            from django.contrib.contenttypes.models import ContentType
+            
+            # Helper to map model names to response keys
+            model_map = {
+                'event': 'event_fields',
+                'guest': 'guest_fields',
+                'session': 'session_fields',
+                'traveldetail': 'traveldetail_fields',
+                'accommodation': 'accommodation_fields',
+                'eventregistration': 'eventregistration_fields',
+            }
+            
+            response_data = {key: [] for key in model_map.values()}
+            response_data['model_access'] = {}
+            
+            from Departments.models import ModelPermission, EventDepartment, DepartmentModelAccess
+            
+            # Find all event departments the user is assigned to for this event
+            event_depts = EventDepartment.objects.filter(
+                event=event,
+                staff_assignments__user=user
             )
-            eventregistration_fields = [
-                {
-                    "id": perm.eventregistration_field.id,
-                    "name": perm.eventregistration_field.name,
-                    "label": perm.eventregistration_field.label,
-                }
-                for perm in eventregistration_perms
-            ]
+            
+            # Calculate aggregate model access across all assigned departments
+            assigned_depts = [ed.department for ed in event_depts]
+            
+            for model_name, response_key in model_map.items():
+                try:
+                    content_type = ContentType.objects.get(app_label__in=['Events', 'Guest', 'Logistics', 'Departments'], model=model_name)
+                    
+                    # 1. Aggregate Model CRUD access
+                    dept_access = DepartmentModelAccess.objects.filter(
+                        department__in=assigned_depts,
+                        content_type=content_type
+                    )
+                    
+                    access = {
+                        "can_read": any(da.can_read for da in dept_access),
+                        "can_write": any(da.can_write for da in dept_access),
+                        "can_create": any(da.can_create for da in dept_access),
+                        "can_delete": any(da.can_delete for da in dept_access),
+                    }
+                    
+                    # Special Case: Super admin / Admin bypass
+                    if user.role in ['super_admin', 'admin']:
+                        access = {k: True for k in access}
+                        
+                    response_data['model_access'][model_name] = access
 
-            return Response(
-                {
-                    "event_fields": event_fields,
-                    "guest_fields": guest_fields,
-                    "session_fields": session_fields,
-                    "traveldetail_fields": traveldetail_fields,
-                    "accommodation_fields": accommodation_fields,
-                    "eventregistration_fields": eventregistration_fields,
-                }
-            )
+                    # 2. Fetch Field-level permissions
+                    perms = ModelPermission.objects.filter(
+                        user=user,
+                        event_department__in=event_depts,
+                        content_type=content_type
+                    ).select_related('event_department')
+                    
+                    for perm in perms:
+                        response_data[response_key].append({
+                            "id": str(perm.id),
+                            "name": perm.field_name,
+                            "label": perm.field_name.replace('_', ' ').title(), # Fallback label
+                            "permission_type": perm.permission_type,
+                        })
+                except ContentType.DoesNotExist:
+                    continue
+
+            return Response(response_data)
         except Exception as e:
             return Response(
                 {"detail": "Failed to fetch allowed fields", "error": str(e)},

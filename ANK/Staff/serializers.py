@@ -1,7 +1,5 @@
 from rest_framework import serializers
-from Staff.models import User, GuestField
-from Events.models.event_model import EventField
-from Events.models.session_model import SessionField
+from Staff.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import (
@@ -12,6 +10,13 @@ from drf_spectacular.utils import (
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, min_length=8)
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.department:
+            from Departments.serializers import DepartmentSerializer
+            ret["department"] = DepartmentSerializer(instance.department).data
+        return ret
+
     class Meta:
         model = User
         fields = [
@@ -21,14 +26,16 @@ class UserSerializer(serializers.ModelSerializer):
             "name",
             "contact_phone",
             "role",
+            "department",
         ]
         read_only_fields = ["id"]
 
     def create(self, validated_data):
         pwd = validated_data.pop("password", None)
         role = validated_data.pop("role", "staff")
+        department = validated_data.pop("department", None)
 
-        user = User(**validated_data, role=role)
+        user = User(**validated_data, role=role, department=department)
         if pwd:
             user.set_password(pwd)
         else:
@@ -38,10 +45,21 @@ class UserSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
-
+        # Handle password separately - it needs to be hashed
+        password = validated_data.pop("password", None)
+        
+        # Update all other fields
         for attr, val in validated_data.items():
             setattr(instance, attr, val)
-
+        
+        # If password is provided and not empty, hash it
+        # Empty string means don't update password
+        if password is not None and password != "":
+            instance.set_password(password)
+        
+        # Save the instance
+        instance.save()
+        
         return instance
 
 

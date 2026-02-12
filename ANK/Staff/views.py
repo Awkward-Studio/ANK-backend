@@ -297,6 +297,12 @@ class UserList(APIView):
             description="Update a user by ID",
             tags=["Users"],
         ),
+        "patch": doc_update(
+            request=UserSerializer,
+            response=UserSerializer,
+            description="Partially update a user by ID",
+            tags=["Users"],
+        ),
         "delete": doc_destroy(description="Delete a user by ID", tags=["Users"]),
     }
 )
@@ -314,6 +320,21 @@ class UserDetail(APIView):
             )
 
     def put(self, request, pk):
+        try:
+            user = get_object_or_404(User, pk=pk)
+            ser = UserSerializer(user, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            user = ser.save()
+            return Response(UserSerializer(user).data)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating user", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def patch(self, request, pk):
         try:
             user = get_object_or_404(User, pk=pk)
             ser = UserSerializer(user, data=request.data, partial=True)
@@ -355,7 +376,9 @@ class UserAssignedEventsAPIView(APIView):
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
-            events = Event.objects.filter(staff_assignments__user=user).distinct()
+            # Use EventDepartmentStaffAssignment (new RBAC system)
+            from Departments.permissions import PermissionChecker
+            events = PermissionChecker.get_user_accessible_events(user)
             return Response(EventSerializer(events, many=True).data)
         except Exception as e:
             return Response(
@@ -379,7 +402,9 @@ class UserAssignedSessionsAPIView(APIView):
     def get(self, request, pk):
         user = get_object_or_404(User, pk=pk)
         try:
-            sessions = Session.objects.filter(staff_assignments__user=user).distinct()
+            # Use EventDepartmentStaffAssignment (new RBAC system)
+            from Departments.permissions import PermissionChecker
+            sessions = PermissionChecker.get_user_accessible_sessions(user)
             return Response(SessionSerializer(sessions, many=True).data)
         except Exception as e:
             return Response(

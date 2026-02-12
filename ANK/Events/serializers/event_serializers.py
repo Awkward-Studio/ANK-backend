@@ -8,8 +8,9 @@ from Events.models.event_registration_model import (
 )
 from Guest.models import Guest
 from CustomField.serializers import CustomFieldMixin
+from Departments.serializers_permissions import PermissionAwareSerializer
 
-class EventSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class EventSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
     custom_fields = serializers.SerializerMethodField()
 
     class Meta:
@@ -43,7 +44,7 @@ class EventRegistrationFieldSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "label"]
 
 
-class EventRegistrationSerializer(CustomFieldMixin, serializers.ModelSerializer):
+class EventRegistrationSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.ModelSerializer):
     guest = GuestSerializer(read_only=True)
     event = serializers.PrimaryKeyRelatedField(queryset=Event.objects.all())
     guest_id = serializers.PrimaryKeyRelatedField(

@@ -2,6 +2,8 @@ import uuid
 from decimal import Decimal
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from Events.models.event_model import Event
 
 User = get_user_model()
@@ -62,8 +64,45 @@ class EventDepartment(models.Model):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Staff ↔ EventDepartment assignment  ← (this is the one you asked for)
-# (Separate from your EventStaff/SessionStaff — scoped to a single EventDepartment)
+# Department-to-Model Mapping
+# Defines which models/pages each department can access
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class DepartmentModelAccess(models.Model):
+    """
+    Maps departments to models they can access.
+    Super Admin defines this mapping.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, related_name="model_accesses"
+    )
+    content_type = models.ForeignKey(
+        ContentType, on_delete=models.CASCADE,
+        help_text="The model type (Event, Guest, Session, TravelDetail, Accommodation, EventRegistration, BudgetLineItem, etc.)"
+    )
+    can_read = models.BooleanField(default=True)
+    can_write = models.BooleanField(default=False)
+    can_create = models.BooleanField(default=False)
+    can_delete = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("department", "content_type")]
+        indexes = [
+            models.Index(fields=["department", "content_type"]),
+        ]
+        ordering = ["department", "content_type"]
+
+    def __str__(self) -> str:
+        return f"{self.department.name} → {self.content_type.model}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Staff ↔ EventDepartment assignment
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -226,8 +265,95 @@ class BudgetLineItem(models.Model):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Per-user, per-event-department, per-field access (view access)
-# Store field keys as plain text (e.g., "unit_rate", "vendor_name", …)
+# Consolidated Permission Model
+# Replaces all 6 UserEvent*FieldPermission models AND BudgetFieldPermission
+# Uses ContentType to support any model type
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def get_model_fields(model_class):
+    """Get all field names from a model, excluding reverse relations."""
+    fields = []
+    for field in model_class._meta.get_fields():
+        # Exclude reverse relations (many_to_many, one_to_many)
+        if field.many_to_many or (hasattr(field, 'reverse') and field.reverse):
+            continue
+        # Include direct fields and ForeignKey
+        if hasattr(field, 'name'):
+            fields.append(field.name)
+    return fields
+
+
+class ModelPermission(models.Model):
+    """
+    Generic permission model that replaces:
+    - All 6 UserEvent*FieldPermission models
+    - BudgetFieldPermission (integrated)
+    
+    Uses ContentType to support any model type.
+    Follows the same pattern as BudgetFieldPermission (event_department + field_name).
+    """
+    PERMISSION_TYPE_CHOICES = [
+        ("read", "Read"),
+        ("write", "Write"),
+        ("read_write", "Read & Write")
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="model_permissions"
+    )
+    event_department = models.ForeignKey(
+        EventDepartment, on_delete=models.CASCADE, related_name="model_permissions"
+    )
+    content_type = models.ForeignKey(
+        ContentType, on_delete=models.CASCADE,
+        help_text="The model type (Event, Guest, Session, TravelDetail, Accommodation, EventRegistration, BudgetLineItem, etc.)"
+    )
+    field_name = models.CharField(
+        max_length=100,
+        help_text="The field name (e.g., 'email', 'location', 'unit_rate')"
+    )
+    permission_type = models.CharField(
+        max_length=20,
+        choices=PERMISSION_TYPE_CHOICES,
+        default="read"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = [("user", "event_department", "content_type", "field_name")]
+        indexes = [
+            models.Index(fields=["user", "event_department"]),
+            models.Index(fields=["event_department", "content_type", "field_name"]),
+            models.Index(fields=["content_type", "field_name"]),
+        ]
+        ordering = ["event_department", "content_type", "field_name"]
+    
+    def clean(self):
+        """Validate field_name exists on model."""
+        if self.content_type and self.field_name:
+            model_class = self.content_type.model_class()
+            if model_class:
+                valid_fields = get_model_fields(model_class)
+                if self.field_name not in valid_fields:
+                    raise ValidationError(
+                        f"Field '{self.field_name}' does not exist on {model_class.__name__}"
+                    )
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return f"{self.user} · {self.event_department} · {self.content_type.model}.{self.field_name} ({self.permission_type})"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy: BudgetFieldPermission (kept for backward compatibility during migration)
+# Will be removed after migration to ModelPermission
 # ──────────────────────────────────────────────────────────────────────────────
 
 

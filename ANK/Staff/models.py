@@ -5,11 +5,6 @@ from django.contrib.auth.models import (
     BaseUserManager,
     PermissionsMixin,
 )
-from Guest.models import GuestField
-from Events.models.event_model import Event, EventField
-from Events.models.session_model import Session, SessionField
-from Events.models.staff_assignment_models import EventStaffAssignment
-from Events.models.staff_assignment_models import SessionStaffAssignment
 
 
 class UserManager(BaseUserManager):
@@ -28,6 +23,7 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("role", "super_admin")
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True")
@@ -51,12 +47,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
 
-    # grant access to some subset of Events / Sessions
-    assigned_events = models.ManyToManyField(
-        Event, through=EventStaffAssignment, related_name="staff_users"
-    )
-    assigned_sessions = models.ManyToManyField(
-        Session, through=SessionStaffAssignment, related_name="staff_users"
+    # Department this user heads (for department_head role)
+    department = models.ForeignKey(
+        "Departments.Department",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="department_heads",
+        help_text="Department this user heads (for department_head role)"
     )
 
     USERNAME_FIELD = "email"

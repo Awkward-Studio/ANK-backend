@@ -1,24 +1,36 @@
-from django.db import transaction
-from django.db.models.signals import post_save
+"""
+Signals for cache invalidation when permissions change.
+"""
+from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
+from Departments.models import ModelPermission, EventDepartmentStaffAssignment
+from Departments.permissions import invalidate_permission_cache
 
-from Departments.models import Department, EventDepartment
-from Events.models.event_model import Event
+
+@receiver(post_save, sender=ModelPermission)
+def invalidate_cache_on_permission_save(sender, instance, **kwargs):
+    """Invalidate cache when ModelPermission is created or updated."""
+    invalidate_permission_cache(sender, instance, **kwargs)
 
 
-@receiver(post_save, sender=Department)
-def create_missing_event_departments_for_new_department(
-    sender, instance: Department, created: bool, **kwargs
-):
-    if not created:
-        return
+@receiver(post_delete, sender=ModelPermission)
+def invalidate_cache_on_permission_delete(sender, instance, **kwargs):
+    """Invalidate cache when ModelPermission is deleted."""
+    invalidate_permission_cache(sender, instance, **kwargs)
 
-    def _backfill_for_all_events():
-        events = Event.objects.all().only("id", "name")
-        rows = [
-            EventDepartment(event=e, department=instance, display_name=instance.name)
-            for e in events
-        ]
-        EventDepartment.objects.bulk_create(rows, ignore_conflicts=True)
 
-    transaction.on_commit(_backfill_for_all_events)
+@receiver(post_save, sender=EventDepartmentStaffAssignment)
+def invalidate_cache_on_assignment_save(sender, instance, **kwargs):
+    """Invalidate cache when EventDepartmentStaffAssignment changes (affects event access)."""
+    # Invalidate all permission caches for this user + event_department
+    from django.core.cache import cache
+    cache_key = f"perms:{instance.user.id}:{instance.event_department.id}"
+    cache.delete(cache_key)
+
+
+@receiver(post_delete, sender=EventDepartmentStaffAssignment)
+def invalidate_cache_on_assignment_delete(sender, instance, **kwargs):
+    """Invalidate cache when EventDepartmentStaffAssignment is deleted."""
+    from django.core.cache import cache
+    cache_key = f"perms:{instance.user.id}:{instance.event_department.id}"
+    cache.delete(cache_key)
