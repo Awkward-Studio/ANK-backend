@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
@@ -84,8 +84,13 @@ class GuestFieldList(APIView):
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data, status=status.HTTP_201_CREATED)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except (ValidationError, serializers.ValidationError) as ve:
+            if hasattr(ve, 'detail'):
+                return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            elif hasattr(ve, 'message_dict'):
+                return Response(ve.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
                 {"detail": "Error creating guest field", "error": str(e)},
@@ -131,8 +136,13 @@ class GuestFieldDetail(APIView):
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except (ValidationError, serializers.ValidationError) as ve:
+            if hasattr(ve, 'detail'):
+                return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            elif hasattr(ve, 'message_dict'):
+                return Response(ve.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
                 {"detail": "Error updating guest field", "error": str(e)},
@@ -195,8 +205,13 @@ class GuestList(DepartmentAccessMixin, APIView):
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data, status=status.HTTP_201_CREATED)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except (ValidationError, serializers.ValidationError) as ve:
+            if hasattr(ve, 'detail'):
+                return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            elif hasattr(ve, 'message_dict'):
+                return Response(ve.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
                 {"detail": "Error creating guest", "error": str(e)},
@@ -231,8 +246,16 @@ class GuestDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
-            return Response(GuestSerializer(obj, context=self.get_serializer_context()).data)
+            # Get context with the object so event_department can be found
+            context = self.get_serializer_context()
+            # Manually set event_department if not found
+            if 'event_department' not in context or context['event_department'] is None:
+                context['event_department'] = self.get_event_department(request, obj)
+            return Response(GuestSerializer(obj, context=context).data)
         except Exception as e:
+            from django.http import Http404
+            if isinstance(e, Http404):
+                raise
             return Response(
                 {"detail": "Error fetching guest", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -240,25 +263,51 @@ class GuestDetail(DepartmentAccessMixin, APIView):
 
     def put(self, request, pk):
         try:
-            obj = get_object_or_404(Guest, pk=pk)
-            ser = GuestSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
+            qs = self.get_queryset()
+            obj = get_object_or_404(qs, pk=pk)
+            # Get context with the object so event_department can be found
+            context = self.get_serializer_context()
+            # Manually set event_department if not found
+            if 'event_department' not in context or context['event_department'] is None:
+                context['event_department'] = self.get_event_department(request, obj)
+            ser = GuestSerializer(obj, data=request.data, partial=True, context=context)
             ser.is_valid(raise_exception=True)
             ser.save()
-            return Response(GuestSerializer(obj, context=self.get_serializer_context()).data)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            # Refresh context after save
+            context = self.get_serializer_context()
+            if 'event_department' not in context or context['event_department'] is None:
+                context['event_department'] = self.get_event_department(request, obj)
+            return Response(GuestSerializer(obj, context=context).data)
+        except (ValidationError, serializers.ValidationError) as ve:
+            if hasattr(ve, 'detail'):
+                return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+            elif hasattr(ve, 'message_dict'):
+                return Response(ve.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
+            from django.http import Http404
+            if isinstance(e, Http404):
+                raise
             return Response(
                 {"detail": "Error updating guest", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+    
+    def patch(self, request, pk):
+        """Support PATCH method for partial updates"""
+        return self.put(request, pk)
 
     def delete(self, request, pk):
         try:
-            obj = get_object_or_404(Guest, pk=pk)
+            qs = self.get_queryset()
+            obj = get_object_or_404(qs, pk=pk)
             obj.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
+            from django.http import Http404
+            if isinstance(e, Http404):
+                raise
             return Response(
                 {"detail": "Error deleting guest", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

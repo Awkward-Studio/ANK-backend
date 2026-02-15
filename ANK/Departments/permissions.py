@@ -82,11 +82,56 @@ class PermissionChecker:
             model_class: Model class to get fields for
             
         Returns:
-            set: Set of allowed field names, or None if super_admin (all fields)
+            set: Set of allowed field names, or None if super_admin/admin (all fields)
         """
         if user.role in ['super_admin', 'admin']:
             return None  # All fields
         
+        # For department heads: check their department's model access
+        if user.role == 'department_head' and user.department:
+            # Get event departments for this department
+            event_departments = EventDepartment.objects.filter(
+                event=event,
+                department=user.department
+            )
+            
+            if not event_departments.exists():
+                # Check if department has model-level access (but no event_department yet)
+                model_type = ContentType.objects.get_for_model(model_class)
+                has_model_access = DepartmentModelAccess.objects.filter(
+                    department=user.department,
+                    content_type=model_type,
+                    can_read=True
+                ).exists()
+                
+                if has_model_access:
+                    # Department has model access, return None to show all fields
+                    # (field-level permissions will be checked separately if they exist)
+                    return None
+                else:
+                    return set()  # No access
+            
+            # Get field-level permissions if they exist
+            model_type = ContentType.objects.get_for_model(model_class)
+            permissions = ModelPermission.objects.filter(
+                user=user,
+                event_department__in=event_departments,
+                content_type=model_type
+            ).values_list('field_name', flat=True).distinct()
+            
+            # If no field-level permissions, check model access
+            if not permissions.exists():
+                has_model_access = DepartmentModelAccess.objects.filter(
+                    department=user.department,
+                    content_type=model_type,
+                    can_read=True
+                ).exists()
+                if has_model_access:
+                    return None  # All fields accessible at model level
+            
+            return set(permissions)
+        
+        # For staff: only from event_departments they're assigned to
         event_departments = EventDepartment.objects.filter(
             event=event,
             staff_assignments__user=user
