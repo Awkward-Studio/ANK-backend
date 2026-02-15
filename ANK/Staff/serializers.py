@@ -34,6 +34,10 @@ class UserSerializer(serializers.ModelSerializer):
         pwd = validated_data.pop("password", None)
         role = validated_data.pop("role", "staff")
         department = validated_data.pop("department", None)
+        
+        # Validate: admin and super_admin should not have a department
+        if role in ["admin", "super_admin"]:
+            department = None
 
         user = User(**validated_data, role=role, department=department)
         if pwd:
@@ -47,6 +51,14 @@ class UserSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # Handle password separately - it needs to be hashed
         password = validated_data.pop("password", None)
+        
+        # Validate: admin and super_admin should not have a department
+        role = validated_data.get("role", instance.role)
+        if role in ["admin", "super_admin"]:
+            validated_data["department"] = None
+            # Also clear it on the instance if role is being changed
+            if role != instance.role:
+                instance.department = None
         
         # Update all other fields
         for attr, val in validated_data.items():

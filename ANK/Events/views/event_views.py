@@ -642,7 +642,7 @@ class ExtraAttendeesForRegistrationAPIView(DepartmentAccessMixin, APIView):
         # Ensure user has access to this registration's event
         accessible_events = PermissionChecker.get_user_accessible_events(request.user)
         reg = get_object_or_404(EventRegistration, pk=pk)
-        if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+        if not accessible_events.filter(id=reg.event_id).exists() and request.user.role not in ['super_admin', 'admin']:
             return Response(
                 {"detail": "You don't have access to this event"},
                 status=status.HTTP_403_FORBIDDEN
@@ -843,7 +843,7 @@ class EventRegistrationAccommodationsAPIView(DepartmentAccessMixin, APIView):
             # Ensure user has access to this registration's event
             reg = get_object_or_404(EventRegistration, pk=pk)
             accessible_events = PermissionChecker.get_user_accessible_events(request.user)
-            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role not in ['super_admin', 'admin']:
                 return Response(
                     {"detail": "You don't have access to this event"},
                     status=status.HTTP_403_FORBIDDEN
@@ -883,7 +883,7 @@ class EventRegistrationTravelDetailsAPIView(DepartmentAccessMixin, APIView):
             # Ensure user has access to this registration's event
             reg = get_object_or_404(EventRegistration, pk=pk)
             accessible_events = PermissionChecker.get_user_accessible_events(request.user)
-            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role not in ['super_admin', 'admin']:
                 return Response(
                     {"detail": "You don't have access to this event"},
                     status=status.HTTP_403_FORBIDDEN
@@ -1071,7 +1071,7 @@ class EventRegistrationAttendeesAPIView(DepartmentAccessMixin, APIView):
             # Ensure user has access to this registration's event
             accessible_events = PermissionChecker.get_user_accessible_events(request.user)
             reg = get_object_or_404(EventRegistration, pk=registration_pk)
-            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role != 'super_admin':
+            if not accessible_events.filter(id=reg.event_id).exists() and request.user.role not in ['super_admin', 'admin']:
                 return Response(
                     {"detail": "You don't have access to this event"},
                     status=status.HTTP_403_FORBIDDEN

@@ -24,7 +24,7 @@ class PermissionChecker:
         Returns:
             bool: True if user can access the model, False otherwise
         """
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return True
         
         dept = event_department.department
@@ -51,7 +51,7 @@ class PermissionChecker:
         Returns:
             bool: True if user has the required permission, False otherwise
         """
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return True
         
         model_type = ContentType.objects.get_for_model(model_class)
@@ -84,7 +84,7 @@ class PermissionChecker:
         Returns:
             set: Set of allowed field names, or None if super_admin (all fields)
         """
-        if user.role == 'super_admin':
+        if user.role in ['super_admin', 'admin']:
             return None  # All fields
         
         event_departments = EventDepartment.objects.filter(
