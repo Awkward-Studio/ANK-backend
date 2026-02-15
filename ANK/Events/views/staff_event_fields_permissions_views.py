@@ -1101,8 +1101,20 @@ class UserEventAllAllowedFieldsAPIView(APIView):
                 staff_assignments__user=user
             )
             
+            # For department_head: if no assignments, use their department from user model
+            if user.role == 'department_head' and not event_depts.exists() and user.department:
+                # Get all event-departments for this event that match their department
+                event_depts = EventDepartment.objects.filter(
+                    event=event,
+                    department=user.department
+                )
+            
             # Calculate aggregate model access across all assigned departments
             assigned_depts = [ed.department for ed in event_depts]
+            
+            # For department_head without assignments, use their own department
+            if user.role == 'department_head' and not assigned_depts and user.department:
+                assigned_depts = [user.department]
             
             for model_name, response_key in model_map.items():
                 try:

@@ -84,7 +84,7 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
             event_department = self.context.get('event_department')
             user = request.user if request else None
             
-            if user and user.role != 'super_admin' and event_department:
+            if user and user.role not in ['super_admin', 'admin'] and event_department:
                 model_type = ContentType.objects.get_for_model(self.Meta.model)
                 # Check write permissions for each field being updated
                 for field_name in attrs.keys():

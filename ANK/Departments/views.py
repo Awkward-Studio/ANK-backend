@@ -516,7 +516,7 @@ class BudgetLineItemList(DepartmentAccessMixin, APIView):
                 try:
                     event_dept = EventDepartment.objects.get(id=event_dept_id)
                     accessible_events = PermissionChecker.get_user_accessible_events(request.user)
-                    if not accessible_events.filter(id=event_dept.event_id).exists() and request.user.role != 'super_admin':
+                    if not accessible_events.filter(id=event_dept.event_id).exists() and request.user.role not in ['super_admin', 'admin']:
                         return Response(
                             {"detail": "You don't have access to this event"},
                             status=status.HTTP_403_FORBIDDEN
