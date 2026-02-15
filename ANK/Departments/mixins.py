@@ -25,15 +25,25 @@ class DepartmentAccessMixin:
         Returns:
             EventDepartment or None
         """
+        user = request.user
+        
         # If object has event, get event_department from user's assignment
         if obj and hasattr(obj, 'event'):
             event = obj.event
-            # Get user's event_department for this event (prefer first one)
-            event_dept = EventDepartment.objects.filter(
-                event=event,
-                staff_assignments__user=request.user
-            ).first()
-            return event_dept
+            # For staff: get from staff assignments
+            if user.role == 'staff':
+                event_dept = EventDepartment.objects.filter(
+                    event=event,
+                    staff_assignments__user=user
+                ).first()
+                return event_dept
+            # For department_head: get from their department
+            elif user.role == 'department_head' and user.department:
+                event_dept = EventDepartment.objects.filter(
+                    event=event,
+                    department=user.department
+                ).first()
+                return event_dept
         
         # Try to get event from URL params (for event-scoped views)
         event_id = request.resolver_match.kwargs.get('pk') or request.resolver_match.kwargs.get('event_pk')
@@ -41,13 +51,45 @@ class DepartmentAccessMixin:
             try:
                 from Events.models.event_model import Event
                 event = Event.objects.get(id=event_id)
-                event_dept = EventDepartment.objects.filter(
-                    event=event,
-                    staff_assignments__user=request.user
-                ).first()
-                return event_dept
+                # For staff: get from staff assignments
+                if user.role == 'staff':
+                    event_dept = EventDepartment.objects.filter(
+                        event=event,
+                        staff_assignments__user=user
+                    ).first()
+                    return event_dept
+                # For department_head: get from their department
+                elif user.role == 'department_head' and user.department:
+                    event_dept = EventDepartment.objects.filter(
+                        event=event,
+                        department=user.department
+                    ).first()
+                    return event_dept
             except:
                 pass
+        
+        # For Guest model: try to find event through EventRegistration
+        if obj and hasattr(obj, 'events'):
+            # Guest has M2M relationship with events through EventRegistration
+            # Get first event this guest is registered for
+            from Events.models.event_registration_model import EventRegistration
+            reg = EventRegistration.objects.filter(guest=obj).select_related('event').first()
+            if reg:
+                event = reg.event
+                # For staff: get from staff assignments
+                if user.role == 'staff':
+                    event_dept = EventDepartment.objects.filter(
+                        event=event,
+                        staff_assignments__user=user
+                    ).first()
+                    return event_dept
+                # For department_head: get from their department
+                elif user.role == 'department_head' and user.department:
+                    event_dept = EventDepartment.objects.filter(
+                        event=event,
+                        department=user.department
+                    ).first()
+                    return event_dept
         
         # Try to get from query params
         event_department_id = request.query_params.get('event_department')
@@ -85,19 +127,22 @@ class DepartmentAccessMixin:
             return qs  # No filtering
         
         if user.role == 'department_head':
-            # Department heads see all events, but filtered by their department's models
+            # Department heads see all events (Event model itself is not filtered by DepartmentModelAccess)
+            # Model-level filtering happens at Guest, TravelDetail, Accommodation, etc. level
+            if qs.model.__name__ == 'Event':
+                # Department heads should see all events
+                return qs
+            
+            # For other models, check if department has access to that model type
             dept = user.department
             if dept:
                 # Get models this department can access
-                from django.contrib.contenttypes.models import ContentType
                 allowed_model_types = DepartmentModelAccess.objects.filter(
                     department=dept,
                     can_read=True
                 ).values_list('content_type', flat=True)
                 
                 # Filter queryset to only include these model types
-                # This works if the queryset model has a content_type field
-                # For most cases, we'll filter at the model level
                 model_type = ContentType.objects.get_for_model(qs.model)
                 if model_type.id in allowed_model_types:
                     return qs
@@ -110,7 +155,10 @@ class DepartmentAccessMixin:
         if hasattr(qs.model, 'event'):
             # Filter by events user has access to
             accessible_events = PermissionChecker.get_user_accessible_events(user)
-            return qs.filter(event__in=accessible_events)
+            if accessible_events.exists():
+                return qs.filter(event__in=accessible_events)
+            else:
+                return qs.none()  # No accessible events, return empty queryset
         
         # For Session model, filter through event relationship
         if qs.model.__name__ == 'Session':
@@ -124,8 +172,34 @@ class DepartmentAccessMixin:
         
         # For Guest model, filter through EventRegistration relationship
         if qs.model.__name__ == 'Guest':
+            if user.role == 'department_head':
+                # Department heads: only see guests if their department has Guest model access
+                dept = user.department
+                if dept:
+                    from Guest.models import Guest
+                    guest_ct = ContentType.objects.get_for_model(Guest)
+                    has_access = DepartmentModelAccess.objects.filter(
+                        department=dept,
+                        content_type=guest_ct,
+                        can_read=True
+                    ).exists()
+                    if has_access:
+                        # Department has access, but still filter by events where this department is involved
+                        # Get events where this department has an EventDepartment
+                        from Events.models.event_model import Event
+                        dept_events = Event.objects.filter(
+                            event_departments__department=dept
+                        ).distinct()
+                        return qs.filter(events__in=dept_events).distinct()
+                    else:
+                        return qs.none()  # No access, see nothing
+                return qs.none()
+            # Staff: only guests from accessible events
             accessible_events = PermissionChecker.get_user_accessible_events(user)
-            return qs.filter(events__in=accessible_events).distinct()
+            if accessible_events.exists():
+                return qs.filter(events__in=accessible_events).distinct()
+            else:
+                return qs.none()
         
         # For EventRegistration, filter through event
         if qs.model.__name__ == 'EventRegistration':
@@ -156,11 +230,23 @@ class DepartmentAccessMixin:
         if 'request' not in context:
             context['request'] = self.request
             
+        # Try to get object from various sources
         obj = None
+        # For detail views, try to get the object
         if hasattr(self, 'get_object'):
             try:
                 obj = self.get_object()
             except:
                 pass
+        # If no object from get_object, try to get from kwargs (for detail views)
+        if not obj and hasattr(self.request, 'resolver_match') and self.request.resolver_match:
+            pk = self.request.resolver_match.kwargs.get('pk')
+            if pk and hasattr(self, 'get_queryset'):
+                try:
+                    qs = self.get_queryset()
+                    obj = qs.filter(pk=pk).first()
+                except:
+                    pass
+        
         context['event_department'] = self.get_event_department(self.request, obj)
         return context
