@@ -438,17 +438,9 @@ def whatsapp_travel_webhook(request):
 
             else:
                 # Unknown user? Or no active events.
-                # Send a generic "Contact us" message.
-                msg_body = (
-                    "👋 Hello! We couldn't find any active events linked to this number.\n\n"
-                    "If you believe this is a mistake, please contact the event admin directly."
-                )
-                try:
-                    # Multi-number support: Use default number for unknown user replies
-                    msg_id, sender_id = send_freeform_text(wa_id, msg_body, phone_number_id=None)
-                    logger.info(f"[TEXT] Sent Unknown User generic reply to {wa_id} from {sender_id}")
-                except Exception as e:
-                    logger.error(f"[TEXT] Failed to send Unknown User reply: {e}")
+                # [FIX] Do not send any reply to unknown users/inactive events
+                logger.info(f"[TEXT] Unknown user {wa_id} reached fallback, no reply sent.")
+                pass
 
             logger.warning(f"[TEXT] No session & no active events for {wa_id}, logging only.")
             return JsonResponse({"ok": True}, status=200)

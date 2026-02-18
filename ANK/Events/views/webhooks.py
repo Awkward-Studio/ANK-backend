@@ -612,16 +612,9 @@ def whatsapp_rsvp(request):
         return JsonResponse({"ok": True, "menu_sent": True})
     
     elif is_menu_command and not er:
-        # Command sent but user unknown -> Send helpful text + fall through to logging
-        if wa_id:
-            from MessageTemplates.services.whatsapp import send_freeform_text
-            try:
-                # Multi-number support: Use current number for unknown user messages
-                msg_id, sender_id = send_freeform_text(wa_id, "👋 We couldn't find any active events linked to this number. Please contact the admin.", phone_number_id=to_phone_number_id)
-                log.info(f"[UNKNOWN-USER] Sent help message to {wa_id} from {sender_id}")
-            except Exception:
-                pass
-        # Fall through to 'if not er' block below for standard standalone logging
+        # Command sent but user unknown -> Do nothing (log only via fallthrough)
+        log.info(f"[UNKNOWN-USER] Received menu command from {wa_id} but no active registration found. Silently logging.")
+        pass
 
     if not er:
         # STANDALONE / UNREGISTERED MESSAGE HANDLING
