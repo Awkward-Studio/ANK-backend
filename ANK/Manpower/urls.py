@@ -1,34 +1,63 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import (
-    FreelancerViewSet,
-    ManpowerRequirementViewSet,
-    FreelancerAllocationViewSet,
-    EventCostSheetViewSet,
-    MoUViewSet,
-    PostEventAdjustmentViewSet,
-    FreelancerRatingViewSet,
+    FreelancerList,
+    FreelancerDetail,
+    ManpowerRequirementList,
+    ManpowerRequirementDetail,
+    FreelancerAllocationList,
+    FreelancerAllocationDetail,
+    confirm_allocation,
+    release_allocation,
+    generate_mou,
+    EventCostSheetList,
+    EventCostSheetDetail,
+    MoUList,
+    MoUDetail,
+    PostEventAdjustmentList,
+    PostEventAdjustmentDetail,
+    FreelancerRatingList,
+    FreelancerRatingDetail,
     accounts_summary,
+    export_accounts_excel,
 )
-from .public_views import get_mou_by_token, respond_to_mou
-
-router = DefaultRouter()
-router.register(r"freelancers", FreelancerViewSet, basename="freelancer")
-router.register(r"requirements", ManpowerRequirementViewSet, basename="requirement")
-router.register(r"allocations", FreelancerAllocationViewSet, basename="allocation")
-router.register(r"cost-sheets", EventCostSheetViewSet, basename="cost-sheet")
-router.register(r"mous", MoUViewSet, basename="mou")
-router.register(r"adjustments", PostEventAdjustmentViewSet, basename="adjustment")
-router.register(r"ratings", FreelancerRatingViewSet, basename="rating")
+from .public_views import public_mou_interaction
 
 urlpatterns = [
-    # Router-based viewsets
-    path("", include(router.urls)),
+    # Freelancers
+    path("freelancers/", FreelancerList.as_view(), name="freelancer-list"),
+    path("freelancers/<uuid:pk>/", FreelancerDetail.as_view(), name="freelancer-detail"),
+    
+    # Requirements
+    path("requirements/", ManpowerRequirementList.as_view(), name="requirement-list"),
+    path("requirements/<uuid:pk>/", ManpowerRequirementDetail.as_view(), name="requirement-detail"),
+    
+    # Allocations
+    path("allocations/", FreelancerAllocationList.as_view(), name="allocation-list"),
+    path("allocations/<uuid:pk>/", FreelancerAllocationDetail.as_view(), name="allocation-detail"),
+    path("allocations/<uuid:pk>/confirm/", confirm_allocation, name="allocation-confirm"),
+    path("allocations/<uuid:pk>/release/", release_allocation, name="allocation-release"),
+    path("allocations/<uuid:pk>/generate-mou/", generate_mou, name="allocation-generate-mou"),
+    
+    # Cost Sheets
+    path("cost-sheets/", EventCostSheetList.as_view(), name="cost-sheet-list"),
+    path("cost-sheets/<uuid:pk>/", EventCostSheetDetail.as_view(), name="cost-sheet-detail"),
+    
+    # MoUs
+    path("mous/", MoUList.as_view(), name="mou-list"),
+    path("mous/<uuid:pk>/", MoUDetail.as_view(), name="mou-detail"),
+    
+    # Adjustments
+    path("adjustments/", PostEventAdjustmentList.as_view(), name="adjustment-list"),
+    path("adjustments/<uuid:pk>/", PostEventAdjustmentDetail.as_view(), name="adjustment-detail"),
+    
+    # Ratings
+    path("ratings/", FreelancerRatingList.as_view(), name="rating-list"),
+    path("ratings/<uuid:pk>/", FreelancerRatingDetail.as_view(), name="rating-detail"),
     
     # Accounts Dashboard
     path("accounts/summary/", accounts_summary, name="accounts-summary"),
+    path("accounts/export/", export_accounts_excel, name="accounts-export"),
     
     # Public token-based endpoints for freelancers
-    path("public/mou/<uuid:token>/", get_mou_by_token, name="public-mou-detail"),
-    path("public/mou/<uuid:token>/respond/", respond_to_mou, name="public-mou-respond"),
+    path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),
 ]

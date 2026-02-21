@@ -259,3 +259,12 @@ class FreelancerRating(models.Model):
 
     def __str__(self):
         return f"Rating for {self.freelancer} in {self.event} ({self.score}/5)"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Recompute average rating for freelancer
+        from django.db.models import Avg
+        avg_score = FreelancerRating.objects.filter(freelancer=self.freelancer).aggregate(Avg("score"))["score__avg"]
+        if avg_score is not None:
+            self.freelancer.average_rating = Decimal(str(round(avg_score, 2)))
+            self.freelancer.save(update_fields=["average_rating"])
