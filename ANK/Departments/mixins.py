@@ -126,31 +126,34 @@ class DepartmentAccessMixin:
         if user.role in ['super_admin', 'admin']:
             return qs  # No filtering
         
+        # Everyone sees the full event list if it's the Event model, 
+        # BUT staff only see assigned events (as per user instruction).
+        if qs.model.__name__ == 'Event':
+            if user.role == 'staff':
+                return PermissionChecker.get_user_accessible_events(user)
+            # Admin, super_admin, and department_head see all events
+            return qs
+        
         if user.role == 'department_head':
-            # Department heads see all events (Event model itself is not filtered by DepartmentModelAccess)
-            # Model-level filtering happens at Guest, TravelDetail, Accommodation, etc. level
-            if qs.model.__name__ == 'Event':
-                # Department heads should see all events
-                return qs
-            
-            # For other models, check if department has access to that model type
+            # Dept heads see all instances of models their department has access to.
+            # "events are not associated with departments" - filtering is purely model-based.
             dept = user.department
             if dept:
-                # Get models this department can access
-                allowed_model_types = DepartmentModelAccess.objects.filter(
-                    department=dept,
-                    can_read=True
-                ).values_list('content_type', flat=True)
-                
-                # Filter queryset to only include these model types
+                from django.contrib.contenttypes.models import ContentType
                 model_type = ContentType.objects.get_for_model(qs.model)
-                if model_type.id in allowed_model_types:
+                has_access = DepartmentModelAccess.objects.filter(
+                    department=dept,
+                    content_type=model_type,
+                    can_read=True
+                ).exists()
+                
+                if has_access:
                     return qs
                 else:
                     return qs.none()
-            return qs
+            return qs.none()
         
-        # Staff: Only see resources from events they're assigned to via EventDepartmentStaffAssignment
+        # Staff: Filter models by the events they are assigned to.
         # Check if the model has an 'event' field
         if hasattr(qs.model, 'event'):
             # Filter by events user has access to
@@ -158,7 +161,7 @@ class DepartmentAccessMixin:
             if accessible_events.exists():
                 return qs.filter(event__in=accessible_events)
             else:
-                return qs.none()  # No accessible events, return empty queryset
+                return qs.none()
         
         # For Session model, filter through event relationship
         if qs.model.__name__ == 'Session':
@@ -170,31 +173,8 @@ class DepartmentAccessMixin:
             accessible_events = PermissionChecker.get_user_accessible_events(user)
             return qs.filter(session__event__in=accessible_events)
         
-        # For Guest model, filter through EventRegistration relationship
+        # For Guest model, staff only see guests from accessible events.
         if qs.model.__name__ == 'Guest':
-            if user.role == 'department_head':
-                # Department heads: only see guests if their department has Guest model access
-                dept = user.department
-                if dept:
-                    from Guest.models import Guest
-                    guest_ct = ContentType.objects.get_for_model(Guest)
-                    has_access = DepartmentModelAccess.objects.filter(
-                        department=dept,
-                        content_type=guest_ct,
-                        can_read=True
-                    ).exists()
-                    if has_access:
-                        # Department has access, but still filter by events where this department is involved
-                        # Get events where this department has an EventDepartment
-                        from Events.models.event_model import Event
-                        dept_events = Event.objects.filter(
-                            event_departments__department=dept
-                        ).distinct()
-                        return qs.filter(events__in=dept_events).distinct()
-                    else:
-                        return qs.none()  # No access, see nothing
-                return qs.none()
-            # Staff: only guests from accessible events
             accessible_events = PermissionChecker.get_user_accessible_events(user)
             if accessible_events.exists():
                 return qs.filter(events__in=accessible_events).distinct()
@@ -216,8 +196,6 @@ class DepartmentAccessMixin:
             accessible_events = PermissionChecker.get_user_accessible_events(user)
             return qs.filter(event_department__event__in=accessible_events)
         
-        # For models without direct event relationship, check through related models
-        # This is handled per-model basis
         return qs
     
     def get_serializer_context(self):

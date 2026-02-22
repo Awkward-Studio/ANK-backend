@@ -162,12 +162,8 @@ class PermissionChecker:
         """
         from Events.models.event_model import Event
         
-        if user.role in ['super_admin', 'admin']:
-            return Event.objects.all()
-        
-        if user.role == 'department_head':
-            # Department heads see all events, but filtered by their department's model access
-            # For now, return all events (model filtering happens at queryset level)
+        if user.role in ['super_admin', 'admin', 'department_head']:
+            # Admin and Dept Head see all events
             return Event.objects.all()
         
         # Staff: Only events via EventDepartmentStaffAssignment
