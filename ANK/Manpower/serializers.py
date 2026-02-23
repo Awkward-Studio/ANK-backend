@@ -39,6 +39,8 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
     event_name = serializers.ReadOnlyField(source="event_department.event.name")
     start_date = serializers.ReadOnlyField(source="event_department.event.start_date")
     end_date = serializers.ReadOnlyField(source="event_department.event.end_date")
+    mou_status = serializers.SerializerMethodField()
+    mou_token = serializers.SerializerMethodField()
     cost_sheet = EventCostSheetSerializer(read_only=True)
 
     class Meta:
@@ -54,11 +56,21 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "event_name",
             "start_date",
             "end_date",
+            "mou_status",
+            "mou_token",
             "assigned_by",
             "cost_sheet",
             "created_at",
             "updated_at",
         ]
+
+    def get_mou_status(self, obj):
+        mou = obj.mous.order_by("-created_at").first()
+        return mou.status if mou else None
+
+    def get_mou_token(self, obj):
+        mou = obj.mous.order_by("-created_at").first()
+        return mou.secure_token if mou else None
 
 
 class MoUSerializer(serializers.ModelSerializer):
