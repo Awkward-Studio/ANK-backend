@@ -755,12 +755,14 @@ def generate_mou(request, pk):
             allocation=allocation,
             defaults={"status": "draft", "template_data": {"terms": "Standard MoU terms..."}}
         )
-        if mou.status == "draft":
-            mou.status = "sent"
-            if not getattr(mou, "expires_at", None):
+        
+        # Reset to sent if it was draft or rejected
+        if mou.status in ["draft", "rejected"]:
+            if not getattr(mou, "expires_at", None) or mou.status == "rejected":
                 mou.expires_at = timezone.now() + timedelta(days=7)
+            mou.status = "sent"
             mou.save()
-            # TODO: Notification - Send the secure token link via Email/WhatsApp to the freelancer
+            
         _log_action(
             request,
             "mou_generated",
@@ -769,8 +771,9 @@ def generate_mou(request, pk):
             details={"allocation_id": str(allocation.id), "status": mou.status},
         )
         return Response({
-            "status": "mou_sent",
+            "status": mou.status,
             "mou_id": mou.id,
+            "secure_token": str(mou.secure_token),
             "secure_link": f"/mou/{mou.secure_token}"
         })
     except Http404:
