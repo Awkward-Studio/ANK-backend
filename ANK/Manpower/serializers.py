@@ -36,6 +36,9 @@ class ManpowerRequirementSerializer(serializers.ModelSerializer):
 class FreelancerAllocationSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="freelancer.name")
     skill_category = serializers.ReadOnlyField(source="freelancer.skill_category")
+    event_name = serializers.ReadOnlyField(source="event_department.event.name")
+    start_date = serializers.ReadOnlyField(source="event_department.event.start_date")
+    end_date = serializers.ReadOnlyField(source="event_department.event.end_date")
     cost_sheet = EventCostSheetSerializer(read_only=True)
 
     class Meta:
@@ -48,6 +51,9 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "event_department",
             "status",
             "role_description",
+            "event_name",
+            "start_date",
+            "end_date",
             "assigned_by",
             "cost_sheet",
             "created_at",
@@ -62,6 +68,7 @@ class MoUSerializer(serializers.ModelSerializer):
             "id",
             "allocation",
             "status",
+            "secure_token",
             "template_data",
             "expires_at",
             "access_code",
