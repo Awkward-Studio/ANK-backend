@@ -19,6 +19,15 @@ from .views import (
     FreelancerRatingDetail,
     accounts_summary,
     export_accounts_excel,
+    lock_event_manpower,
+    unlock_event_manpower,
+    event_lock_status,
+    InvoiceWorkflowList,
+    InvoiceWorkflowDetail,
+    invoice_transition,
+    issue_adjustment_secure_link,
+    public_adjustment_interaction,
+    ManpowerAuditLogList,
 )
 from .public_views import public_mou_interaction
 
@@ -57,6 +66,23 @@ urlpatterns = [
     # Accounts Dashboard
     path("accounts/summary/", accounts_summary, name="accounts-summary"),
     path("accounts/export/", export_accounts_excel, name="accounts-export"),
+
+    # Event lock controls
+    path("events/<uuid:event_id>/lock/", lock_event_manpower, name="manpower-event-lock"),
+    path("events/<uuid:event_id>/unlock/", unlock_event_manpower, name="manpower-event-unlock"),
+    path("events/<uuid:event_id>/lock-status/", event_lock_status, name="manpower-event-lock-status"),
+
+    # Invoices
+    path("invoices/", InvoiceWorkflowList.as_view(), name="invoice-list"),
+    path("invoices/<uuid:pk>/", InvoiceWorkflowDetail.as_view(), name="invoice-detail"),
+    path("invoices/<uuid:pk>/status/", invoice_transition, name="invoice-transition"),
+
+    # Adjustment secure links
+    path("allocations/<uuid:allocation_id>/issue-adjustment-link/", issue_adjustment_secure_link, name="allocation-issue-adjustment-link"),
+    path("public/adjustment/<uuid:token>/", public_adjustment_interaction, name="public-adjustment-interaction"),
+
+    # Audit logs
+    path("audit-logs/", ManpowerAuditLogList.as_view(), name="manpower-audit-logs"),
     
     # Public token-based endpoints for freelancers
     path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),

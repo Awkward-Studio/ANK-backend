@@ -85,6 +85,21 @@ def public_mou_interaction(request, token):
             {"error": "Invalid or expired token"}, status=status.HTTP_404_NOT_FOUND
         )
 
+    if mou.expires_at and mou.expires_at < timezone.now():
+        return Response(
+            {"error": "MoU link has expired"}, status=status.HTTP_410_GONE
+        )
+
+    expected_code = (mou.access_code or "").strip()
+    provided_code = str(
+        request.query_params.get("code") or request.data.get("access_code", "")
+    ).strip()
+    if expected_code and provided_code != expected_code:
+        return Response(
+            {"error": "Access code required or invalid"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     if request.method == "GET":
         # Return only necessary information for the freelancer
         data = {
@@ -97,6 +112,8 @@ def public_mou_interaction(request, token):
             "negotiated_rate": mou.allocation.cost_sheet.negotiated_rate,
             "days_planned": mou.allocation.cost_sheet.days_planned,
             "total_estimated_cost": mou.allocation.cost_sheet.total_estimated_cost,
+            "expires_at": mou.expires_at,
+            "requires_access_code": bool(expected_code),
         }
         return Response(data)
 
