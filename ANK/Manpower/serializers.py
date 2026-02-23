@@ -7,6 +7,9 @@ from .models import (
     MoU,
     PostEventAdjustment,
     FreelancerRating,
+    EventManpowerLock,
+    InvoiceWorkflow,
+    ManpowerAuditLog,
 )
 from Staff.serializers import UserSerializer
 
@@ -60,6 +63,8 @@ class MoUSerializer(serializers.ModelSerializer):
             "allocation",
             "status",
             "template_data",
+            "expires_at",
+            "access_code",
             "accepted_at",
             "signed_pdf",
             "created_at",
@@ -77,4 +82,37 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
 class FreelancerRatingSerializer(serializers.ModelSerializer):
     class Meta:
         model = FreelancerRating
+        fields = "__all__"
+
+
+class EventManpowerLockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventManpowerLock
+        fields = "__all__"
+        read_only_fields = [
+            "locked_by",
+            "locked_at",
+            "unlocked_by",
+            "unlocked_at",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class InvoiceWorkflowSerializer(serializers.ModelSerializer):
+    event_name = serializers.ReadOnlyField(source="event.name")
+    department_name = serializers.ReadOnlyField(source="event_department.department.name")
+    freelancer_name = serializers.ReadOnlyField(source="freelancer.name")
+
+    class Meta:
+        model = InvoiceWorkflow
+        fields = "__all__"
+        read_only_fields = ["approved_at", "payable_at", "paid_at", "created_at", "updated_at"]
+
+
+class ManpowerAuditLogSerializer(serializers.ModelSerializer):
+    actor_name = serializers.ReadOnlyField(source="actor.name")
+
+    class Meta:
+        model = ManpowerAuditLog
         fields = "__all__"

@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.utils import timezone
 
 
 class Freelancer(models.Model):
@@ -182,6 +183,8 @@ class MoU(models.Model):
     template_data = models.JSONField(
         default=dict, help_text="Snapshot of terms at time of issue"
     )
+    expires_at = models.DateTimeField(null=True, blank=True)
+    access_code = models.CharField(max_length=12, blank=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
     signed_pdf = models.FileField(upload_to="mous/", null=True, blank=True)
 
@@ -209,6 +212,9 @@ class PostEventAdjustment(models.Model):
     extra_allowances = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
+    override_negotiated_rate = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     revised_total = models.DecimalField(
         max_digits=15, decimal_places=2, default=Decimal("0.00")
     )
@@ -216,6 +222,8 @@ class PostEventAdjustment(models.Model):
     admin_approval_status = models.CharField(
         max_length=20, choices=APPROVAL_STATUS_CHOICES, default="pending"
     )
+    secure_token = models.UUIDField(default=uuid.uuid4, unique=True)
+    freelancer_submitted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -223,8 +231,9 @@ class PostEventAdjustment(models.Model):
     def save(self, *args, **kwargs):
         # Auto-compute revised_total from allocation cost sheet and adjustments
         cost_sheet = self.allocation.cost_sheet
+        per_day_rate = self.override_negotiated_rate or cost_sheet.negotiated_rate
         self.revised_total = (
-            (cost_sheet.negotiated_rate * self.actual_days_worked)
+            (per_day_rate * self.actual_days_worked)
             + (cost_sheet.daily_allowance * self.actual_days_worked)
             + cost_sheet.travel_costs
             + self.extra_allowances
@@ -268,3 +277,139 @@ class FreelancerRating(models.Model):
         if avg_score is not None:
             self.freelancer.average_rating = Decimal(str(round(avg_score, 2)))
             self.freelancer.save(update_fields=["average_rating"])
+
+
+class EventManpowerLock(models.Model):
+    event = models.OneToOneField(
+        "Events.Event",
+        on_delete=models.CASCADE,
+        related_name="manpower_lock",
+    )
+    is_locked = models.BooleanField(default=False)
+    reason = models.TextField(blank=True)
+    locked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manpower_locks_created",
+    )
+    locked_at = models.DateTimeField(null=True, blank=True)
+    unlocked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manpower_locks_released",
+    )
+    unlocked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def lock(self, user, reason=""):
+        self.is_locked = True
+        self.reason = reason or ""
+        self.locked_by = user
+        self.locked_at = timezone.now()
+        self.unlocked_by = None
+        self.unlocked_at = None
+        self.save()
+
+    def unlock(self, user):
+        self.is_locked = False
+        self.unlocked_by = user
+        self.unlocked_at = timezone.now()
+        self.save()
+
+
+class InvoiceWorkflow(models.Model):
+    STATUS_CHOICES = [
+        ("draft", "Draft"),
+        ("submitted", "Submitted"),
+        ("approved", "Approved"),
+        ("payable", "Payable"),
+        ("paid", "Paid"),
+    ]
+
+    VALID_TRANSITIONS = {
+        "draft": {"submitted"},
+        "submitted": {"approved"},
+        "approved": {"payable"},
+        "payable": {"paid"},
+        "paid": set(),
+    }
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    adjustment = models.OneToOneField(
+        PostEventAdjustment, on_delete=models.CASCADE, related_name="invoice_workflow"
+    )
+    event = models.ForeignKey(
+        "Events.Event", on_delete=models.CASCADE, related_name="manpower_invoices"
+    )
+    event_department = models.ForeignKey(
+        "Departments.EventDepartment",
+        on_delete=models.CASCADE,
+        related_name="manpower_invoices",
+    )
+    freelancer = models.ForeignKey(
+        Freelancer, on_delete=models.CASCADE, related_name="invoices"
+    )
+    invoice_number = models.CharField(max_length=64, unique=True)
+    due_date = models.DateField(null=True, blank=True)
+    payable_amount = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal("0.00")
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    payable_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    paid_reference = models.CharField(max_length=120, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.invoice_number} ({self.status})"
+
+    def transition_to(self, new_status):
+        if new_status == self.status:
+            return
+        if new_status not in self.VALID_TRANSITIONS.get(self.status, set()):
+            raise ValueError(f"Invalid transition from {self.status} to {new_status}")
+        self.status = new_status
+        now = timezone.now()
+        if new_status == "approved":
+            self.approved_at = now
+        elif new_status == "payable":
+            self.payable_at = now
+        elif new_status == "paid":
+            self.paid_at = now
+
+
+class ManpowerAuditLog(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(
+        "Events.Event",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manpower_audit_logs",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manpower_audit_actions",
+    )
+    action = models.CharField(max_length=120)
+    target_model = models.CharField(max_length=120)
+    target_id = models.CharField(max_length=64)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]

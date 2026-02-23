@@ -1,12 +1,15 @@
+import uuid
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework import status, filters
 from rest_framework.views import APIView
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.db.models import Sum, Count, F, Avg
+from django.db.models import Sum, Count, F, Avg, Q
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, Http404
 import openpyxl
 from openpyxl.styles import Font
 from django_filters.rest_framework import DjangoFilterBackend
@@ -28,6 +31,9 @@ from .models import (
     MoU,
     PostEventAdjustment,
     FreelancerRating,
+    EventManpowerLock,
+    InvoiceWorkflow,
+    ManpowerAuditLog,
 )
 from .serializers import (
     FreelancerSerializer,
@@ -37,7 +43,151 @@ from .serializers import (
     MoUSerializer,
     PostEventAdjustmentSerializer,
     FreelancerRatingSerializer,
+    EventManpowerLockSerializer,
+    InvoiceWorkflowSerializer,
+    ManpowerAuditLogSerializer,
 )
+
+ADMIN_ROLES = {"admin", "super_admin"}
+
+
+def _has_any_role(request, allowed_roles):
+    return getattr(request.user, "role", None) in allowed_roles
+
+
+def _require_role(request, allowed_roles):
+    if not _has_any_role(request, allowed_roles):
+        return Response(
+            {"detail": "You do not have permission to perform this action."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _get_accounts_event_ids_for_user(user):
+    from Departments.models import EventDepartment
+
+    if user.role in ADMIN_ROLES:
+        return None  # Global access
+
+    # Department heads of Accounts get access across all Accounts event-departments.
+    if user.role == "department_head" and user.department and user.department.slug == "accounts":
+        return set(
+            EventDepartment.objects.filter(department__slug="accounts").values_list(
+                "event_id", flat=True
+            )
+        )
+
+    # Staff get access via explicit event-department assignment in Accounts department.
+    return set(
+        EventDepartment.objects.filter(
+            department__slug="accounts",
+            staff_assignments__user=user,
+        ).values_list("event_id", flat=True)
+    )
+
+
+def _filter_to_accounts_scope(request, qs, event_field):
+    event_ids = _get_accounts_event_ids_for_user(request.user)
+    if event_ids is None:
+        return qs
+    if not event_ids:
+        return qs.none()
+    return qs.filter(**{f"{event_field}__in": event_ids})
+
+
+def _require_accounts_access(request):
+    if request.user.role in ADMIN_ROLES:
+        return None
+    event_ids = _get_accounts_event_ids_for_user(request.user)
+    if event_ids:
+        return None
+    return Response(
+        {"detail": "Accounts department assignment required."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def _can_manage_manpower_event(user, event_id):
+    from Departments.models import EventDepartment
+
+    if user.role in ADMIN_ROLES:
+        return True
+
+    if user.role == "department_head" and user.department and user.department.slug == "accounts":
+        return EventDepartment.objects.filter(
+            event_id=event_id, department__slug="accounts"
+        ).exists()
+
+    if user.role == "staff":
+        return EventDepartment.objects.filter(
+            event_id=event_id,
+            department__slug="accounts",
+            staff_assignments__user=user,
+        ).exists()
+
+    return False
+
+
+def _require_manpower_event_access(request, event_id):
+    if _can_manage_manpower_event(request.user, event_id):
+        return None
+    return Response(
+        {"detail": "Accounts event-department assignment required for this event."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def _event_id_from_event_department_id(event_department_id):
+    from Departments.models import EventDepartment
+
+    if not event_department_id:
+        return None
+    event_department = EventDepartment.objects.select_related("event").filter(
+        id=event_department_id
+    ).first()
+    return getattr(event_department, "event_id", None)
+
+
+def _is_event_locked(event_id):
+    if not event_id:
+        return False
+    lock = EventManpowerLock.objects.filter(event_id=event_id).first()
+    return bool(lock and lock.is_locked)
+
+
+def _check_lock_or_override(request, event_id):
+    if not _is_event_locked(event_id):
+        return None
+
+    is_admin = _has_any_role(request, ADMIN_ROLES)
+    override = bool(request.data.get("admin_override")) if hasattr(request, "data") else False
+    if is_admin and override:
+        return None
+
+    return Response(
+        {
+            "detail": "Manpower changes are locked for this event.",
+            "event_id": str(event_id),
+            "requires_admin_override": True,
+        },
+        status=status.HTTP_423_LOCKED,
+    )
+
+
+def _log_action(request, action, target_obj, event_id=None, details=None):
+    try:
+        ManpowerAuditLog.objects.create(
+            event_id=event_id,
+            actor=request.user if getattr(request, "user", None) and request.user.is_authenticated else None,
+            action=action,
+            target_model=target_obj.__class__.__name__,
+            target_id=str(target_obj.pk),
+            details=details or {},
+        )
+    except Exception:
+        # Avoid failing business flow due to audit logging issues.
+        pass
 
 
 @document_api_view(
@@ -64,6 +214,9 @@ class FreelancerList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
         try:
             qs = Freelancer.objects.filter(is_active=True)
             
@@ -78,9 +231,9 @@ class FreelancerList(APIView):
                 qs = qs.filter(city=city)
             if search:
                 qs = qs.filter(
-                    F("name").icontains(search) | 
-                    F("email").icontains(search) | 
-                    F("contact_phone").icontains(search)
+                    Q(name__icontains=search)
+                    | Q(email__icontains=search)
+                    | Q(contact_phone__icontains=search)
                 )
             
             # Ordering
@@ -91,6 +244,8 @@ class FreelancerList(APIView):
                 qs = qs.order_by("name")
 
             return Response(FreelancerSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching freelancers", "error": str(e)},
@@ -98,11 +253,17 @@ class FreelancerList(APIView):
             )
 
     def post(self, request):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
         try:
             ser = FreelancerSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "freelancer_created", obj, details={"name": obj.name})
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating freelancer", "error": str(e)},
@@ -130,9 +291,14 @@ class FreelancerDetail(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
         try:
             obj = get_object_or_404(Freelancer, pk=pk)
             return Response(FreelancerSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching freelancer", "error": str(e)},
@@ -140,12 +306,18 @@ class FreelancerDetail(APIView):
             )
 
     def put(self, request, pk):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
         try:
             obj = get_object_or_404(Freelancer, pk=pk)
             ser = FreelancerSerializer(obj, data=request.data, partial=True)
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "freelancer_updated", updated, details={"name": updated.name})
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating freelancer", "error": str(e)},
@@ -153,11 +325,17 @@ class FreelancerDetail(APIView):
             )
 
     def delete(self, request, pk):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
         try:
             obj = get_object_or_404(Freelancer, pk=pk)
             obj.is_active = False
             obj.save()
+            _log_action(request, "freelancer_deactivated", obj, details={"name": obj.name})
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deactivating freelancer", "error": str(e)},
@@ -191,9 +369,12 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return ManpowerRequirement.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
             ed = request.query_params.get("event_department")
             stat = request.query_params.get("status")
@@ -207,6 +388,8 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(skill_category=skill)
                 
             return Response(ManpowerRequirementSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching requirements", "error": str(e)},
@@ -214,11 +397,27 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
             )
 
     def post(self, request):
+        event_id = _event_id_from_event_department_id(request.data.get("event_department"))
+        denied = _require_manpower_event_access(request, event_id)
+        if denied:
+            return denied
         try:
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = ManpowerRequirementSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(
+                request,
+                "requirement_created",
+                obj,
+                event_id=event_id,
+                details={"skill_category": obj.skill_category, "quantity_required": obj.quantity_required},
+            )
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating requirement", "error": str(e)},
@@ -248,11 +447,19 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return ManpowerRequirement.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.event_department.event_id)
+            if denied:
+                return denied
             return Response(ManpowerRequirementSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching requirement", "error": str(e)},
@@ -263,10 +470,20 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = ManpowerRequirementSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "requirement_updated", updated, event_id=event_id)
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating requirement", "error": str(e)},
@@ -277,8 +494,18 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             obj.delete()
+            _log_action(request, "requirement_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting requirement", "error": str(e)},
@@ -312,9 +539,12 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return FreelancerAllocation.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
             ed = request.query_params.get("event_department")
             free = request.query_params.get("freelancer")
@@ -328,6 +558,8 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(status=stat)
                 
             return Response(FreelancerAllocationSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching allocations", "error": str(e)},
@@ -335,11 +567,21 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
             )
 
     def post(self, request):
+        event_id = _event_id_from_event_department_id(request.data.get("event_department"))
+        denied = _require_manpower_event_access(request, event_id)
+        if denied:
+            return denied
         try:
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = FreelancerAllocationSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "allocation_created", obj, event_id=event_id, details={"status": obj.status})
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating allocation", "error": str(e)},
@@ -369,11 +611,19 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return FreelancerAllocation.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.event_department.event_id)
+            if denied:
+                return denied
             return Response(FreelancerAllocationSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching allocation", "error": str(e)},
@@ -384,10 +634,20 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = FreelancerAllocationSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "allocation_updated", updated, event_id=event_id, details={"status": updated.status})
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating allocation", "error": str(e)},
@@ -398,8 +658,18 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             obj.delete()
+            _log_action(request, "allocation_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting allocation", "error": str(e)},
@@ -413,9 +683,24 @@ def confirm_allocation(request, pk):
     """Confirm a freelancer allocation."""
     try:
         allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+        if denied:
+            return denied
+        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+        if lock_error:
+            return lock_error
         allocation.status = "confirmed"
         allocation.save()
+        _log_action(
+            request,
+            "allocation_confirmed",
+            allocation,
+            event_id=allocation.event_department.event_id,
+            details={"status": "confirmed"},
+        )
         return Response({"status": "confirmed"})
+    except Http404:
+        return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response(
             {"detail": "Error confirming allocation", "error": str(e)},
@@ -429,9 +714,24 @@ def release_allocation(request, pk):
     """Release a freelancer allocation."""
     try:
         allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+        if denied:
+            return denied
+        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+        if lock_error:
+            return lock_error
         allocation.status = "released"
         allocation.save()
+        _log_action(
+            request,
+            "allocation_released",
+            allocation,
+            event_id=allocation.event_department.event_id,
+            details={"status": "released"},
+        )
         return Response({"status": "released"})
+    except Http404:
+        return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response(
             {"detail": "Error releasing allocation", "error": str(e)},
@@ -445,20 +745,36 @@ def generate_mou(request, pk):
     """Generate or update MoU for an allocation and transition it to sent."""
     try:
         allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+        if denied:
+            return denied
+        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+        if lock_error:
+            return lock_error
         mou, created = MoU.objects.get_or_create(
             allocation=allocation,
             defaults={"status": "draft", "template_data": {"terms": "Standard MoU terms..."}}
         )
         if mou.status == "draft":
             mou.status = "sent"
+            if not getattr(mou, "expires_at", None):
+                mou.expires_at = timezone.now() + timedelta(days=7)
             mou.save()
             # TODO: Notification - Send the secure token link via Email/WhatsApp to the freelancer
-            
+        _log_action(
+            request,
+            "mou_generated",
+            mou,
+            event_id=allocation.event_department.event_id,
+            details={"allocation_id": str(allocation.id), "status": mou.status},
+        )
         return Response({
             "status": "mou_sent",
             "mou_id": mou.id,
             "secure_link": f"/mou/{mou.secure_token}"
         })
+    except Http404:
+        return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response(
             {"detail": "Error generating MoU", "error": str(e)},
@@ -491,9 +807,12 @@ class EventCostSheetList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return EventCostSheet.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "allocation__event_department__event_id")
             
             alloc = request.query_params.get("allocation")
             budget = request.query_params.get("budget_item")
@@ -504,6 +823,8 @@ class EventCostSheetList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(budget_item_id=budget)
                 
             return Response(EventCostSheetSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching cost sheets", "error": str(e)},
@@ -512,10 +833,23 @@ class EventCostSheetList(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
+            allocation = FreelancerAllocation.objects.select_related("event_department").filter(
+                id=request.data.get("allocation")
+            ).first()
+            event_id = allocation.event_department.event_id if allocation else None
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = EventCostSheetSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "cost_sheet_created", obj, event_id=event_id)
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating cost sheet", "error": str(e)},
@@ -545,11 +879,19 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return EventCostSheet.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
+            if denied:
+                return denied
             return Response(EventCostSheetSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching cost sheet", "error": str(e)},
@@ -560,10 +902,20 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = EventCostSheetSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "cost_sheet_updated", updated, event_id=event_id)
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating cost sheet", "error": str(e)},
@@ -574,8 +926,18 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             obj.delete()
+            _log_action(request, "cost_sheet_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting cost sheet", "error": str(e)},
@@ -608,9 +970,12 @@ class MoUList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return MoU.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "allocation__event_department__event_id")
             
             alloc = request.query_params.get("allocation")
             stat = request.query_params.get("status")
@@ -621,6 +986,8 @@ class MoUList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(status=stat)
                 
             return Response(MoUSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching MoUs", "error": str(e)},
@@ -629,10 +996,20 @@ class MoUList(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
+            allocation = FreelancerAllocation.objects.select_related("event_department").filter(
+                id=request.data.get("allocation")
+            ).first()
+            event_id = allocation.event_department.event_id if allocation else None
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
             ser = MoUSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "mou_created", obj, event_id=obj.allocation.event_department.event_id)
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating MoU", "error": str(e)},
@@ -662,11 +1039,19 @@ class MoUDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return MoU.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
+            if denied:
+                return denied
             return Response(MoUSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching MoU", "error": str(e)},
@@ -677,10 +1062,16 @@ class MoUDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
+            if denied:
+                return denied
             ser = MoUSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "mou_updated", updated, event_id=updated.allocation.event_department.event_id)
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating MoU", "error": str(e)},
@@ -691,8 +1082,13 @@ class MoUDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
+            if denied:
+                return denied
             obj.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting MoU", "error": str(e)},
@@ -725,9 +1121,12 @@ class PostEventAdjustmentList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return PostEventAdjustment.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "allocation__event_department__event_id")
             
             alloc = request.query_params.get("allocation")
             stat = request.query_params.get("admin_approval_status")
@@ -738,6 +1137,8 @@ class PostEventAdjustmentList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(admin_approval_status=stat)
                 
             return Response(PostEventAdjustmentSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching adjustments", "error": str(e)},
@@ -746,10 +1147,23 @@ class PostEventAdjustmentList(DepartmentAccessMixin, APIView):
 
     def post(self, request):
         try:
+            allocation = FreelancerAllocation.objects.select_related("event_department").filter(
+                id=request.data.get("allocation")
+            ).first()
+            event_id = allocation.event_department.event_id if allocation else None
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = PostEventAdjustmentSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "adjustment_created", obj, event_id=event_id)
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating adjustment", "error": str(e)},
@@ -779,11 +1193,19 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return PostEventAdjustment.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
+            if denied:
+                return denied
             return Response(PostEventAdjustmentSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching adjustment", "error": str(e)},
@@ -794,10 +1216,20 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             ser = PostEventAdjustmentSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            updated = ser.save()
+            _log_action(request, "adjustment_updated", updated, event_id=event_id)
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating adjustment", "error": str(e)},
@@ -808,8 +1240,18 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            event_id = obj.allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             obj.delete()
+            _log_action(request, "adjustment_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting adjustment", "error": str(e)},
@@ -843,9 +1285,12 @@ class FreelancerRatingList(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return FreelancerRating.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_id")
             
             free = request.query_params.get("freelancer")
             ev = request.query_params.get("event")
@@ -859,6 +1304,8 @@ class FreelancerRatingList(DepartmentAccessMixin, APIView):
                 qs = qs.filter(score=score)
                 
             return Response(FreelancerRatingSerializer(qs, many=True).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching ratings", "error": str(e)},
@@ -866,11 +1313,17 @@ class FreelancerRatingList(DepartmentAccessMixin, APIView):
             )
 
     def post(self, request):
+        denied = _require_manpower_event_access(request, request.data.get("event"))
+        if denied:
+            return denied
         try:
             ser = FreelancerRatingSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            ser.save()
+            obj = ser.save()
+            _log_action(request, "freelancer_rating_created", obj, event_id=obj.event_id, details={"score": obj.score})
             return Response(ser.data, status=status.HTTP_201_CREATED)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error creating rating", "error": str(e)},
@@ -900,11 +1353,19 @@ class FreelancerRatingDetail(DepartmentAccessMixin, APIView):
     def get_base_queryset(self):
         return FreelancerRating.objects.all()
 
+    def get_queryset(self):
+        return self.get_base_queryset()
+
     def get(self, request, pk):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.event_id)
+            if denied:
+                return denied
             return Response(FreelancerRatingSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error fetching rating", "error": str(e)},
@@ -915,10 +1376,15 @@ class FreelancerRatingDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.event_id)
+            if denied:
+                return denied
             ser = FreelancerRatingSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error updating rating", "error": str(e)},
@@ -929,8 +1395,13 @@ class FreelancerRatingDetail(DepartmentAccessMixin, APIView):
         try:
             qs = self.get_queryset()
             obj = get_object_or_404(qs, pk=pk)
+            denied = _require_manpower_event_access(request, obj.event_id)
+            if denied:
+                return denied
             obj.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"detail": "Error deleting rating", "error": str(e)},
@@ -942,9 +1413,29 @@ class FreelancerRatingDetail(DepartmentAccessMixin, APIView):
 @permission_classes([IsAuthenticated])
 def accounts_summary(request):
     try:
+        denied = _require_accounts_access(request)
+        if denied:
+            return denied
         pending_payments = PostEventAdjustment.objects.filter(
             admin_approval_status="approved"
         ).select_related("allocation__freelancer", "allocation__event_department__event")
+        pending_payments = _filter_to_accounts_scope(
+            request, pending_payments, "allocation__event_department__event_id"
+        )
+
+        event_id = request.query_params.get("event")
+        department_id = request.query_params.get("department")
+        freelancer_id = request.query_params.get("freelancer")
+        status_filter = request.query_params.get("status")
+
+        if event_id:
+            pending_payments = pending_payments.filter(allocation__event_department__event_id=event_id)
+        if department_id:
+            pending_payments = pending_payments.filter(allocation__event_department__department_id=department_id)
+        if freelancer_id:
+            pending_payments = pending_payments.filter(allocation__freelancer_id=freelancer_id)
+        if status_filter:
+            pending_payments = pending_payments.filter(admin_approval_status=status_filter)
 
         event_totals = pending_payments.values(
             event_name=F("allocation__event_department__event__name")
@@ -980,6 +1471,9 @@ def export_accounts_excel(request):
     Export all approved vendor liabilities to an Excel file.
     """
     try:
+        denied = _require_accounts_access(request)
+        if denied:
+            return denied
         # Fetch approved adjustments
         pending_payments = PostEventAdjustment.objects.filter(
             admin_approval_status="approved"
@@ -988,6 +1482,20 @@ def export_accounts_excel(request):
             "allocation__event_department__event",
             "allocation__event_department__department"
         ).order_by("allocation__event_department__event__name")
+        pending_payments = _filter_to_accounts_scope(
+            request, pending_payments, "allocation__event_department__event_id"
+        )
+
+        event_id = request.query_params.get("event")
+        department_id = request.query_params.get("department")
+        freelancer_id = request.query_params.get("freelancer")
+
+        if event_id:
+            pending_payments = pending_payments.filter(allocation__event_department__event_id=event_id)
+        if department_id:
+            pending_payments = pending_payments.filter(allocation__event_department__department_id=department_id)
+        if freelancer_id:
+            pending_payments = pending_payments.filter(allocation__freelancer_id=freelancer_id)
 
         # Create workbook
         wb = openpyxl.Workbook()
@@ -1030,3 +1538,227 @@ def export_accounts_excel(request):
             {"detail": "Error generating Excel report", "error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def lock_event_manpower(request, event_id):
+    denied = _require_role(request, ADMIN_ROLES)
+    if denied:
+        return denied
+
+    lock, _ = EventManpowerLock.objects.get_or_create(event_id=event_id)
+    lock.lock(request.user, request.data.get("reason", ""))
+    _log_action(request, "event_manpower_locked", lock, event_id=event_id, details={"reason": lock.reason})
+    return Response(EventManpowerLockSerializer(lock).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def unlock_event_manpower(request, event_id):
+    denied = _require_role(request, ADMIN_ROLES)
+    if denied:
+        return denied
+
+    lock, _ = EventManpowerLock.objects.get_or_create(event_id=event_id)
+    lock.unlock(request.user)
+    _log_action(request, "event_manpower_unlocked", lock, event_id=event_id)
+    return Response(EventManpowerLockSerializer(lock).data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def event_lock_status(request, event_id):
+    lock, _ = EventManpowerLock.objects.get_or_create(event_id=event_id)
+    return Response(EventManpowerLockSerializer(lock).data)
+
+
+class InvoiceWorkflowList(DepartmentAccessMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_base_queryset(self):
+        return InvoiceWorkflow.objects.select_related("event", "event_department__department", "freelancer", "adjustment")
+
+    def get_queryset(self):
+        return self.get_base_queryset()
+
+    def get(self, request):
+        denied = _require_accounts_access(request)
+        if denied:
+            return denied
+        qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_id")
+        if request.query_params.get("event"):
+            qs = qs.filter(event_id=request.query_params["event"])
+        if request.query_params.get("department"):
+            qs = qs.filter(event_department__department_id=request.query_params["department"])
+        if request.query_params.get("freelancer"):
+            qs = qs.filter(freelancer_id=request.query_params["freelancer"])
+        if request.query_params.get("status"):
+            qs = qs.filter(status=request.query_params["status"])
+        return Response(InvoiceWorkflowSerializer(qs, many=True).data)
+
+    def post(self, request):
+        adjustment = get_object_or_404(PostEventAdjustment, pk=request.data.get("adjustment"))
+        denied = _require_manpower_event_access(request, adjustment.allocation.event_department.event_id)
+        if denied:
+            return denied
+        if adjustment.admin_approval_status != "approved":
+            return Response(
+                {"detail": "Invoice can only be created from approved adjustments."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        existing = InvoiceWorkflow.objects.filter(adjustment=adjustment).first()
+        if existing:
+            return Response(InvoiceWorkflowSerializer(existing).data, status=status.HTTP_200_OK)
+
+        invoice_number = request.data.get("invoice_number") or f"INV-{timezone.now().strftime('%Y%m%d')}-{str(adjustment.id)[:8].upper()}"
+        payload = dict(request.data)
+        payload.update(
+            {
+                "event": adjustment.allocation.event_department.event_id,
+                "event_department": adjustment.allocation.event_department_id,
+                "freelancer": adjustment.allocation.freelancer_id,
+                "payable_amount": adjustment.revised_total,
+                "invoice_number": invoice_number,
+                "status": "draft",
+            }
+        )
+        ser = InvoiceWorkflowSerializer(data=payload)
+        ser.is_valid(raise_exception=True)
+        obj = ser.save(adjustment=adjustment)
+        _log_action(request, "invoice_created", obj, event_id=obj.event_id, details={"status": obj.status})
+        return Response(InvoiceWorkflowSerializer(obj).data, status=status.HTTP_201_CREATED)
+
+
+class InvoiceWorkflowDetail(DepartmentAccessMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_base_queryset(self):
+        return InvoiceWorkflow.objects.select_related("event", "event_department__department", "freelancer", "adjustment")
+
+    def get_queryset(self):
+        return self.get_base_queryset()
+
+    def get(self, request, pk):
+        denied = _require_accounts_access(request)
+        if denied:
+            return denied
+        obj = get_object_or_404(_filter_to_accounts_scope(request, self.get_queryset(), "event_id"), pk=pk)
+        return Response(InvoiceWorkflowSerializer(obj).data)
+
+    def put(self, request, pk):
+        denied = _require_accounts_access(request)
+        if denied:
+            return denied
+        obj = get_object_or_404(_filter_to_accounts_scope(request, self.get_queryset(), "event_id"), pk=pk)
+        ser = InvoiceWorkflowSerializer(obj, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        updated = ser.save()
+        _log_action(request, "invoice_updated", updated, event_id=updated.event_id)
+        return Response(InvoiceWorkflowSerializer(updated).data)
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def invoice_transition(request, pk):
+    denied = _require_accounts_access(request)
+    if denied:
+        return denied
+    obj = get_object_or_404(InvoiceWorkflow, pk=pk)
+    allowed_event_ids = _get_accounts_event_ids_for_user(request.user)
+    if allowed_event_ids is not None and obj.event_id not in allowed_event_ids:
+        return Response(
+            {"detail": "Accounts department assignment required for this event."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    new_status = request.data.get("status")
+    if new_status not in dict(InvoiceWorkflow.STATUS_CHOICES):
+        return Response({"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        obj.transition_to(new_status)
+    except ValueError as err:
+        return Response({"detail": str(err)}, status=status.HTTP_400_BAD_REQUEST)
+    if new_status == "paid" and request.data.get("paid_reference"):
+        obj.paid_reference = request.data["paid_reference"]
+    obj.save()
+    _log_action(request, "invoice_transitioned", obj, event_id=obj.event_id, details={"status": obj.status})
+    return Response(InvoiceWorkflowSerializer(obj).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def issue_adjustment_secure_link(request, allocation_id):
+    allocation = get_object_or_404(FreelancerAllocation, pk=allocation_id)
+    denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+    if denied:
+        return denied
+    adjustment, _ = PostEventAdjustment.objects.get_or_create(allocation=allocation)
+    if not adjustment.secure_token:
+        adjustment.secure_token = uuid.uuid4()
+        adjustment.save(update_fields=["secure_token"])
+    return Response(
+        {
+            "adjustment_id": adjustment.id,
+            "secure_token": adjustment.secure_token,
+            "secure_link": f"/adjustment/{adjustment.secure_token}",
+        }
+    )
+
+
+@api_view(["GET", "POST"])
+@permission_classes([AllowAny])
+def public_adjustment_interaction(request, token):
+    try:
+        adjustment = PostEventAdjustment.objects.select_related(
+            "allocation__freelancer",
+            "allocation__event_department__event",
+            "allocation__cost_sheet",
+        ).get(secure_token=token)
+    except (PostEventAdjustment.DoesNotExist, ValueError):
+        return Response({"error": "Invalid token"}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "GET":
+        return Response(
+            {
+                "id": adjustment.id,
+                "event_name": adjustment.allocation.event_department.event.name,
+                "freelancer_name": adjustment.allocation.freelancer.name,
+                "actual_days_worked": adjustment.actual_days_worked,
+                "extra_allowances": adjustment.extra_allowances,
+                "override_negotiated_rate": adjustment.override_negotiated_rate,
+                "freelancer_comments": adjustment.freelancer_comments,
+                "freelancer_submitted_at": adjustment.freelancer_submitted_at,
+                "status": adjustment.admin_approval_status,
+            }
+        )
+
+    if adjustment.freelancer_submitted_at:
+        return Response(
+            {"error": "Adjustment has already been submitted."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allowed_fields = {
+        "actual_days_worked",
+        "extra_allowances",
+        "override_negotiated_rate",
+        "freelancer_comments",
+    }
+    updates = {k: v for k, v in request.data.items() if k in allowed_fields}
+    ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
+    ser.is_valid(raise_exception=True)
+    ser.save(freelancer_submitted_at=timezone.now())
+    return Response({"status": "submitted", "adjustment_id": adjustment.id})
+
+
+class ManpowerAuditLogList(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
+        qs = ManpowerAuditLog.objects.select_related("actor", "event")
+        if request.query_params.get("event"):
+            qs = qs.filter(event_id=request.query_params["event"])
+        return Response(ManpowerAuditLogSerializer(qs[:500], many=True).data)
