@@ -40,6 +40,7 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
     mou_status = serializers.SerializerMethodField()
     mou_token = serializers.SerializerMethodField()
     cost_sheet = EventCostSheetSerializer(read_only=True)
+    adjustment = PostEventAdjustmentSerializer(read_only=True)
 
     class Meta:
         model = FreelancerAllocation
@@ -59,6 +60,8 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "mou_token",
             "assigned_by",
             "cost_sheet",
+            "adjustment",
+            "is_rated",
             "created_at",
             "updated_at",
         ]
