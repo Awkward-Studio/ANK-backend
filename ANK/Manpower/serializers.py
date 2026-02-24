@@ -46,6 +46,7 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
     invoice_status = serializers.ReadOnlyField(source="invoice_workflow.status")
     allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
+    planned_rate = serializers.ReadOnlyField(source="allocation.cost_sheet.negotiated_rate")
     revisions = PostEventAdjustmentRevisionSerializer(many=True, read_only=True)
 
     class Meta:
