@@ -183,7 +183,7 @@ def public_mou_interaction(request, token):
                 "daily_allowance": mou.allocation.cost_sheet.daily_allowance, "total_estimated_cost": mou.allocation.cost_sheet.total_estimated_cost,
             },
             "expires_at": mou.expires_at, "requires_access_code": bool(expected_code),
-            "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None,
+            "signed_pdf_url": f"/api/manpower/public/mou/{token}/pdf/" if mou.status == "accepted" else None,
             "download_url": f"/api/manpower/public/mou/{token}/pdf/",
         }
         return Response(data)
@@ -203,7 +203,7 @@ def public_mou_interaction(request, token):
             else:
                 mou.status = "rejected"
             mou.save()
-            return Response({"status": mou.status, "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None})
+            return Response({"status": mou.status, "signed_pdf_url": f"/api/manpower/public/mou/{token}/pdf/" if mou.status == "accepted" else None})
         except Exception as e:
             logger.exception("Error processing MoU response")
             return Response({"error": f"Internal server error: {str(e)}"}, status=500)
