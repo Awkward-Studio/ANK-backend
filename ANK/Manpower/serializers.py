@@ -10,6 +10,7 @@ from .models import (
     EventManpowerLock,
     InvoiceWorkflow,
     ManpowerAuditLog,
+    PostEventAdjustmentRevision,
 )
 from Staff.serializers import UserSerializer
 
@@ -33,11 +34,19 @@ class ManpowerRequirementSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+
+class PostEventAdjustmentRevisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PostEventAdjustmentRevision
+        fields = "__all__"
+
+
 class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
     event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
     invoice_status = serializers.ReadOnlyField(source="invoice_workflow.status")
     allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
+    revisions = PostEventAdjustmentRevisionSerializer(many=True, read_only=True)
 
     class Meta:
         model = PostEventAdjustment

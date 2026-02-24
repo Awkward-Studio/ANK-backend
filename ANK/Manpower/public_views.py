@@ -44,7 +44,7 @@ def clean_text(text):
     }
     for unicode_char, replacement in replacements.items():
         text = text.replace(unicode_char, replacement)
-    return text.encode("latin-1", "replace").decode("latin-1")
+    return str(text).encode("latin-1", "replace").decode("latin-1")
 
 
 def generate_mou_pdf(mou):
@@ -197,9 +197,6 @@ def public_mou_interaction(request, token):
             if action == "accept":
                 mou.status = "accepted"
                 mou.accepted_at = timezone.now()
-                pdf_content = generate_mou_pdf(mou)
-                filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}_{mou.id}.pdf"
-                mou.signed_pdf.save(filename, ContentFile(pdf_content), save=False)
             else:
                 mou.status = "rejected"
             mou.save()
