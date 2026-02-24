@@ -91,6 +91,8 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "cost_sheet",
             "adjustment",
             "is_rated",
+            "allocation_id",
+            "rating_score",
             "created_at",
             "updated_at",
         ]
