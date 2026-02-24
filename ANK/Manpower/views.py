@@ -30,6 +30,7 @@ from .models import (
     EventCostSheet,
     MoU,
     PostEventAdjustment,
+    PostEventAdjustmentRevision,
     FreelancerRating,
     EventManpowerLock,
     InvoiceWorkflow,
