@@ -1700,6 +1700,7 @@ def issue_adjustment_secure_link(request, allocation_id):
     if not adjustment.freelancer_submitted_at:
         cost = allocation.cost_sheet
         adjustment.actual_days_worked = cost.days_planned
+        adjustment.actual_daily_allowance = cost.daily_allowance
         adjustment.override_negotiated_rate = cost.negotiated_rate
         if not adjustment.secure_token:
             adjustment.secure_token = uuid.uuid4()
@@ -1738,8 +1739,9 @@ def public_adjustment_interaction(request, token):
                 "planned_days": adjustment.allocation.cost_sheet.days_planned,
                 "planned_rate": adjustment.allocation.cost_sheet.negotiated_rate,
                 "planned_allowance": adjustment.allocation.cost_sheet.daily_allowance,
-                "actual_days_worked": adjustment.actual_days_worked or adjustment.allocation.cost_sheet.days_planned,
-                "extra_allowances": adjustment.extra_allowances,
+                "actual_days_worked": adjustment.actual_days_worked,
+                "actual_daily_allowance": adjustment.actual_daily_allowance,
+                "other_adjustments": adjustment.other_adjustments,
                 "override_negotiated_rate": adjustment.override_negotiated_rate,
                 "freelancer_comments": adjustment.freelancer_comments,
                 "freelancer_submitted_at": adjustment.freelancer_submitted_at,
@@ -1755,7 +1757,8 @@ def public_adjustment_interaction(request, token):
 
     allowed_fields = {
         "actual_days_worked",
-        "extra_allowances",
+        "actual_daily_allowance",
+        "other_adjustments",
         "override_negotiated_rate",
         "freelancer_comments",
     }

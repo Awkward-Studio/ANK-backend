@@ -216,7 +216,10 @@ class PostEventAdjustment(models.Model):
     actual_days_worked = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0")
     )
-    extra_allowances = models.DecimalField(
+    actual_daily_allowance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+    other_adjustments = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
     override_negotiated_rate = models.DecimalField(
@@ -238,12 +241,13 @@ class PostEventAdjustment(models.Model):
     def save(self, *args, **kwargs):
         # Auto-compute revised_total from allocation cost sheet and adjustments
         cost_sheet = self.allocation.cost_sheet
-        per_day_rate = self.override_negotiated_rate or cost_sheet.negotiated_rate
+        per_day_rate = self.override_negotiated_rate if self.override_negotiated_rate is not None else cost_sheet.negotiated_rate
+        
         self.revised_total = (
             (per_day_rate * self.actual_days_worked)
-            + (cost_sheet.daily_allowance * self.actual_days_worked)
+            + (self.actual_daily_allowance * self.actual_days_worked)
             + cost_sheet.travel_costs
-            + self.extra_allowances
+            + self.other_adjustments
         )
         super().save(*args, **kwargs)
 
@@ -344,8 +348,6 @@ class InvoiceWorkflow(models.Model):
         "approved": {"payable"},
         "payable": {"paid"},
         "paid": set(),
-        "approved": {"payable"},
-        "payable": {"paid"},
     }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
