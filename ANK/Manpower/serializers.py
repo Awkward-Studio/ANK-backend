@@ -61,7 +61,7 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
 
     def get_rating_score(self, obj):
         from .models import FreelancerRating
-        r = FreelancerRating.objects.filter(freelancer=obj.freelancer, event=obj.event).first()
+        r = FreelancerRating.objects.filter(freelancer=obj.freelancer, event=obj.event_department.event).first()
         return r.score if r else None
     allocation_id = serializers.ReadOnlyField(source="adjustment.allocation.id")
     skill_category = serializers.ReadOnlyField(source="freelancer.skill_category")
@@ -158,7 +158,7 @@ class InvoiceWorkflowSerializer(serializers.ModelSerializer):
 
     def get_rating_score(self, obj):
         from .models import FreelancerRating
-        r = FreelancerRating.objects.filter(freelancer=obj.freelancer, event=obj.event).first()
+        r = FreelancerRating.objects.filter(freelancer=obj.freelancer, event=obj.event_department.event).first()
         return r.score if r else None
     allocation_id = serializers.ReadOnlyField(source="adjustment.allocation.id")
 
