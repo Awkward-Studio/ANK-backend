@@ -107,5 +107,4 @@ urlpatterns = [
     path("api/internal/resolve-wa/<str:wa_id>/", resolve_wa, name="resolve_wa"),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
