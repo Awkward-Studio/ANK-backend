@@ -1,6 +1,7 @@
 from django.urls import path
 from MessageTemplates.whatsapp_views.flush_message import FlushQueuedMessagesView
 from MessageTemplates.whatsapp_views.send_template import SendLocalTemplateView
+from MessageTemplates.whatsapp_views.waba_management import WABAListCreateView
 from MessageTemplates.whatsapp_views.phone_number_management import (
     StorePhoneNumberView,
     ListPhoneNumbersView,
@@ -50,6 +51,9 @@ urlpatterns = [
         FlushQueuedMessagesView.as_view(),
         name="mt-flush-after-resume",
     ),
+    # WhatsApp Account Management
+    path("whatsapp/wabas/", WABAListCreateView.as_view(), name="whatsapp-waba-list"),
+
     # WhatsApp Phone Number Management
     path(
         "whatsapp/phone-numbers/store/",
