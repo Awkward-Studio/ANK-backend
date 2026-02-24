@@ -1,3 +1,4 @@
+import requests
 import os
 import logging
 from rest_framework.views import APIView
@@ -62,6 +63,26 @@ class StorePhoneNumberView(APIView):
             logger.info(
                 f"[STORE_PHONE] Successfully stored phone_number_id={phone_number.phone_number_id}"
             )
+
+            # --- NEW: Subscribe the App to this WABA for Webhooks ---
+            waba_id = phone_number.waba_id
+            access_token = phone_number.get_access_token()
+            
+            if waba_id and access_token:
+                sub_url = f"https://graph.facebook.com/v20.0/{waba_id}/subscribed_apps"
+                try:
+                    sub_res = requests.post(
+                        sub_url, 
+                        params={"access_token": access_token},
+                        timeout=10
+                    )
+                    if sub_res.ok:
+                        logger.info(f"[STORE_PHONE] Successfully subscribed webhooks for WABA {waba_id}")
+                    else:
+                        logger.warning(f"[STORE_PHONE] Webhook subscription failed for {waba_id}: {sub_res.text}")
+                except Exception as sub_err:
+                    logger.error(f"[STORE_PHONE] Error calling Meta Graph API for subscription: {sub_err}")
+            # ------------------------------------------------------
 
             # Return created phone number details
             response_serializer = WhatsAppPhoneNumberSerializer(phone_number)
