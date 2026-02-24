@@ -15,54 +15,110 @@ from utils.swagger import (
 )
 
 
+class MOU_PDF(FPDF):
+    def header(self):
+        self.set_font("Helvetica", "B", 10)
+        self.set_text_color(128)
+        self.cell(0, 10, "ANK ENTERTAINMENT LLP - CONFIDENTIAL", 0, 0, "R")
+        self.ln(15)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(128)
+        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
+
+
 def generate_mou_pdf(mou):
-    """Generate a simple PDF for the accepted MoU."""
-    pdf = FPDF()
+    """Generate a professional PDF for the accepted MoU based on the Word template."""
+    pdf = MOU_PDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Memorandum of Understanding", ln=True, align="C")
-    pdf.ln(10)
     
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Agreement ID: {mou.id}", ln=True)
-    pdf.cell(0, 10, f"Freelancer: {mou.allocation.freelancer.name}", ln=True)
-    pdf.cell(0, 10, f"Event: {mou.allocation.event_department.event.name}", ln=True)
-    pdf.cell(0, 10, f"Department: {mou.allocation.event_department.department.name}", ln=True)
+    # Title
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(0)
+    pdf.multi_cell(0, 8, "MEMORANDUM OF UNDERSTANDING (MOU) & CONFIDENTIALITY AGREEMENT", align="C")
     pdf.ln(5)
     
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "Terms and Conditions:", ln=True)
-    pdf.set_font("Arial", "", 10)
-    terms = mou.template_data.get("terms", "Standard terms apply.")
-    pdf.multi_cell(0, 10, terms)
-    pdf.ln(5)
-    
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "Commercials:", ln=True)
-    pdf.set_font("Arial", "", 12)
-    cost_sheet = mou.allocation.cost_sheet
-    pdf.cell(0, 10, f"Negotiated Rate: {cost_sheet.negotiated_rate}", ln=True)
-    pdf.cell(0, 10, f"Days Planned: {cost_sheet.days_planned}", ln=True)
-    pdf.cell(0, 10, f"Total Estimated Cost: {cost_sheet.total_estimated_cost}", ln=True)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.multi_cell(0, 6, "Between ANK ENTERTAINMENT LLP (A New Knot) and The Freelancer / Consultant", align="C")
     pdf.ln(10)
     
-    pdf.cell(0, 10, f"Accepted electronically on: {mou.accepted_at.strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
-    pdf.cell(0, 10, f"Freelancer Signature: [Digitally Accepted]", ln=True)
+    # Body
+    pdf.set_font("Helvetica", "", 10)
+    effective_date = mou.created_at.strftime("%d %B %Y")
+    intro = f"This Memorandum of Understanding (\"MOU\") is executed on this {effective_date} (\"Effective Date\") by and between:"
+    pdf.multi_cell(0, 6, intro)
+    pdf.ln(4)
     
-    # Save PDF to memory buffer
-    pdf_output = pdf.output(dest='S')
-    return pdf_output
+    # Company Info
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.multi_cell(0, 6, "ANK ENTERTAINMENT LLP (A New Knot), a limited liability partnership registered under the LLP Act, having its principal office at 802, Sun Paradise Plaza, Opp. Kamla Mills, Senapati Bapat Marg, Lower Parel, Mumbai – 400013, and registered address at GA/1, Tarang Society, Mogal Lane, Mahim, Mumbai – 400016, (hereinafter referred to as the \"Company\"),")
+    pdf.ln(4)
+    
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, "AND", ln=True, align="C")
+    pdf.ln(4)
+    
+    # Freelancer Info
+    f = mou.allocation.freelancer
+    pdf.set_font("Helvetica", "B", 10)
+    f_info = f"{f.name},\nS/o / D/o {f.parent_name or '____________________'}\nResiding at {f.address or '____________________'}\nBearing PAN / Aadhar No. {f.id_number or '____________________'} (hereinafter referred to as the \"Freelancer\")."
+    pdf.multi_cell(0, 6, f_info)
+    pdf.ln(6)
+    
+    pdf.set_font("Helvetica", "", 10)
+    pdf.multi_cell(0, 6, "The Company and the Freelancer shall collectively be referred to as the \"Parties.\"")
+    pdf.ln(8)
+    
+    # Sections
+    sections = [
+        ("1. Purpose, Scope & Applicability", "1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered only for those specific events and assignments confirmed by ANK Entertainment LLP through official digital communication channels (email, WhatsApp, or any other approved platform), where the dates, and remuneration have been mutually acknowledged.\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company’s values."),
+        ("2. Payment Terms", "The Freelancer shall be compensated at a pre-agreed rate for each confirmed event. Payment shall be processed within 30 days of invoice submission post-event completion, subject to satisfactory performance. Travel Days will be compensated only if active work is assigned. Non-working travel days will not be billable."),
+        ("3. Confidentiality & Non-Disclosure Agreement (NDA)", "3.1 The Freelancer acknowledges that they may have access to confidential information, including event concepts, client data, guest lists, creative plans, and budgets.\n3.2 The Freelancer agrees to maintain complete confidentiality, refrain from unauthorized recording or sharing of event content, and handle client property responsibly."),
+        ("4. Professional Conduct During Events", "No unauthorized photography or videography. No sharing of event material on social media. Maintain strict confidentiality. Focus on assigned responsibilities. Maintain professional grooming and body language. Mobile phones must be on silent mode. Consumption of alcohol or tobacco in guest areas is strictly prohibited."),
+        ("5. Ownership of Work", "All creative outputs, operational documentation, and intellectual materials produced during the engagement shall remain the exclusive property of ANK ENTERTAINMENT LLP."),
+        ("6. General Terms", "Severability: If any clause is deemed invalid, the rest remain in effect.\nWaiver: Failure to enforce any clause is not a waiver of rights.\nJurisdiction: This MOU shall be governed by the laws of India, and the courts of Mumbai shall have exclusive jurisdiction.")
+    ]
+    
+    for title, text in sections:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.multi_cell(0, 6, title)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 5, text)
+        pdf.ln(4)
+        
+    pdf.ln(10)
+    
+    # Acknowledgement
+    pdf.set_font("Helvetica", "I", 10)
+    pdf.multi_cell(0, 5, "By signing this MOU, the Freelancer confirms having read, understood, and agreed to the terms herein, applicable only to the events and dates officially confirmed by ANK Entertainment LLP via digital communication.")
+    pdf.ln(10)
+    
+    # Signatures
+    pdf.set_font("Helvetica", "B", 10)
+    y_before = pdf.get_y()
+    
+    # Left Column
+    pdf.multi_cell(90, 5, "For ANK ENTERTAINMENT LLP\nName: Sahitya Shetty\nDesignation: Assistant Manager – HR\nSignature: [Digitally Signed]\nDate: " + mou.created_at.strftime("%d/%m/%Y"))
+    
+    # Right Column
+    pdf.set_xy(110, y_before)
+    accepted_date = mou.accepted_at.strftime("%d/%m/%Y") if mou.accepted_at else "[Pending]"
+    pdf.multi_cell(90, 5, f"For Freelancer / Consultant\nName: {f.name}\nSignature: [Digitally Accepted]\nDate: {accepted_date}")
+    
+    return bytes(pdf.output())
 
 
 @document_api_view(
     {
         "get": doc_retrieve(
-            response=None,  # Custom response structure
+            response=None,
             description="Fetch MoU details using the secure token",
             tags=["Manpower: Public MoU"],
         ),
         "post": doc_create(
-            request=None,  # Custom request body {"action": "accept"|"reject"}
+            request=None,
             response=None,
             description="Accept or reject an MoU using the secure token",
             tags=["Manpower: Public MoU"],
@@ -101,7 +157,6 @@ def public_mou_interaction(request, token):
         )
 
     if request.method == "GET":
-        # Return only necessary information for the freelancer
         data = {
             "id": mou.id,
             "status": mou.status,
@@ -120,6 +175,7 @@ def public_mou_interaction(request, token):
             },
             "expires_at": mou.expires_at,
             "requires_access_code": bool(expected_code),
+            "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None,
         }
         return Response(data)
 
@@ -144,10 +200,8 @@ def public_mou_interaction(request, token):
             pdf_content = generate_mou_pdf(mou)
             filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}_{mou.id}.pdf"
             mou.signed_pdf.save(filename, ContentFile(pdf_content), save=False)
-            
-            # TODO: Notification - Send confirmation and PDF link via Email/WhatsApp to freelancer and admin
         else:
             mou.status = "rejected"
 
         mou.save()
-        return Response({"status": mou.status})
+        return Response({"status": mou.status, "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None})
