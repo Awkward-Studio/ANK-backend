@@ -37,8 +37,6 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="freelancer.name")
     skill_category = serializers.ReadOnlyField(source="freelancer.skill_category")
     event_name = serializers.ReadOnlyField(source="event_department.event.name")
-    start_date = serializers.ReadOnlyField(source="event_department.event.start_date")
-    end_date = serializers.ReadOnlyField(source="event_department.event.end_date")
     mou_status = serializers.SerializerMethodField()
     mou_token = serializers.SerializerMethodField()
     cost_sheet = EventCostSheetSerializer(read_only=True)

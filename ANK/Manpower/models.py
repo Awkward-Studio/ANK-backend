@@ -84,6 +84,8 @@ class FreelancerAllocation(models.Model):
         related_name="manpower_allocations",
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="soft_blocked")
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
     role_description = models.TextField(blank=True)
     assigned_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True
