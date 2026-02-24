@@ -32,7 +32,7 @@ class WABAListCreateView(APIView):
         name = request.data.get("name")
         access_token = request.data.get("access_token")
         
-        if not all([waba_id, name, access_token]):
+        if not all([waba_id, name]):
             return Response({"error": "Missing required fields"}, status=400)
             
         waba, created = WhatsAppBusinessAccount.objects.update_or_create(
@@ -42,7 +42,12 @@ class WABAListCreateView(APIView):
                 "is_active": True
             }
         )
-        waba.set_token(access_token)
+        if access_token:
+            from django.conf import settings
+            if not getattr(settings, "WHATSAPP_ENCRYPTION_KEY", None):
+                return Response({"error": "WHATSAPP_ENCRYPTION_KEY not configured for token storage"}, status=500)
+            waba.set_token(access_token)
+        
         waba.save()
         
         ser = WhatsAppBusinessAccountSerializer(waba)
