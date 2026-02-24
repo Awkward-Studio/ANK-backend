@@ -193,7 +193,7 @@ class MoU(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     access_code = models.CharField(max_length=12, blank=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
-    signed_pdf = models.FileField(upload_to="mous/", null=True, blank=True)
+    # PDF is generated on-the-fly to save space
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
