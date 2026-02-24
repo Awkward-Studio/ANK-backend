@@ -1695,8 +1695,15 @@ def issue_adjustment_secure_link(request, allocation_id):
     denied = _require_manpower_event_access(request, allocation.event_department.event_id)
     if denied:
         return denied
-    adjustment, _ = PostEventAdjustment.objects.get_or_create(allocation=allocation)
-    if not adjustment.secure_token:
+    adjustment, created = PostEventAdjustment.objects.get_or_create(allocation=allocation)
+    if created:
+        cost = allocation.cost_sheet
+        adjustment.actual_days_worked = cost.days_planned
+        adjustment.extra_allowances = 0
+        adjustment.override_negotiated_rate = cost.negotiated_rate
+        adjustment.secure_token = uuid.uuid4()
+        adjustment.save()
+    elif not adjustment.secure_token:
         adjustment.secure_token = uuid.uuid4()
         adjustment.save(update_fields=["secure_token"])
     return Response(
