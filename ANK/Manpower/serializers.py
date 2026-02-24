@@ -36,7 +36,7 @@ class ManpowerRequirementSerializer(serializers.ModelSerializer):
 class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
     event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
-    invoice_status = serializers.ReadOnlyField(source="invoice.status")
+    invoice_status = serializers.ReadOnlyField(source="invoice_workflow.status")
     allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
 
     class Meta:
