@@ -104,10 +104,9 @@ class MoUSerializer(serializers.ModelSerializer):
             "expires_at",
             "access_code",
             "accepted_at",
-            "signed_pdf",
             "created_at",
         ]
-        read_only_fields = ["secure_token", "accepted_at", "signed_pdf"]
+        read_only_fields = ["secure_token", "accepted_at"]
 
 
 class FreelancerRatingSerializer(serializers.ModelSerializer):
