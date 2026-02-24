@@ -1342,11 +1342,32 @@ class FreelancerRatingList(DepartmentAccessMixin, APIView):
         if denied:
             return denied
         try:
-            ser = FreelancerRatingSerializer(data=request.data, context=self.get_serializer_context())
-            ser.is_valid(raise_exception=True)
-            obj = ser.save()
-            _log_action(request, "freelancer_rating_created", obj, event_id=obj.event_id, details={"score": obj.score})
-            return Response(ser.data, status=status.HTTP_201_CREATED)
+            freelancer_id = request.data.get("freelancer")
+            event_id = request.data.get("event")
+            score = request.data.get("score")
+            feedback = request.data.get("feedback", "")
+
+            # Upsert Logic: Prevent duplicates, allow editing
+            obj, created = FreelancerRating.objects.update_or_create(
+                freelancer_id=freelancer_id,
+                event_id=event_id,
+                defaults={
+                    "score": score,
+                    "feedback": feedback,
+                    "rated_by": request.user
+                }
+            )
+
+            # Sync Logic: Mark all allocations for this freelancer in this event as rated
+            FreelancerAllocation.objects.filter(
+                freelancer_id=freelancer_id,
+                event_department__event_id=event_id
+            ).update(is_rated=True)
+
+            ser = FreelancerRatingSerializer(obj)
+            action = "freelancer_rating_created" if created else "freelancer_rating_updated"
+            _log_action(request, action, obj, event_id=obj.event_id, details={"score": score})
+            return Response(ser.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
         except Http404:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
