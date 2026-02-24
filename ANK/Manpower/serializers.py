@@ -73,11 +73,16 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
 
 
 class MoUSerializer(serializers.ModelSerializer):
+    freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
+    event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
+
     class Meta:
         model = MoU
         fields = [
             "id",
             "allocation",
+            "freelancer_name",
+            "event_name",
             "status",
             "secure_token",
             "template_data",
@@ -91,6 +96,9 @@ class MoUSerializer(serializers.ModelSerializer):
 
 
 class PostEventAdjustmentSerializer(serializers.ModelSerializer):
+    freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
+    event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
+
     class Meta:
         model = PostEventAdjustment
         fields = "__all__"
