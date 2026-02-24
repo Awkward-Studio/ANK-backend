@@ -33,6 +33,18 @@ class ManpowerRequirementSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class PostEventAdjustmentSerializer(serializers.ModelSerializer):
+    freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
+    event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
+    invoice_status = serializers.ReadOnlyField(source="invoice.status")
+    allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
+
+    class Meta:
+        model = PostEventAdjustment
+        fields = "__all__"
+        read_only_fields = ["revised_total"]
+
+
 class FreelancerAllocationSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="freelancer.name")
     skill_category = serializers.ReadOnlyField(source="freelancer.skill_category")
@@ -96,16 +108,6 @@ class MoUSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["secure_token", "accepted_at", "signed_pdf"]
-
-
-class PostEventAdjustmentSerializer(serializers.ModelSerializer):
-    freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
-    event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
-
-    class Meta:
-        model = PostEventAdjustment
-        fields = "__all__"
-        read_only_fields = ["revised_total"]
 
 
 class FreelancerRatingSerializer(serializers.ModelSerializer):
