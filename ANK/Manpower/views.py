@@ -1696,12 +1696,13 @@ def issue_adjustment_secure_link(request, allocation_id):
     if denied:
         return denied
     adjustment, created = PostEventAdjustment.objects.get_or_create(allocation=allocation)
-    if created:
+    # If not submitted, sync data to ensure it matches current MoU commercials
+    if not adjustment.freelancer_submitted_at:
         cost = allocation.cost_sheet
         adjustment.actual_days_worked = cost.days_planned
-        adjustment.extra_allowances = 0
         adjustment.override_negotiated_rate = cost.negotiated_rate
-        adjustment.secure_token = uuid.uuid4()
+        if not adjustment.secure_token:
+            adjustment.secure_token = uuid.uuid4()
         adjustment.save()
     elif not adjustment.secure_token:
         adjustment.secure_token = uuid.uuid4()
