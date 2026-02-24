@@ -61,7 +61,7 @@ urlpatterns = [
     path("api/", include("Events.urls")),
     path("api/", include("Guest.urls")),
     path("api/", include("Logistics.urls")),
-    path("api/", include("MessageTemplates.urls")),
+    path("api/whatsapp/", include("MessageTemplates.urls")),
     path("api/", include("Departments.urls")),
     path("api/", include("utilities.urls")),
     path("api/", include("CustomField.urls")),
