@@ -189,6 +189,24 @@ def _log_action(request, action, target_obj, event_id=None, details=None):
         # Avoid failing business flow due to audit logging issues.
         pass
 
+def _create_revision(adjustment, action_type, user=None, comments=""):
+    try:
+        PostEventAdjustmentRevision.objects.create(
+            adjustment=adjustment,
+            action_type=action_type,
+            actor=user if user and user.is_authenticated else None,
+            actor_name=user.name if user and user.is_authenticated else adjustment.allocation.freelancer.name,
+            actual_days_worked=adjustment.actual_days_worked,
+            actual_daily_allowance=adjustment.actual_daily_allowance,
+            other_adjustments=adjustment.other_adjustments,
+            override_negotiated_rate=adjustment.override_negotiated_rate,
+            revised_total=adjustment.revised_total,
+            comments=comments or adjustment.freelancer_comments
+        )
+    except Exception:
+        pass
+
+
 
 @document_api_view(
     {
@@ -1229,6 +1247,9 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
             ser = PostEventAdjustmentSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
+            # If it's being marked as disputed, log it as a dispute revision
+            if request.data.get("admin_approval_status") == "disputed":
+                _create_revision(updated, "dispute", user=request.user)
             _log_action(request, "adjustment_updated", updated, event_id=event_id)
             return Response(ser.data)
         except Http404:
@@ -1705,6 +1726,7 @@ def issue_adjustment_secure_link(request, allocation_id):
         if not adjustment.secure_token:
             adjustment.secure_token = uuid.uuid4()
         adjustment.save()
+        _create_revision(adjustment, "prefill", user=request.user)
     elif not adjustment.secure_token:
         adjustment.secure_token = uuid.uuid4()
         adjustment.save(update_fields=["secure_token"])
@@ -1766,6 +1788,7 @@ def public_adjustment_interaction(request, token):
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
     ser.save(freelancer_submitted_at=timezone.now())
+    _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 
 

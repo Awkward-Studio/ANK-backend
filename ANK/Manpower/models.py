@@ -193,7 +193,6 @@ class MoU(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     access_code = models.CharField(max_length=12, blank=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
-    # PDF is generated on-the-fly to save space
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -239,7 +238,7 @@ class PostEventAdjustment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Auto-compute revised_total from allocation cost sheet and adjustments
+        # Auto-compute revised_total
         cost_sheet = self.allocation.cost_sheet
         per_day_rate = self.override_negotiated_rate if self.override_negotiated_rate is not None else cost_sheet.negotiated_rate
         
@@ -253,6 +252,38 @@ class PostEventAdjustment(models.Model):
 
     def __str__(self):
         return f"Adjustment for {self.allocation}"
+
+
+class PostEventAdjustmentRevision(models.Model):
+    ACTION_CHOICES = [
+        ("prefill", "Admin Pre-fill"),
+        ("submission", "Freelancer Submission"),
+        ("dispute", "Admin Dispute"),
+        ("approval", "Final Approval"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    adjustment = models.ForeignKey(
+        PostEventAdjustment, on_delete=models.CASCADE, related_name="revisions"
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    actor_name = models.CharField(max_length=200, blank=True)
+    action_type = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    
+    # Snapshot of values
+    actual_days_worked = models.DecimalField(max_digits=5, decimal_places=1)
+    actual_daily_allowance = models.DecimalField(max_digits=12, decimal_places=2)
+    other_adjustments = models.DecimalField(max_digits=12, decimal_places=2)
+    override_negotiated_rate = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    revised_total = models.DecimalField(max_digits=15, decimal_places=2)
+    
+    comments = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
 
 
 class FreelancerRating(models.Model):
