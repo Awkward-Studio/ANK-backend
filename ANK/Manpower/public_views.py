@@ -2,6 +2,7 @@ import uuid
 import io
 from django.utils import timezone
 from django.core.files.base import ContentFile
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -30,7 +31,7 @@ class MOU_PDF(FPDF):
 
 
 def generate_mou_pdf(mou):
-    """Generate a professional PDF for the accepted MoU based on the Word template."""
+    """Generate a professional PDF for the MoU based on the Word template."""
     pdf = MOU_PDF()
     pdf.add_page()
     
@@ -105,9 +106,32 @@ def generate_mou_pdf(mou):
     # Right Column
     pdf.set_xy(110, y_before)
     accepted_date = mou.accepted_at.strftime("%d/%m/%Y") if mou.accepted_at else "[Pending]"
-    pdf.multi_cell(90, 5, f"For Freelancer / Consultant\nName: {f.name}\nSignature: [Digitally Accepted]\nDate: {accepted_date}")
+    sig_text = "[Digitally Accepted]" if mou.accepted_at else "________________________"
+    pdf.multi_cell(90, 5, f"For Freelancer / Consultant\nName: {f.name}\nSignature: {sig_text}\nDate: {accepted_date}")
     
     return bytes(pdf.output())
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def public_mou_pdf_download(request, token):
+    """Generate and return the MoU PDF on the fly based on the secure token."""
+    try:
+        mou = MoU.objects.select_related(
+            "allocation__freelancer",
+            "allocation__event_department__event",
+            "allocation__event_department__department",
+            "allocation__cost_sheet"
+        ).get(secure_token=token)
+    except (MoU.DoesNotExist, ValueError):
+        return HttpResponse("Invalid or expired token", status=404)
+
+    pdf_content = generate_mou_pdf(mou)
+    filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}.pdf"
+    
+    response = HttpResponse(pdf_content, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @document_api_view(
@@ -176,6 +200,7 @@ def public_mou_interaction(request, token):
             "expires_at": mou.expires_at,
             "requires_access_code": bool(expected_code),
             "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None,
+            "download_url": f"/api/manpower/public/mou/{token}/pdf/",
         }
         return Response(data)
 
