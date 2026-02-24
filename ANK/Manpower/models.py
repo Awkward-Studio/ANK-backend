@@ -86,6 +86,7 @@ class FreelancerAllocation(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="soft_blocked")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    is_rated = models.BooleanField(default=False)
     is_adjustment_editable = models.BooleanField(default=False)
     role_description = models.TextField(blank=True)
     assigned_by = models.ForeignKey(
@@ -332,7 +333,6 @@ class InvoiceWorkflow(models.Model):
         ("approved", "Approved"),
         ("payable", "Payable"),
         ("paid", "Paid"),
-        ("rated", "Rated"),
     ]
 
     VALID_TRANSITIONS = {
@@ -340,10 +340,9 @@ class InvoiceWorkflow(models.Model):
         "submitted": {"approved"},
         "approved": {"payable"},
         "payable": {"paid"},
-        "paid": {"rated"},
-        "approved": {"payable", "rated"},
-        "payable": {"paid", "rated"},
-        "rated": set(),
+        "paid": set(),
+        "approved": {"payable"},
+        "payable": {"paid"},
     }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
