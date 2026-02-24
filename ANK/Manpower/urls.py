@@ -29,7 +29,7 @@ from .views import (
     public_adjustment_interaction,
     ManpowerAuditLogList,
 )
-from .public_views import public_mou_interaction
+from .public_views import public_mou_interaction, public_mou_pdf_download
 
 urlpatterns = [
     # Freelancers
@@ -86,4 +86,5 @@ urlpatterns = [
     
     # Public token-based endpoints for freelancers
     path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),
+    path("public/mou/<uuid:token>/pdf/", public_mou_pdf_download, name="public-mou-pdf-download"),
 ]
