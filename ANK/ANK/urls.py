@@ -56,12 +56,12 @@ def root(_request):
 urlpatterns = [
     path("", root),
     path("admin/", admin.site.urls),
+    path("api/", include("MessageTemplates.urls")),
     path("api/", include("Staff.urls")),
     path("api/csrf/", csrf),
     path("api/", include("Events.urls")),
     path("api/", include("Guest.urls")),
     path("api/", include("Logistics.urls")),
-    path("api/whatsapp/", include("MessageTemplates.urls")),
     path("api/", include("Departments.urls")),
     path("api/", include("utilities.urls")),
     path("api/", include("CustomField.urls")),
@@ -82,7 +82,6 @@ urlpatterns = [
     ),
     # ----------------- Webhook -------------------- #
     path("api/webhooks/whatsapp-rsvp/", whatsapp_rsvp, name="whatsapp_rsvp"),
-    # path("api/debug/echo-secret/", echo_secret),
     path("api/webhooks/track-send/", track_send, name="track_send"),
     path("api/webhooks/whatsapp-travel/", whatsapp_travel_webhook),
     path(
