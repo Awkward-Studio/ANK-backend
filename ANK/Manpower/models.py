@@ -11,6 +11,9 @@ class Freelancer(models.Model):
     name = models.CharField(max_length=200)
     skill_category = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
+    address = models.TextField(blank=True)
+    parent_name = models.CharField(max_length=200, blank=True, help_text='S/o / D/o')
+    id_number = models.CharField(max_length=100, blank=True, help_text='PAN / Aadhar')
     contact_phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(unique=True, blank=True, null=True)
     base_daily_rate = models.DecimalField(
