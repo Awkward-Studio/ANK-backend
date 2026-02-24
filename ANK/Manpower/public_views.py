@@ -1,5 +1,6 @@
 import uuid
 import io
+import logging
 from django.utils import timezone
 from django.core.files.base import ContentFile
 from django.http import HttpResponse
@@ -15,17 +16,18 @@ from utils.swagger import (
     doc_create,
 )
 
+logger = logging.getLogger(__name__)
 
 class MOU_PDF(FPDF):
     def header(self):
-        self.set_font("Helvetica", "B", 10)
+        self.set_font("Arial", "B", 10)
         self.set_text_color(128)
         self.cell(0, 10, "ANK ENTERTAINMENT LLP - CONFIDENTIAL", 0, 0, "R")
         self.ln(15)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font("Helvetica", "I", 8)
+        self.set_font("Arial", "I", 8)
         self.set_text_color(128)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
 
@@ -36,39 +38,45 @@ def generate_mou_pdf(mou):
     pdf.add_page()
     
     # Title
-    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_font("Arial", "B", 14)
     pdf.set_text_color(0)
     pdf.multi_cell(0, 8, "MEMORANDUM OF UNDERSTANDING (MOU) & CONFIDENTIALITY AGREEMENT", align="C")
     pdf.ln(5)
     
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Arial", "B", 11)
     pdf.multi_cell(0, 6, "Between ANK ENTERTAINMENT LLP (A New Knot) and The Freelancer / Consultant", align="C")
     pdf.ln(10)
     
     # Body
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font("Arial", "", 10)
     effective_date = mou.created_at.strftime("%d %B %Y")
     intro = f"This Memorandum of Understanding (\"MOU\") is executed on this {effective_date} (\"Effective Date\") by and between:"
     pdf.multi_cell(0, 6, intro)
     pdf.ln(4)
     
     # Company Info
-    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_font("Arial", "B", 10)
     pdf.multi_cell(0, 6, "ANK ENTERTAINMENT LLP (A New Knot), a limited liability partnership registered under the LLP Act, having its principal office at 802, Sun Paradise Plaza, Opp. Kamla Mills, Senapati Bapat Marg, Lower Parel, Mumbai – 400013, and registered address at GA/1, Tarang Society, Mogal Lane, Mahim, Mumbai – 400016, (hereinafter referred to as the \"Company\"),")
     pdf.ln(4)
     
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font("Arial", "", 10)
     pdf.cell(0, 6, "AND", ln=True, align="C")
     pdf.ln(4)
     
     # Freelancer Info
     f = mou.allocation.freelancer
-    pdf.set_font("Helvetica", "B", 10)
-    f_info = f"{f.name},\nS/o / D/o {f.parent_name or '____________________'}\nResiding at {f.address or '____________________'}\nBearing PAN / Aadhar No. {f.id_number or '____________________'} (hereinafter referred to as the \"Freelancer\")."
+    pdf.set_font("Arial", "B", 10)
+    # Ensure strings are clean for PDF (PDF core fonts only support latin-1)
+    f_name = str(f.name).encode('latin-1', 'replace').decode('latin-1')
+    f_parent = str(f.parent_name or '____________________').encode('latin-1', 'replace').decode('latin-1')
+    f_address = str(f.address or '____________________').encode('latin-1', 'replace').decode('latin-1')
+    f_id = str(f.id_number or '____________________').encode('latin-1', 'replace').decode('latin-1')
+
+    f_info = f"{f_name},\nS/o / D/o {f_parent}\nResiding at {f_address}\nBearing PAN / Aadhar No. {f_id} (hereinafter referred to as the \"Freelancer\")."
     pdf.multi_cell(0, 6, f_info)
     pdf.ln(6)
     
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font("Arial", "", 10)
     pdf.multi_cell(0, 6, "The Company and the Freelancer shall collectively be referred to as the \"Parties.\"")
     pdf.ln(8)
     
@@ -83,21 +91,21 @@ def generate_mou_pdf(mou):
     ]
     
     for title, text in sections:
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_font("Arial", "B", 10)
         pdf.multi_cell(0, 6, title)
-        pdf.set_font("Helvetica", "", 10)
+        pdf.set_font("Arial", "", 10)
         pdf.multi_cell(0, 5, text)
         pdf.ln(4)
         
     pdf.ln(10)
     
     # Acknowledgement
-    pdf.set_font("Helvetica", "I", 10)
+    pdf.set_font("Arial", "I", 10)
     pdf.multi_cell(0, 5, "By signing this MOU, the Freelancer confirms having read, understood, and agreed to the terms herein, applicable only to the events and dates officially confirmed by ANK Entertainment LLP via digital communication.")
     pdf.ln(10)
     
     # Signatures
-    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_font("Arial", "B", 10)
     y_before = pdf.get_y()
     
     # Left Column
@@ -107,7 +115,7 @@ def generate_mou_pdf(mou):
     pdf.set_xy(110, y_before)
     accepted_date = mou.accepted_at.strftime("%d/%m/%Y") if mou.accepted_at else "[Pending]"
     sig_text = "[Digitally Accepted]" if mou.accepted_at else "________________________"
-    pdf.multi_cell(90, 5, f"For Freelancer / Consultant\nName: {f.name}\nSignature: {sig_text}\nDate: {accepted_date}")
+    pdf.multi_cell(90, 5, f"For Freelancer / Consultant\nName: {f_name}\nSignature: {sig_text}\nDate: {accepted_date}")
     
     return bytes(pdf.output())
 
@@ -126,12 +134,15 @@ def public_mou_pdf_download(request, token):
     except (MoU.DoesNotExist, ValueError):
         return HttpResponse("Invalid or expired token", status=404)
 
-    pdf_content = generate_mou_pdf(mou)
-    filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}.pdf"
-    
-    response = HttpResponse(pdf_content, content_type="application/pdf")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return response
+    try:
+        pdf_content = generate_mou_pdf(mou)
+        filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}.pdf"
+        response = HttpResponse(pdf_content, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        logger.error(f"Error generating preview PDF: {str(e)}")
+        return HttpResponse(f"Error generating PDF: {str(e)}", status=500)
 
 
 @document_api_view(
@@ -217,16 +228,20 @@ def public_mou_interaction(request, token):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if action == "accept":
-            mou.status = "accepted"
-            mou.accepted_at = timezone.now()
-            
-            # Generate PDF
-            pdf_content = generate_mou_pdf(mou)
-            filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}_{mou.id}.pdf"
-            mou.signed_pdf.save(filename, ContentFile(pdf_content), save=False)
-        else:
-            mou.status = "rejected"
+        try:
+            if action == "accept":
+                mou.status = "accepted"
+                mou.accepted_at = timezone.now()
+                
+                # Generate PDF
+                pdf_content = generate_mou_pdf(mou)
+                filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}_{mou.id}.pdf"
+                mou.signed_pdf.save(filename, ContentFile(pdf_content), save=False)
+            else:
+                mou.status = "rejected"
 
-        mou.save()
-        return Response({"status": mou.status, "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None})
+            mou.save()
+            return Response({"status": mou.status, "signed_pdf_url": mou.signed_pdf.url if mou.signed_pdf else None})
+        except Exception as e:
+            logger.exception("Error processing MoU response")
+            return Response({"error": f"Internal server error: {str(e)}"}, status=500)
