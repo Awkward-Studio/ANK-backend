@@ -108,6 +108,14 @@ class FreelancerAllocation(models.Model):
     def clean(self):
         from django.core.exceptions import ValidationError
         if self.status == "confirmed":
+            # Check if already has ANY allocation in this event
+            event_id = self.event_department.event_id
+            exists = FreelancerAllocation.objects.filter(
+                freelancer=self.freelancer,
+                event_department__event_id=event_id
+            ).exclude(pk=self.pk).exists()
+            if exists:
+                raise ValidationError(f"Freelancer is already allocated to this event.")
             # Check for overlapping confirmed assignments
             current_event = self.event_department.event
             if current_event.start_date and current_event.end_date:
