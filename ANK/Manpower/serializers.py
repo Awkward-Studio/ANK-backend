@@ -106,6 +106,8 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
 
 
 class FreelancerRatingSerializer(serializers.ModelSerializer):
+    event_name = serializers.ReadOnlyField(source="event.name")
+    
     class Meta:
         model = FreelancerRating
         fields = "__all__"

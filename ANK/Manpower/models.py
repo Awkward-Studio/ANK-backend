@@ -332,6 +332,7 @@ class InvoiceWorkflow(models.Model):
         ("approved", "Approved"),
         ("payable", "Payable"),
         ("paid", "Paid"),
+        ("rated", "Rated"),
     ]
 
     VALID_TRANSITIONS = {
@@ -339,7 +340,10 @@ class InvoiceWorkflow(models.Model):
         "submitted": {"approved"},
         "approved": {"payable"},
         "payable": {"paid"},
-        "paid": set(),
+        "paid": {"rated"},
+        "approved": {"payable", "rated"},
+        "payable": {"paid", "rated"},
+        "rated": set(),
     }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
