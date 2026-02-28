@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Sum, Count, F, Avg, Q
 from django.db import transaction
 from django.http import HttpResponse, Http404
+from decimal import Decimal
 import openpyxl
 from openpyxl.styles import Font
 from django_filters.rest_framework import DjangoFilterBackend
@@ -35,6 +36,8 @@ from .models import (
     EventManpowerLock,
     InvoiceWorkflow,
     ManpowerAuditLog,
+    AllocationDailyMeal,
+    ManpowerSettings,
 )
 from .serializers import (
     FreelancerSerializer,
@@ -47,6 +50,8 @@ from .serializers import (
     EventManpowerLockSerializer,
     InvoiceWorkflowSerializer,
     ManpowerAuditLogSerializer,
+    AllocationDailyMealSerializer,
+    ManpowerSettingsSerializer,
 )
 
 ADMIN_ROLES = {"admin", "super_admin"}
@@ -672,6 +677,65 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
                 {"detail": "Error updating allocation", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    def post(self, request, pk):
+        """
+        Handles bulk updates or toggles based on the action in the request.
+        """
+        if "bulk-update-meals" in request.path:
+            return self.bulk_update_meals(request, pk)
+        if "toggle-work-day" in request.path:
+            return self.toggle_work_day(request, pk)
+        return Response({"detail": "Method not allowed"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def bulk_update_meals(self, request, pk=None):
+        """
+        Bulk updates meal types for an allocation.
+        """
+        allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+        if denied:
+            return denied
+        
+        meal_type = request.data.get("meal_type")  # breakfast, lunch, dinner
+        action_type = request.data.get("action_type")  # crew_meal, allowance
+        
+        if meal_type not in ["breakfast", "lunch", "dinner"]:
+            return Response({"detail": "Invalid meal_type"}, status=status.HTTP_400_BAD_REQUEST)
+        if action_type not in ["crew_meal", "allowance"]:
+            return Response({"detail": "Invalid action_type"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        meals = AllocationDailyMeal.objects.filter(allocation=allocation)
+        for meal in meals:
+            setattr(meal, f"{meal_type}_type", action_type)
+            meal.save()
+            
+            if hasattr(allocation, "cost_sheet"):
+                allocation.cost_sheet.save()
+            
+        return Response({"status": "bulk update successful"})
+
+    def toggle_work_day(self, request, pk=None):
+        """
+        Toggles is_worked for a specific day.
+        """
+        allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
+        if denied:
+            return denied
+            
+        meal_id = request.data.get("meal_id")
+        meal = get_object_or_404(AllocationDailyMeal, pk=meal_id, allocation=allocation)
+        meal.is_worked = not meal.is_worked
+        meal.save()
+        
+        # Sync PostEventAdjustment's actual_days_worked
+        if hasattr(allocation, "adjustment"):
+            worked_days = allocation.daily_meals.filter(is_worked=True).count()
+            allocation.adjustment.actual_days_worked = Decimal(str(worked_days))
+            allocation.adjustment.save()
+            
+        return Response({"is_worked": meal.is_worked})
 
     def delete(self, request, pk):
         try:
@@ -1825,3 +1889,40 @@ class ManpowerAuditLogList(APIView):
         if request.query_params.get("event"):
             qs = qs.filter(event_id=request.query_params["event"])
         return Response(ManpowerAuditLogSerializer(qs[:500], many=True).data)
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=ManpowerSettingsSerializer,
+            description="Retrieve global manpower settings",
+            tags=["Manpower: Settings"],
+        ),
+        "put": doc_update(
+            request=ManpowerSettingsSerializer,
+            response=ManpowerSettingsSerializer,
+            description="Update global manpower settings",
+            tags=["Manpower: Settings"],
+        ),
+    }
+)
+class ManpowerSettingsDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
+        obj = ManpowerSettings.get_settings()
+        return Response(ManpowerSettingsSerializer(obj).data)
+
+    def put(self, request):
+        denied = _require_role(request, ADMIN_ROLES)
+        if denied:
+            return denied
+        obj = ManpowerSettings.get_settings()
+        ser = ManpowerSettingsSerializer(obj, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        _log_action(request, "manpower_settings_updated", obj)
+        return Response(ser.data)

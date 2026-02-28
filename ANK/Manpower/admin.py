@@ -7,6 +7,8 @@ from .models import (
     MoU,
     PostEventAdjustment,
     FreelancerRating,
+    AllocationDailyMeal,
+    ManpowerSettings,
 )
 
 
@@ -33,11 +35,24 @@ class EventCostSheetInline(admin.StackedInline):
     can_delete = False
 
 
+class AllocationDailyMealInline(admin.TabularInline):
+    model = AllocationDailyMeal
+    extra = 0
+
+
 @admin.register(FreelancerAllocation)
 class FreelancerAllocationAdmin(admin.ModelAdmin):
     list_display = ("freelancer", "event_department", "status", "assigned_by")
     list_filter = ("status", "event_department")
-    inlines = [EventCostSheetInline]
+    inlines = [EventCostSheetInline, AllocationDailyMealInline]
+
+
+@admin.register(ManpowerSettings)
+class ManpowerSettingsAdmin(admin.ModelAdmin):
+    list_display = ("default_breakfast_rate", "default_lunch_rate", "default_dinner_rate", "updated_at")
+
+    def has_add_permission(self, request):
+        return not ManpowerSettings.objects.exists()
 
 
 @admin.register(EventCostSheet)
