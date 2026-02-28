@@ -691,51 +691,105 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
     def bulk_update_meals(self, request, pk=None):
         """
         Bulk updates meal types for an allocation.
+        Expects: { "meal_type": "breakfast"|"lunch"|"dinner", "action_type": "crew_meal"|"allowance" }
         """
-        allocation = get_object_or_404(FreelancerAllocation, pk=pk)
-        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
-        if denied:
-            return denied
-        
-        meal_type = request.data.get("meal_type")  # breakfast, lunch, dinner
-        action_type = request.data.get("action_type")  # crew_meal, allowance
-        
-        if meal_type not in ["breakfast", "lunch", "dinner"]:
-            return Response({"detail": "Invalid meal_type"}, status=status.HTTP_400_BAD_REQUEST)
-        if action_type not in ["crew_meal", "allowance"]:
-            return Response({"detail": "Invalid action_type"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+            event_id = allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
             
-        meals = AllocationDailyMeal.objects.filter(allocation=allocation)
-        for meal in meals:
-            setattr(meal, f"{meal_type}_type", action_type)
-            meal.save()
+            meal_type = request.data.get("meal_type")  # breakfast, lunch, dinner
+            action_type = request.data.get("action_type")  # crew_meal, allowance
             
+            if meal_type not in ["breakfast", "lunch", "dinner"]:
+                return Response({"detail": "Invalid meal_type. Must be 'breakfast', 'lunch', or 'dinner'."}, status=status.HTTP_400_BAD_REQUEST)
+            if action_type not in ["crew_meal", "allowance"]:
+                return Response({"detail": "Invalid action_type. Must be 'crew_meal' or 'allowance'."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            meals = AllocationDailyMeal.objects.filter(allocation=allocation)
+            updated_count = 0
+            for meal in meals:
+                setattr(meal, f"{meal_type}_type", action_type)
+                meal.save()
+                updated_count += 1
+                
             if hasattr(allocation, "cost_sheet"):
                 allocation.cost_sheet.save()
             
-        return Response({"status": "bulk update successful"})
+            _log_action(
+                request,
+                "allocation_meals_bulk_updated",
+                allocation,
+                event_id=event_id,
+                details={"meal_type": meal_type, "action_type": action_type, "updated_count": updated_count},
+            )
+            return Response({
+                "status": "bulk update successful",
+                "updated_count": updated_count,
+                "total_meal_allowance": str(allocation.total_meal_allowance),
+            })
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating meals", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def toggle_work_day(self, request, pk=None):
         """
         Toggles is_worked for a specific day.
+        Expects: { "meal_id": "<uuid>" }
         """
-        allocation = get_object_or_404(FreelancerAllocation, pk=pk)
-        denied = _require_manpower_event_access(request, allocation.event_department.event_id)
-        if denied:
-            return denied
+        try:
+            allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+            event_id = allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
+                
+            meal_id = request.data.get("meal_id")
+            if not meal_id:
+                return Response({"detail": "meal_id is required."}, status=status.HTTP_400_BAD_REQUEST)
             
-        meal_id = request.data.get("meal_id")
-        meal = get_object_or_404(AllocationDailyMeal, pk=meal_id, allocation=allocation)
-        meal.is_worked = not meal.is_worked
-        meal.save()
-        
-        # Sync PostEventAdjustment's actual_days_worked
-        if hasattr(allocation, "adjustment"):
-            worked_days = allocation.daily_meals.filter(is_worked=True).count()
-            allocation.adjustment.actual_days_worked = Decimal(str(worked_days))
-            allocation.adjustment.save()
+            meal = get_object_or_404(AllocationDailyMeal, pk=meal_id, allocation=allocation)
+            meal.is_worked = not meal.is_worked
+            meal.save()
             
-        return Response({"is_worked": meal.is_worked})
+            # Sync PostEventAdjustment's actual_days_worked
+            if hasattr(allocation, "adjustment"):
+                worked_days = allocation.daily_meals.filter(is_worked=True).count()
+                allocation.adjustment.actual_days_worked = Decimal(str(worked_days))
+                allocation.adjustment.save()
+            
+            _log_action(
+                request,
+                "allocation_work_day_toggled",
+                allocation,
+                event_id=event_id,
+                details={"meal_id": str(meal_id), "date": str(meal.date), "is_worked": meal.is_worked},
+            )
+            return Response({
+                "is_worked": meal.is_worked,
+                "date": str(meal.date),
+                "actual_days_worked": allocation.daily_meals.filter(is_worked=True).count(),
+            })
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"detail": "Error toggling work day", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
     def delete(self, request, pk):
         try:
@@ -1895,13 +1949,13 @@ class ManpowerAuditLogList(APIView):
     {
         "get": doc_retrieve(
             response=ManpowerSettingsSerializer,
-            description="Retrieve global manpower settings",
+            description="Retrieve global manpower settings (default meal rates)",
             tags=["Manpower: Settings"],
         ),
         "put": doc_update(
             request=ManpowerSettingsSerializer,
             response=ManpowerSettingsSerializer,
-            description="Update global manpower settings",
+            description="Update global manpower settings (default meal rates)",
             tags=["Manpower: Settings"],
         ),
     }
@@ -1910,19 +1964,40 @@ class ManpowerSettingsDetail(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        denied = _require_role(request, ADMIN_ROLES)
-        if denied:
-            return denied
-        obj = ManpowerSettings.get_settings()
-        return Response(ManpowerSettingsSerializer(obj).data)
+        try:
+            denied = _require_role(request, ADMIN_ROLES)
+            if denied:
+                return denied
+            obj = ManpowerSettings.get_settings()
+            return Response(ManpowerSettingsSerializer(obj).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching manpower settings", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def put(self, request):
-        denied = _require_role(request, ADMIN_ROLES)
-        if denied:
-            return denied
-        obj = ManpowerSettings.get_settings()
-        ser = ManpowerSettingsSerializer(obj, data=request.data, partial=True)
-        ser.is_valid(raise_exception=True)
-        ser.save()
-        _log_action(request, "manpower_settings_updated", obj)
-        return Response(ser.data)
+        try:
+            denied = _require_role(request, ADMIN_ROLES)
+            if denied:
+                return denied
+            obj = ManpowerSettings.get_settings()
+            ser = ManpowerSettingsSerializer(obj, data=request.data, partial=True)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            _log_action(request, "manpower_settings_updated", obj, details={
+                "default_breakfast_rate": str(obj.default_breakfast_rate),
+                "default_lunch_rate": str(obj.default_lunch_rate),
+                "default_dinner_rate": str(obj.default_dinner_rate),
+            })
+            return Response(ser.data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating manpower settings", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
