@@ -11,6 +11,8 @@ from .models import (
     InvoiceWorkflow,
     ManpowerAuditLog,
     PostEventAdjustmentRevision,
+    AllocationDailyMeal,
+    ManpowerSettings,
 )
 from Staff.serializers import UserSerializer
 
@@ -41,6 +43,18 @@ class PostEventAdjustmentRevisionSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class ManpowerSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ManpowerSettings
+        fields = "__all__"
+
+
+class AllocationDailyMealSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AllocationDailyMeal
+        fields = "__all__"
+
+
 class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
     event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
@@ -48,11 +62,12 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
     planned_rate = serializers.ReadOnlyField(source="allocation.cost_sheet.negotiated_rate")
     revisions = PostEventAdjustmentRevisionSerializer(many=True, read_only=True)
+    actual_meal_allowance = serializers.ReadOnlyField()
 
     class Meta:
         model = PostEventAdjustment
         fields = "__all__"
-        read_only_fields = ["revised_total"]
+        read_only_fields = ["revised_total", "actual_meal_allowance"]
 
 
 class FreelancerAllocationSerializer(serializers.ModelSerializer):
@@ -70,6 +85,8 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
     mou_token = serializers.SerializerMethodField()
     cost_sheet = EventCostSheetSerializer(read_only=True)
     adjustment = PostEventAdjustmentSerializer(read_only=True)
+    daily_meals = AllocationDailyMealSerializer(many=True, read_only=True)
+    total_meal_allowance = serializers.ReadOnlyField()
 
     class Meta:
         model = FreelancerAllocation
@@ -90,6 +107,8 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "assigned_by",
             "cost_sheet",
             "adjustment",
+            "daily_meals",
+            "total_meal_allowance",
             "is_rated",
             "allocation_id",
             "rating_score",

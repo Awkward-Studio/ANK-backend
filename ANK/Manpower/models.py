@@ -134,7 +134,72 @@ class FreelancerAllocation(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        
+        # Check if the instance already exists to track changes
+        old_start_date = None
+        old_end_date = None
+        is_new = self._state.adding
+        
+        if not is_new:
+            try:
+                old_instance = FreelancerAllocation.objects.get(pk=self.pk)
+                old_start_date = old_instance.start_date
+                old_end_date = old_instance.end_date
+            except FreelancerAllocation.DoesNotExist:
+                pass
+
         super().save(*args, **kwargs)
+
+        # Sync daily meals if dates changed or it's a new allocation
+        # Only sync if both dates are set
+        if self.start_date and self.end_date:
+            if is_new or self.start_date != old_start_date or self.end_date != old_end_date:
+                self.sync_daily_meals()
+
+    def sync_daily_meals(self):
+        """
+        Synchronizes AllocationDailyMeal records with the allocation's start and end dates.
+        Adds records for new days and removes them for removed days.
+        """
+        from datetime import timedelta
+        
+        # 1. Identify current dates in the range
+        current_dates = set()
+        delta = (self.end_date - self.start_date).days
+        for i in range(delta + 1):
+            current_dates.add(self.start_date + timedelta(days=i))
+
+        # 2. Identify existing meal records for this allocation
+        existing_meals = AllocationDailyMeal.objects.filter(allocation=self)
+        existing_dates = set(m.date for m in existing_meals)
+
+        # 3. Remove records for dates no longer in the range
+        to_delete = existing_dates - current_dates
+        if to_delete:
+            AllocationDailyMeal.objects.filter(allocation=self, date__in=to_delete).delete()
+
+        # 4. Add records for new dates in the range
+        to_add = sorted(list(current_dates - existing_dates))
+        for d in to_add:
+            AllocationDailyMeal.objects.get_or_create(allocation=self, date=d)
+
+        # Trigger cost sheet update if it exists
+        if hasattr(self, "cost_sheet"):
+            self.cost_sheet.save()
+
+    @property
+    def total_meal_allowance(self):
+        from django.db.models import Sum
+        # Note: Summing over aggregate might be more efficient
+        result = self.daily_meals.aggregate(
+            b_sum=Sum("breakfast_amount"),
+            l_sum=Sum("lunch_amount"),
+            d_sum=Sum("dinner_amount")
+        )
+        total = (result.get("b_sum") or Decimal("0.00")) + \
+                (result.get("l_sum") or Decimal("0.00")) + \
+                (result.get("d_sum") or Decimal("0.00"))
+        return total
 
 
 class EventCostSheet(models.Model):
@@ -172,7 +237,7 @@ class EventCostSheet(models.Model):
         # Auto-compute total_estimated_cost
         self.total_estimated_cost = (
             (self.negotiated_rate * self.days_planned)
-            + (self.daily_allowance * self.days_planned)
+            + (self.allocation.total_meal_allowance)
             + self.travel_costs
         )
         super().save(*args, **kwargs)
@@ -246,17 +311,59 @@ class PostEventAdjustment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Auto-compute revised_total
+        # 1. Sync is_worked in AllocationDailyMeal if actual_days_worked changed
+        # We need to track if actual_days_worked changed.
+        old_actual_days_worked = None
+        is_new = self._state.adding
+        if not is_new:
+            try:
+                old_instance = PostEventAdjustment.objects.get(pk=self.pk)
+                old_actual_days_worked = old_instance.actual_days_worked
+            except PostEventAdjustment.DoesNotExist:
+                pass
+
+        # Call original save logic but we'll override it to include meals later
+        # Actually, let's just write the full save here.
         cost_sheet = self.allocation.cost_sheet
         per_day_rate = self.override_negotiated_rate if self.override_negotiated_rate is not None else cost_sheet.negotiated_rate
         
+        # Calculate actual_meal_allowance from daily records
         self.revised_total = (
             (per_day_rate * self.actual_days_worked)
-            + (self.actual_daily_allowance * self.actual_days_worked)
+            + (self.actual_meal_allowance)
             + cost_sheet.travel_costs
             + self.other_adjustments
         )
         super().save(*args, **kwargs)
+
+        # 2. Update daily meal records' is_worked status if actual_days_worked changed
+        if not is_new and self.actual_days_worked != old_actual_days_worked:
+            self.sync_worked_days()
+
+    def sync_worked_days(self):
+        """
+        Updates the is_worked status of AllocationDailyMeal records based on actual_days_worked.
+        Marks first N days as worked, where N is actual_days_worked.
+        """
+        meals = self.allocation.daily_meals.all().order_by("date")
+        worked_count = int(self.actual_days_worked)
+        for i, meal in enumerate(meals):
+            meal.is_worked = i < worked_count
+            meal.save(update_fields=["is_worked"])
+
+    @property
+    def actual_meal_allowance(self):
+        from django.db.models import Sum
+        # Only sum allowances for days marked as worked
+        result = self.allocation.daily_meals.filter(is_worked=True).aggregate(
+            b_sum=Sum("breakfast_amount"),
+            l_sum=Sum("lunch_amount"),
+            d_sum=Sum("dinner_amount")
+        )
+        total = (result.get("b_sum") or Decimal("0.00")) + \
+                (result.get("l_sum") or Decimal("0.00")) + \
+                (result.get("d_sum") or Decimal("0.00"))
+        return total
 
     def __str__(self):
         return f"Adjustment for {self.allocation}"
@@ -441,6 +548,97 @@ class InvoiceWorkflow(models.Model):
 
 class ManpowerAuditLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # ... rest of the model ...
+
+class ManpowerSettings(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    default_breakfast_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    default_lunch_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    default_dinner_rate = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Manpower Settings"
+        verbose_name_plural = "Manpower Settings"
+
+    def __str__(self):
+        return "Global Manpower Settings"
+
+    def save(self, *args, **kwargs):
+        if not self.pk and ManpowerSettings.objects.exists():
+            return
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_settings(cls):
+        obj, created = cls.objects.get_or_create()
+        return obj
+
+
+class AllocationDailyMeal(models.Model):
+    MEAL_TYPE_CHOICES = [
+        ("crew_meal", "Crew Meal"),
+        ("allowance", "Allowance"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    allocation = models.ForeignKey(
+        FreelancerAllocation, on_delete=models.CASCADE, related_name="daily_meals"
+    )
+    date = models.DateField()
+    is_worked = models.BooleanField(default=True)
+
+    breakfast_type = models.CharField(
+        max_length=20, choices=MEAL_TYPE_CHOICES, default="allowance"
+    )
+    lunch_type = models.CharField(
+        max_length=20, choices=MEAL_TYPE_CHOICES, default="allowance"
+    )
+    dinner_type = models.CharField(
+        max_length=20, choices=MEAL_TYPE_CHOICES, default="allowance"
+    )
+
+    breakfast_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    lunch_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    dinner_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+
+    class Meta:
+        unique_together = ("allocation", "date")
+        ordering = ["date"]
+
+    def __str__(self):
+        return f"Meals for {self.allocation.freelancer.name} on {self.date}"
+
+    def save(self, *args, **kwargs):
+        settings = ManpowerSettings.get_settings()
+        if self.breakfast_type == "allowance":
+            self.breakfast_amount = settings.default_breakfast_rate
+        else:
+            self.breakfast_amount = Decimal("0.00")
+
+        if self.lunch_type == "allowance":
+            self.lunch_amount = settings.default_lunch_rate
+        else:
+            self.lunch_amount = Decimal("0.00")
+
+        if self.dinner_type == "allowance":
+            self.dinner_amount = settings.default_dinner_rate
+        else:
+            self.dinner_amount = Decimal("0.00")
+
+        super().save(*args, **kwargs)
     event = models.ForeignKey(
         "Events.Event",
         on_delete=models.SET_NULL,

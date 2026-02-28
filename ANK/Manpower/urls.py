@@ -28,6 +28,7 @@ from .views import (
     issue_adjustment_secure_link,
     public_adjustment_interaction,
     ManpowerAuditLogList,
+    ManpowerSettingsDetail,
 )
 from .public_views import public_mou_interaction, public_mou_pdf_download
 
@@ -46,6 +47,8 @@ urlpatterns = [
     path("allocations/<uuid:pk>/confirm/", confirm_allocation, name="allocation-confirm"),
     path("allocations/<uuid:pk>/release/", release_allocation, name="allocation-release"),
     path("allocations/<uuid:pk>/generate-mou/", generate_mou, name="allocation-generate-mou"),
+    path("allocations/<uuid:pk>/bulk-update-meals/", FreelancerAllocationDetail.as_view(), name="allocation-bulk-update-meals"),
+    path("allocations/<uuid:pk>/toggle-work-day/", FreelancerAllocationDetail.as_view(), name="allocation-toggle-work-day"),
     
     # Cost Sheets
     path("cost-sheets/", EventCostSheetList.as_view(), name="cost-sheet-list"),
@@ -83,6 +86,9 @@ urlpatterns = [
 
     # Audit logs
     path("audit-logs/", ManpowerAuditLogList.as_view(), name="manpower-audit-logs"),
+    
+    # Settings
+    path("settings/", ManpowerSettingsDetail.as_view(), name="manpower-settings"),
     
     # Public token-based endpoints for freelancers
     path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),
