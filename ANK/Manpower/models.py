@@ -237,6 +237,7 @@ class EventCostSheet(models.Model):
         # Auto-compute total_estimated_cost
         self.total_estimated_cost = (
             (self.negotiated_rate * self.days_planned)
+            + (self.daily_allowance * self.days_planned)
             + (self.allocation.total_meal_allowance)
             + self.travel_costs
         )
@@ -322,14 +323,13 @@ class PostEventAdjustment(models.Model):
             except PostEventAdjustment.DoesNotExist:
                 pass
 
-        # Call original save logic but we'll override it to include meals later
-        # Actually, let's just write the full save here.
+        # Auto-compute revised_total
         cost_sheet = self.allocation.cost_sheet
         per_day_rate = self.override_negotiated_rate if self.override_negotiated_rate is not None else cost_sheet.negotiated_rate
         
-        # Calculate actual_meal_allowance from daily records
         self.revised_total = (
             (per_day_rate * self.actual_days_worked)
+            + (self.actual_daily_allowance * self.actual_days_worked)
             + (self.actual_meal_allowance)
             + cost_sheet.travel_costs
             + self.other_adjustments
