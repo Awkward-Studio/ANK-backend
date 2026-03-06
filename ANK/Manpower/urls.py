@@ -49,6 +49,7 @@ urlpatterns = [
     path("allocations/<uuid:pk>/generate-mou/", generate_mou, name="allocation-generate-mou"),
     path("allocations/<uuid:pk>/bulk-update-meals/", FreelancerAllocationDetail.as_view(), name="allocation-bulk-update-meals"),
     path("allocations/<uuid:pk>/toggle-work-day/", FreelancerAllocationDetail.as_view(), name="allocation-toggle-work-day"),
+    path("allocations/<uuid:pk>/update-meal/", FreelancerAllocationDetail.as_view(), name="allocation-update-meal"),
     
     # Cost Sheets
     path("cost-sheets/", EventCostSheetList.as_view(), name="cost-sheet-list"),
