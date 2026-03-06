@@ -686,7 +686,51 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             return self.bulk_update_meals(request, pk)
         if "toggle-work-day" in request.path:
             return self.toggle_work_day(request, pk)
+        if "update-meal" in request.path:
+            return self.update_meal(request, pk)
         return Response({"detail": "Method not allowed"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def update_meal(self, request, pk=None):
+        """
+        Updates a specific meal's types.
+        Expects: { "meal_id": "<uuid>", "breakfast_type": "...", "lunch_type": "...", "dinner_type": "..." }
+        """
+        try:
+            allocation = get_object_or_404(FreelancerAllocation, pk=pk)
+            event_id = allocation.event_department.event_id
+            denied = _require_manpower_event_access(request, event_id)
+            if denied:
+                return denied
+            lock_error = _check_lock_or_override(request, event_id)
+            if lock_error:
+                return lock_error
+                
+            meal_id = request.data.get("meal_id")
+            if not meal_id:
+                return Response({"detail": "meal_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            meal = get_object_or_404(AllocationDailyMeal, pk=meal_id, allocation=allocation)
+            
+            if "breakfast_type" in request.data:
+                meal.breakfast_type = request.data["breakfast_type"]
+            if "lunch_type" in request.data:
+                meal.lunch_type = request.data["lunch_type"]
+            if "dinner_type" in request.data:
+                meal.dinner_type = request.data["dinner_type"]
+                
+            meal.save()
+            
+            if hasattr(allocation, "cost_sheet"):
+                allocation.cost_sheet.save()
+                
+            return Response(AllocationDailyMealSerializer(meal).data)
+        except Http404:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"detail": "Error updating meal", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def bulk_update_meals(self, request, pk=None):
         """
