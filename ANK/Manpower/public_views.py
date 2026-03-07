@@ -1,9 +1,11 @@
 import uuid
 import io
+import os
 import logging
 from django.utils import timezone
 from django.core.files.base import ContentFile
 from django.http import HttpResponse
+from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -18,13 +20,59 @@ from utils.swagger import (
 
 logger = logging.getLogger(__name__)
 
+def num2words_indian(number):
+    """
+    Convert a number to Indian system words (Lakhs, Crores)
+    """
+    units = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
+    teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
+    tens = ['', 'Ten', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']
+
+    def format_hundreds(n):
+        res = ""
+        if n >= 100:
+            res += units[n // 100] + " Hundred "
+            n %= 100
+        if n >= 10 and n <= 19:
+            res += teens[n - 10]
+        elif n >= 20 or n == 10:
+            res += tens[n // 10] + " " + units[n % 10]
+        else:
+            res += units[n]
+        return res.strip()
+
+    if number == 0: return "Zero"
+
+    number = int(number)
+    parts = []
+
+    if number >= 10000000:
+        parts.append(format_hundreds(number // 10000000) + " Crore")
+        number %= 10000000
+    if number >= 100000:
+        parts.append(format_hundreds(number // 100000) + " Lakh")
+        number %= 100000
+    if number >= 1000:
+        parts.append(format_hundreds(number // 1000) + " Thousand")
+        number %= 1000
+    if number > 0:
+        parts.append(format_hundreds(number))
+
+    return " ".join(parts).strip() + " Only"
+
+
 class INVOICE_PDF(FPDF):
     def header(self):
+        # Logo
+        logo_path = os.path.join(settings.BASE_DIR, "static", "ank_logo_orange.png")
+        if os.path.exists(logo_path):
+            self.image(logo_path, x=self.l_margin, y=10, w=40)
+
         self.set_font("helvetica", "B", 10)
         self.set_text_color(150)
         self.set_x(self.l_margin)
-        self.cell(w=self.epw, h=10, txt="ANK ENTERTAINMENT LLP - INVOICE / VOUCHER", align="R")
-        self.ln(10)
+        self.cell(w=self.epw, h=10, txt="TAX INVOICE", align="R")
+        self.ln(15)
 
     def footer(self):
         self.set_y(-15)
@@ -39,97 +87,121 @@ def generate_invoice_pdf(invoice):
     pdf.set_margins(20, 20, 20)
     pdf.add_page()
     epw = pdf.epw
-    
-    # 1. Header & Title
-    pdf.set_font("helvetica", "B", 20)
-    pdf.cell(w=epw, h=10, txt=clean_text("INVOICE / VOUCHER"), align="L")
-    pdf.ln(12)
-    
-    # 2. Company & Invoice Details
-    pdf.set_font("helvetica", "B", 10)
-    y_start = pdf.get_y()
-    
-    # Left: Company Info
-    pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(w=epw/2, h=5, txt=clean_text("FROM:\nANK ENTERTAINMENT LLP\n802, Sun Paradise Plaza,\nOpp. Kamla Mills, Lower Parel,\nMumbai - 400013"))
-    
-    # Right: Invoice Info
-    pdf.set_xy(pdf.l_margin + epw/2, y_start)
-    inv_info = (f"INVOICE #: {invoice.invoice_number}\n"
-                f"DATE: {invoice.created_at.strftime('%d %b %Y')}\n"
-                f"STATUS: {invoice.status.upper()}\n"
-                f"AMOUNT: INR {float(invoice.payable_amount):,.2f}")
-    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(inv_info), align="R")
-    pdf.ln(10)
 
-    
-    # 3. Bill To
     f = invoice.freelancer
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(w=epw, h=6, txt=clean_text("BILL TO:"), ln=1)
-    pdf.set_font("helvetica", "", 10)
-    pdf.multi_cell(w=epw, h=5, txt=clean_text(f"{f.name}\n{f.address or 'Address not provided'}\nPAN: {f.id_number or 'N/A'}"))
-    pdf.ln(8)
-    
-    # 4. Breakdown Table
-    pdf.set_font("helvetica", "B", 10)
-    pdf.set_fill_color(240, 240, 240)
-    pdf.cell(w=epw*0.6, h=8, txt="Description", border=1, fill=True)
-    pdf.cell(w=epw*0.2, h=8, txt="Details", border=1, fill=True, align="C")
-    pdf.cell(w=epw*0.2, h=8, txt="Amount", border=1, fill=True, align="R")
-    pdf.ln()
-    
-    pdf.set_font("helvetica", "", 10)
     adj = invoice.adjustment
     cost = invoice.adjustment.allocation.cost_sheet
-    
-    # Line 1: Engagement
-    rate = adj.override_negotiated_rate if adj.override_negotiated_rate else cost.negotiated_rate
-    pdf.cell(w=epw*0.6, h=8, txt=f"Professional Fees - {invoice.event.name}", border=1)
-    pdf.cell(w=epw*0.2, h=8, txt=f"{adj.total_engagement_days} Days", border=1, align="C")
-    pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.total_engagement_days * rate):,.2f}", border=1, align="R")
-    pdf.ln()
 
-    
-    # Line 2: Meals
-    pdf.cell(w=epw*0.6, h=8, txt="Meal Logistics & Per Diem", border=1)
-    pdf.cell(w=epw*0.2, h=8, txt="Reconciled", border=1, align="C")
-    pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.actual_meal_allowance):,.2f}", border=1, align="R")
-    pdf.ln()
-
-    
-    # Line 3: Travel
-    if float(adj.travel_adjustments) != 0 or float(cost.travel_costs) != 0:
-        total_travel = float(cost.travel_costs) + float(adj.travel_adjustments)
-        pdf.cell(w=epw*0.6, h=8, txt="Travel Reimbursements & Adjustments", border=1)
-        pdf.cell(w=epw*0.2, h=8, txt="Actuals", border=1, align="C")
-        pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(total_travel):,.2f}", border=1, align="R")
-        pdf.ln()
-
-        
-    # Line 4: Misc
-    if float(adj.other_adjustments) != 0:
-        pdf.cell(w=epw*0.6, h=8, txt="Miscellaneous Adjustments / Penalties", border=1)
-        pdf.cell(w=epw*0.2, h=8, txt="Manual", border=1, align="C")
-        pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.other_adjustments):,.2f}", border=1, align="R")
-        pdf.ln()
-
-        
-    # Total
-    pdf.set_font("helvetica", "B", 11)
-    pdf.cell(w=epw*0.8, h=10, txt="GRAND TOTAL (PAYABLE)", border=1, align="R")
-    pdf.cell(w=epw*0.2, h=10, txt=f"INR {float(invoice.payable_amount):,.2f}", border=1, align="R")
-    pdf.ln(20)
-    
-    # 5. Terms & Signature
-    pdf.set_font("helvetica", "I", 9)
-    pdf.multi_cell(w=epw, h=5, txt=clean_text("Notes:\n1. Payment will be processed within 30 days of approval.\n2. This is a system-generated voucher based on reconciled actuals."))
-    pdf.ln(10)
-    
+    # 1. Parties Section
     pdf.set_font("helvetica", "B", 10)
-    pdf.cell(w=epw, h=10, txt="[DIGITALLY APPROVED BY ACCOUNTS]", border=0, align="C")
-    
+    y_parties = pdf.get_y()
+
+    # LEFT: Freelancer (Provider)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"NAME: {f.name}\nADDRESS: {f.address or 'N/A'}\nMOBILE: {f.contact_phone or 'N/A'}\nE-MAIL: {f.email or 'N/A'}\n{f.id_type}.NO: {f.id_number or 'N/A'}"))
+
+    # RIGHT: Company (Receiver)
+    pdf.set_xy(pdf.l_margin + epw/2 + 5, y_parties)
+    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text("ANK ENTERTAINMENT LLP\n802, Sun Paradise Business Plaza,\nSenapati Bapat Marg, Opp. Kamla Mills,\nRailway Colony, Lower Parel, Mumbai - 400013"), align="R")
+    pdf.ln(10)
+
+    # 2. Metadata Section
+    pdf.set_font("helvetica", "B", 9)
+    pdf.cell(w=epw*0.5, h=6, txt=clean_text(f"INV.NO .: {invoice.invoice_number}"))
+    pdf.cell(w=epw*0.5, h=6, txt=clean_text(f"DATE: {invoice.created_at.strftime('%d-%m-%Y')}"), align="R", ln=1)
+
+    pdf.set_font("helvetica", "", 9)
+    pdf.cell(w=epw, h=6, txt=clean_text(f"NAME OF DEPARTMENT: {invoice.event_department.department.name.upper()}"), ln=1)
+
+    periods_str = ", ".join([f"{p['start']} to {p['end']}" for p in adj.engagement_periods]) if adj.engagement_periods else "N/A"
+    pdf.cell(w=epw, h=6, txt=clean_text(f"PERIOD OF SERVICE ( DATES ): {periods_str}"), ln=1)
+    pdf.cell(w=epw, h=6, txt=clean_text(f"NO.OF WORKING DAYS: {adj.total_engagement_days}"), ln=1)
+
+    rate = adj.override_negotiated_rate if adj.override_negotiated_rate else cost.negotiated_rate
+    pdf.cell(w=epw, h=6, txt=clean_text(f"Rs.{float(rate):,.2f}/- per day"), ln=1)
+    pdf.ln(4)
+
+    # 3. Main Service Table
+    pdf.set_font("helvetica", "B", 9)
+    pdf.set_fill_color(245, 245, 245)
+    pdf.cell(w=epw*0.5, h=8, txt="NATURE OF SERVICE", border=1, fill=True)
+    pdf.cell(w=epw*0.15, h=8, txt="DAYS", border=1, fill=True, align="C")
+    pdf.cell(w=epw*0.15, h=8, txt="RATE", border=1, fill=True, align="C")
+    pdf.cell(w=epw*0.2, h=8, txt="TOTAL", border=1, fill=True, align="R")
+    pdf.ln()
+
+    pdf.set_font("helvetica", "", 9)
+    # Line 1: Professional Fees
+    pdf.cell(w=epw*0.5, h=8, txt=clean_text(f"{invoice.event.name} @ {invoice.event.venue or 'Venue TBD'}"), border=1)
+    pdf.cell(w=epw*0.15, h=8, txt=str(adj.total_engagement_days), border=1, align="C")
+    pdf.cell(w=epw*0.15, h=8, txt=f"{float(rate):,.2f}", border=1, align="C")
+    fees_total = float(adj.total_engagement_days * rate)
+    pdf.cell(w=epw*0.2, h=8, txt=f"{fees_total:,.2f}", border=1, align="R")
+    pdf.ln()
+
+    # Sub Total (Professional Fees only)
+    pdf.set_font("helvetica", "B", 9)
+    pdf.cell(w=epw*0.8, h=8, txt="SUB TOTAL", border=1, align="R")
+    pdf.cell(w=epw*0.2, h=8, txt=f"{fees_total:,.2f}", border=1, align="R")
+    pdf.ln()
+
+    # Travelling
+    pdf.set_font("helvetica", "", 9)
+    total_travel = float(cost.travel_costs) + float(adj.travel_adjustments)
+    pdf.cell(w=epw*0.8, h=8, txt="TRAVELLING - Reimbursments & Adjustments (Supporting must)", border=1)
+    pdf.cell(w=epw*0.2, h=8, txt=f"{total_travel:,.2f}", border=1, align="R")
+    pdf.ln()
+
+    # F & B
+    pdf.cell(w=epw*0.8, h=8, txt="F & B - Meal Logistics & Per Diem (Supporting must)", border=1)
+    pdf.cell(w=epw*0.2, h=8, txt=f"{float(adj.actual_meal_allowance):,.2f}", border=1, align="R")
+    pdf.ln()
+
+    # Misc
+    if float(adj.other_adjustments) != 0:
+        pdf.cell(w=epw*0.8, h=8, txt="MISCELLANEOUS / PENALTIES", border=1)
+        pdf.cell(w=epw*0.2, h=8, txt=f"{float(adj.other_adjustments):,.2f}", border=1, align="R")
+        pdf.ln()
+
+    # Grand Total
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(w=epw*0.8, h=10, txt="GRAND TOTAL", border=1, align="R")
+    pdf.cell(w=epw*0.2, h=10, txt=f"{float(invoice.payable_amount):,.2f}", border=1, align="R")
+    pdf.ln(8)
+
+    # Amount in words
+    pdf.set_font("helvetica", "B", 9)
+    words = num2words_indian(invoice.payable_amount)
+    pdf.cell(w=epw, h=6, txt=clean_text(f"AMOUNT IN WORDS: {words}"), ln=1)
+    pdf.ln(10)
+
+    # 4. Bank Details & Signature
+    y_bank = pdf.get_y()
+    pdf.set_font("helvetica", "", 9)
+    bank_text = (f"A/C. NAME: {f.bank_account_name or 'N/A'}\n"
+                 f"NAME OF BANK: {f.bank_name or 'N/A'}\n"
+                 f"A/C. NO.: {f.bank_account_number or 'N/A'}\n"
+                 f"BRANCH: {f.bank_branch or 'N/A'}\n"
+                 f"IFSC CODE: {f.bank_ifsc or 'N/A'}")
+    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(bank_text))
+
+    pdf.set_xy(pdf.l_margin + epw/2, y_bank)
+    pdf.set_font("helvetica", "B", 9)
+    pdf.multi_cell(w=epw/2, h=5, txt=clean_text("SIGNATURE OF FREELANCER\n\nMANDATORY"), align="R")
+    pdf.ln(15)
+
+    # 5. Approvals Footer
+    pdf.set_font("helvetica", "B", 8)
+    pdf.cell(w=epw/3, h=6, txt="Hired By", border="T", align="C")
+    pdf.cell(w=epw/3, h=6, txt="Sanctioned By", border="T", align="C")
+    pdf.cell(w=epw/3, h=6, txt="Approve By", border="T", align="C", ln=1)
+
+    pdf.ln(10)
+    pdf.cell(w=epw/2, h=6, txt="A/C. MANAGER", border="T", align="C")
+    pdf.cell(w=epw/2, h=6, txt="SR.A/C MANAGER", border="T", align="C", ln=1)
+
     return bytes(pdf.output())
+
 
 
 @api_view(["GET"])
