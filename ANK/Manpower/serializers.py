@@ -59,10 +59,16 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="allocation.freelancer.name")
     event_name = serializers.ReadOnlyField(source="allocation.event_department.event.name")
     invoice_status = serializers.ReadOnlyField(source="invoice_workflow.status")
+    invoice_token = serializers.SerializerMethodField()
     allocation_is_rated = serializers.ReadOnlyField(source="allocation.is_rated")
     planned_rate = serializers.ReadOnlyField(source="allocation.cost_sheet.negotiated_rate")
     revisions = PostEventAdjustmentRevisionSerializer(many=True, read_only=True)
     actual_meal_allowance = serializers.ReadOnlyField()
+
+    def get_invoice_token(self, obj):
+        if hasattr(obj, 'invoice_workflow'):
+            return obj.invoice_workflow.secure_token
+        return None
 
     class Meta:
         model = PostEventAdjustment
