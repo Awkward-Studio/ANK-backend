@@ -6,10 +6,31 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 
 
+class Skill(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=120, unique=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        ordering = ["name"]
+
+
 class Freelancer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    skill_category = models.CharField(max_length=100)
+    skill = models.ForeignKey(
+        Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="freelancers"
+    )
+    skill_category = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100)
     address = models.TextField(blank=True)
     parent_name = models.CharField(max_length=200, blank=True, help_text='S/o / D/o')
@@ -59,7 +80,10 @@ class ManpowerRequirement(models.Model):
         on_delete=models.CASCADE,
         related_name="manpower_requirements",
     )
-    skill_category = models.CharField(max_length=100)
+    skill = models.ForeignKey(
+        Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="requirements"
+    )
+    skill_category = models.CharField(max_length=100, blank=True)
     quantity_required = models.PositiveIntegerField(default=1)
     estimated_days = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0")
