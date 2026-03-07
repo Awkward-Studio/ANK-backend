@@ -1903,19 +1903,22 @@ def issue_adjustment_secure_link(request, allocation_id):
     if denied:
         return denied
     adjustment, created = PostEventAdjustment.objects.get_or_create(allocation=allocation)
-    # If not submitted, sync data to ensure it matches current MoU commercials
+    # If not submitted, sync data to ensure it matches current MoU commercials (if empty)
     if not adjustment.freelancer_submitted_at:
         cost = allocation.cost_sheet
-        adjustment.actual_days_worked = cost.days_planned
-        adjustment.total_engagement_days = cost.days_planned
         
-        # Initial period from allocation dates
-        if allocation.start_date and allocation.end_date:
-            adjustment.engagement_periods = [{
-                "start": str(allocation.start_date),
-                "end": str(allocation.end_date),
-                "days": float(cost.days_planned)
-            }]
+        # Only initialize if these are currently default/empty
+        if not adjustment.engagement_periods:
+            adjustment.actual_days_worked = cost.days_planned
+            adjustment.total_engagement_days = cost.days_planned
+            
+            # Initial period from allocation dates
+            if allocation.start_date and allocation.end_date:
+                adjustment.engagement_periods = [{
+                    "start": str(allocation.start_date),
+                    "end": str(allocation.end_date),
+                    "days": float(cost.days_planned)
+                }]
         
         adjustment.override_negotiated_rate = cost.negotiated_rate
         if not adjustment.secure_token:
