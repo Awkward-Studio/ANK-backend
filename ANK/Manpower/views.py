@@ -1,7 +1,7 @@
 import uuid
 from datetime import timedelta
 from django.utils import timezone
-from rest_framework import status, filters
+from rest_framework import status, filters, generics
 from rest_framework.views import APIView
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
