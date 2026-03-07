@@ -9,6 +9,8 @@ from .views import (
     confirm_allocation,
     release_allocation,
     generate_mou,
+    SkillList,
+    SkillDetail,
     EventCostSheetList,
     EventCostSheetDetail,
     MoUList,
@@ -36,6 +38,10 @@ urlpatterns = [
     # Freelancers
     path("freelancers/", FreelancerList.as_view(), name="freelancer-list"),
     path("freelancers/<uuid:pk>/", FreelancerDetail.as_view(), name="freelancer-detail"),
+    
+    # Skills
+    path("skills/", SkillList.as_view(), name="skill-list"),
+    path("skills/<uuid:pk>/", SkillDetail.as_view(), name="skill-detail"),
     
     # Requirements
     path("requirements/", ManpowerRequirementList.as_view(), name="requirement-list"),

@@ -38,6 +38,7 @@ from .models import (
     ManpowerAuditLog,
     AllocationDailyMeal,
     ManpowerSettings,
+    Skill,
 )
 from .serializers import (
     FreelancerSerializer,
@@ -52,6 +53,7 @@ from .serializers import (
     ManpowerAuditLogSerializer,
     AllocationDailyMealSerializer,
     ManpowerSettingsSerializer,
+    SkillSerializer,
 )
 
 ADMIN_ROLES = {"admin", "super_admin"}
@@ -215,6 +217,18 @@ def _create_revision(adjustment, action_type, user=None, comments=""):
     except Exception:
         pass
 
+
+
+class SkillList(generics.ListCreateAPIView):
+    queryset = Skill.objects.all()
+    serializer_class = SkillSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class SkillDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Skill.objects.all()
+    serializer_class = SkillSerializer
+    permission_classes = [IsAuthenticated]
 
 
 @document_api_view(

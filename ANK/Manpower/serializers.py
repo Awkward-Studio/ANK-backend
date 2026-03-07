@@ -13,15 +13,24 @@ from .models import (
     PostEventAdjustmentRevision,
     AllocationDailyMeal,
     ManpowerSettings,
+    Skill,
 )
 from Staff.serializers import UserSerializer
 
 
+class SkillSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Skill
+        fields = "__all__"
+
+
 class FreelancerSerializer(serializers.ModelSerializer):
+    skill_name = serializers.ReadOnlyField(source="skill.name")
+
     class Meta:
         model = Freelancer
         fields = [
-            "id", "name", "skill_category", "city", "address", 
+            "id", "name", "skill", "skill_name", "skill_category", "city", "address", 
             "parent_name", "id_type", "id_number",
             "bank_account_name", "bank_name", "bank_account_number",
             "bank_branch", "bank_ifsc", "contact_phone", "email",
@@ -38,6 +47,8 @@ class EventCostSheetSerializer(serializers.ModelSerializer):
 
 
 class ManpowerRequirementSerializer(serializers.ModelSerializer):
+    skill_name = serializers.ReadOnlyField(source="skill.name")
+
     class Meta:
         model = ManpowerRequirement
         fields = "__all__"
