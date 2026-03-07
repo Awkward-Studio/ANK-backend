@@ -115,6 +115,7 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "event_name",
             "start_date",
             "end_date",
+            "is_extra",
             "is_adjustment_editable",
             "mou_status",
             "mou_token",
