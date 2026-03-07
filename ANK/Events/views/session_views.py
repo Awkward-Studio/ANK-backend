@@ -24,6 +24,7 @@ from utils.swagger import (
     document_api_view,
     query_param,
 )
+from utils.pagination import StandardPagination
 
 
 @document_api_view(
@@ -70,13 +71,8 @@ class SessionListCreateView(DepartmentAccessMixin, APIView):
             return Response(
                 SessionSerializer(sess).data, status=status.HTTP_201_CREATED
             )
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error creating session", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @document_api_view(
@@ -120,13 +116,8 @@ class SessionDetailView(DepartmentAccessMixin, APIView):
             ser.is_valid(raise_exception=True)
             sess = ser.save()
             return Response(SessionSerializer(sess).data)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error updating session", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
         try:
@@ -157,10 +148,16 @@ class SessionDetailView(DepartmentAccessMixin, APIView):
 )
 class SessionFieldList(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
 
     def get(self, request):
         try:
             qs = SessionField.objects.all()
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(qs, request)
+            if page is not None:
+                serializer = SessionFieldSerializer(page, many=True)
+                return paginator.get_paginated_response(serializer.data)
             return Response(SessionFieldSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
@@ -174,13 +171,8 @@ class SessionFieldList(APIView):
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data, status=status.HTTP_201_CREATED)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error creating session field", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @document_api_view(
@@ -221,13 +213,8 @@ class SessionFieldDetail(APIView):
             ser.is_valid(raise_exception=True)
             ser.save()
             return Response(ser.data)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error updating session field", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
         try:
@@ -286,13 +273,8 @@ class SessionRegistrationListCreateView(DepartmentAccessMixin, APIView):
             return Response(
                 SessionRegistrationSerializer(reg).data, status=status.HTTP_201_CREATED
             )
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error creating session registration", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @document_api_view(
@@ -339,13 +321,8 @@ class SessionRegistrationDetailView(DepartmentAccessMixin, APIView):
             ser.is_valid(raise_exception=True)
             reg = ser.save()
             return Response(SessionRegistrationSerializer(reg).data)
-        except ValidationError as ve:
-            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response(
-                {"detail": "Error updating session registration", "error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        except (ValidationError, Exception) as ve:
+            return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
         try:
