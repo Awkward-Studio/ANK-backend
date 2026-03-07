@@ -1831,6 +1831,7 @@ class InvoiceWorkflowList(DepartmentAccessMixin, APIView):
                 "freelancer": adjustment.allocation.freelancer_id,
                 "payable_amount": adjustment.revised_total,
                 "invoice_number": invoice_number,
+                "secure_token": uuid.uuid4(),
                 "status": "draft",
             }
         )

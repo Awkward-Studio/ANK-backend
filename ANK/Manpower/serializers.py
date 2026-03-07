@@ -185,7 +185,7 @@ class InvoiceWorkflowSerializer(serializers.ModelSerializer):
     class Meta:
         model = InvoiceWorkflow
         fields = "__all__"
-        read_only_fields = ["approved_at", "payable_at", "paid_at", "created_at", "updated_at"]
+        read_only_fields = ["secure_token", "approved_at", "payable_at", "paid_at", "created_at", "updated_at"]
 
 
 class ManpowerAuditLogSerializer(serializers.ModelSerializer):
