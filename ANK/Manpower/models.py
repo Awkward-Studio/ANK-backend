@@ -402,14 +402,34 @@ class PostEventAdjustment(models.Model):
 
     def sync_worked_days(self):
         """
-        Updates the is_worked status of AllocationDailyMeal records based on actual_days_worked.
-        Marks first N days as worked, where N is actual_days_worked.
+        Updates the is_worked status of AllocationDailyMeal records based on engagement_periods.
+        A day is marked as worked if it falls within ANY of the engagement periods.
         """
-        meals = self.allocation.daily_meals.all().order_by("date")
-        worked_count = int(self.actual_days_worked)
-        for i, meal in enumerate(meals):
-            meal.is_worked = i < worked_count
-            meal.save(update_fields=["is_worked"])
+        meals = self.allocation.daily_meals.all()
+        periods = self.engagement_periods or []
+        
+        # Convert periods to date objects for comparison
+        parsed_periods = []
+        for p in periods:
+            try:
+                s = models.DateField().to_python(p.get('start'))
+                e = models.DateField().to_python(p.get('end'))
+                if s and e:
+                    parsed_periods.append((s, e))
+            except:
+                continue
+
+        for meal in meals:
+            # Check if this meal date falls in any period
+            worked = False
+            for s, e in parsed_periods:
+                if s <= meal.date <= e:
+                    worked = True
+                    break
+            
+            if meal.is_worked != worked:
+                meal.is_worked = worked
+                meal.save(update_fields=["is_worked"])
 
     @property
     def actual_meal_allowance(self):
