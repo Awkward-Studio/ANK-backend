@@ -19,9 +19,6 @@ class Freelancer(models.Model):
     base_daily_rate = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
-    standard_allowance = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
-    )
     documents = models.JSONField(
         default=dict, blank=True, help_text="Links to documents or metadata"
     )
@@ -247,9 +244,6 @@ class EventCostSheet(models.Model):
     days_planned = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0")
     )
-    daily_allowance = models.DecimalField(
-        max_digits=12, decimal_places=2, default=Decimal("0.00")
-    )
     travel_costs = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
@@ -268,10 +262,9 @@ class EventCostSheet(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Auto-compute total_estimated_cost
+        # Auto-compute total_estimated_cost using meal logistics
         self.total_estimated_cost = (
             (self.negotiated_rate * self.days_planned)
-            + (self.daily_allowance * self.days_planned)
             + (self.allocation.total_meal_allowance)
             + self.travel_costs
         )
@@ -323,7 +316,7 @@ class PostEventAdjustment(models.Model):
     actual_days_worked = models.DecimalField(
         max_digits=5, decimal_places=1, default=Decimal("1.0")
     )
-    actual_daily_allowance = models.DecimalField(
+    travel_adjustments = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
     other_adjustments = models.DecimalField(
@@ -363,9 +356,9 @@ class PostEventAdjustment(models.Model):
         
         self.revised_total = (
             (per_day_rate * self.actual_days_worked)
-            + (self.actual_daily_allowance * self.actual_days_worked)
             + (self.actual_meal_allowance)
             + cost_sheet.travel_costs
+            + self.travel_adjustments
             + self.other_adjustments
         )
         super().save(*args, **kwargs)
@@ -423,7 +416,7 @@ class PostEventAdjustmentRevision(models.Model):
     
     # Snapshot of values
     actual_days_worked = models.DecimalField(max_digits=5, decimal_places=1)
-    actual_daily_allowance = models.DecimalField(max_digits=12, decimal_places=2)
+    travel_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     other_adjustments = models.DecimalField(max_digits=12, decimal_places=2)
     override_negotiated_rate = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     revised_total = models.DecimalField(max_digits=15, decimal_places=2)

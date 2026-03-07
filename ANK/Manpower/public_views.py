@@ -53,6 +53,20 @@ def generate_mou_pdf(mou):
     pdf.add_page()
     epw = pdf.epw
     
+    # Get dates with fallback
+    start_date = mou.allocation.start_date
+    end_date = mou.allocation.end_date
+    if (not start_date or not end_date) and mou.allocation.requirement:
+        req = mou.allocation.requirement
+        start_date = start_date or getattr(req, 'start_date', None)
+        end_date = end_date or getattr(req, 'end_date', None)
+    
+    date_range_str = "TBD"
+    if start_date and end_date:
+        date_range_str = f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
+    
+    duration = str(mou.allocation.cost_sheet.days_planned)
+
     pdf.set_font("helvetica", "B", 16)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(w=epw, h=10, txt=clean_text("MEMORANDUM OF UNDERSTANDING (MOU) & CONFIDENTIALITY AGREEMENT"), align="C")
@@ -98,7 +112,7 @@ def generate_mou_pdf(mou):
     pdf.ln(8)
     
     sections = [
-        ("1. Purpose, Scope & Applicability", "1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered only for those specific events and assignments confirmed by ANK Entertainment LLP through official digital communication channels (email, WhatsApp, or any other approved platform), where the dates have been mutually acknowledged.\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
+        ("1. Purpose, Scope & Applicability", f"1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered for the event '{mou.allocation.event_department.event.name}' during the period of {date_range_str} (Total Duration: {duration} days).\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
         ("2. Payment Terms", "The Freelancer shall be compensated at a pre-agreed rate for each confirmed event. Payment shall be processed within 30 days of invoice submission post-event completion, subject to satisfactory performance. Travel Days will be compensated only if active work is assigned. Non-working travel days will not be billable."),
         ("3. Confidentiality & Non-Disclosure Agreement (NDA)", "3.1 The Freelancer acknowledges that they may have access to confidential information, including event concepts, client data, guest lists, creative plans, and budgets.\n3.2 The Freelancer agrees to maintain complete confidentiality, refrain from unauthorized recording or sharing of event content, and handle client property responsibly."),
         ("4. Professional Conduct During Events", "No unauthorized photography or videography. No sharing of event material on social media. Maintain strict confidentiality. Focus on assigned responsibilities. Maintain professional grooming and body language. Mobile phones must be on silent mode. Consumption of alcohol or tobacco in guest areas is strictly prohibited."),
@@ -141,7 +155,7 @@ def generate_mou_pdf(mou):
 @permission_classes([AllowAny])
 def public_mou_pdf_download(request, token):
     try:
-        mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet").get(secure_token=token)
+        mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet", "allocation__requirement").get(secure_token=token)
     except (MoU.DoesNotExist, ValueError):
         return HttpResponse("Invalid or expired token", status=404)
     try:
@@ -163,7 +177,7 @@ def public_mou_pdf_download(request, token):
 @permission_classes([AllowAny])
 def public_mou_interaction(request, token):
     try:
-        mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet").get(secure_token=token)
+        mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet", "allocation__requirement").get(secure_token=token)
     except (MoU.DoesNotExist, ValueError):
         return Response({"error": "Invalid or expired token"}, status=status.HTTP_404_NOT_FOUND)
     if mou.expires_at and mou.expires_at < timezone.now():
@@ -213,6 +227,9 @@ def public_mou_interaction(request, token):
             if action == "accept":
                 mou.status = "accepted"
                 mou.accepted_at = timezone.now()
+                # Automatically confirm the allocation
+                mou.allocation.status = "confirmed"
+                mou.allocation.save()
             else:
                 mou.status = "rejected"
             mou.save()
