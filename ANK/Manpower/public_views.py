@@ -98,7 +98,7 @@ def generate_mou_pdf(mou):
     pdf.ln(8)
     
     sections = [
-        ("1. Purpose, Scope & Applicability", "1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered only for those specific events and assignments confirmed by ANK Entertainment LLP through official digital communication channels (email, WhatsApp, or any other approved platform), where the dates, and remuneration have been mutually acknowledged.\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
+        ("1. Purpose, Scope & Applicability", "1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered only for those specific events and assignments confirmed by ANK Entertainment LLP through official digital communication channels (email, WhatsApp, or any other approved platform), where the dates have been mutually acknowledged.\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
         ("2. Payment Terms", "The Freelancer shall be compensated at a pre-agreed rate for each confirmed event. Payment shall be processed within 30 days of invoice submission post-event completion, subject to satisfactory performance. Travel Days will be compensated only if active work is assigned. Non-working travel days will not be billable."),
         ("3. Confidentiality & Non-Disclosure Agreement (NDA)", "3.1 The Freelancer acknowledges that they may have access to confidential information, including event concepts, client data, guest lists, creative plans, and budgets.\n3.2 The Freelancer agrees to maintain complete confidentiality, refrain from unauthorized recording or sharing of event content, and handle client property responsibly."),
         ("4. Professional Conduct During Events", "No unauthorized photography or videography. No sharing of event material on social media. Maintain strict confidentiality. Focus on assigned responsibilities. Maintain professional grooming and body language. Mobile phones must be on silent mode. Consumption of alcohol or tobacco in guest areas is strictly prohibited."),
@@ -173,16 +173,32 @@ def public_mou_interaction(request, token):
     if expected_code and provided_code != expected_code:
         return Response({"error": "Access code required or invalid"}, status=status.HTTP_403_FORBIDDEN)
     if request.method == "GET":
+        # Fallback to requirement dates if allocation dates are missing
+        start_date = mou.allocation.start_date
+        end_date = mou.allocation.end_date
+        
+        if (not start_date or not end_date) and mou.allocation.requirement:
+            req = mou.allocation.requirement
+            if not start_date:
+                start_date = getattr(req, 'start_date', None)
+            if not end_date:
+                end_date = getattr(req, 'end_date', None)
+
         data = {
-            "id": mou.id, "status": mou.status, "template_data": mou.template_data,
-            "freelancer_name": mou.allocation.freelancer.name, "skill_category": mou.allocation.freelancer.skill_category,
-            "event_name": mou.allocation.event_department.event.name, "department_name": mou.allocation.event_department.department.name,
-            "start_date": mou.allocation.start_date, "end_date": mou.allocation.end_date,
+            "id": mou.id, 
+            "status": mou.status, 
+            "template_data": mou.template_data,
+            "freelancer_name": mou.allocation.freelancer.name, 
+            "skill_category": mou.allocation.freelancer.skill_category,
+            "event_name": mou.allocation.event_department.event.name, 
+            "department_name": mou.allocation.event_department.department.name,
+            "start_date": start_date, 
+            "end_date": end_date,
             "cost_sheet": {
-                "negotiated_rate": mou.allocation.cost_sheet.negotiated_rate, "days_planned": mou.allocation.cost_sheet.days_planned,
-                "daily_allowance": mou.allocation.cost_sheet.daily_allowance, "total_estimated_cost": mou.allocation.cost_sheet.total_estimated_cost,
+                "days_planned": mou.allocation.cost_sheet.days_planned,
             },
-            "expires_at": mou.expires_at, "requires_access_code": bool(expected_code),
+            "expires_at": mou.expires_at, 
+            "requires_access_code": bool(expected_code),
             "signed_pdf_url": f"/api/manpower/public/mou/{token}/pdf/" if mou.status == "accepted" else None,
             "download_url": f"/api/manpower/public/mou/{token}/pdf/",
         }

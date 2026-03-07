@@ -61,6 +61,8 @@ class ManpowerRequirement(models.Model):
     max_unit_rate = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     sessions = models.ManyToManyField(
         "Events.Session",
