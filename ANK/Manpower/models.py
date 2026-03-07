@@ -573,9 +573,9 @@ class InvoiceWorkflow(models.Model):
 
     VALID_TRANSITIONS = {
         "draft": {"submitted"},
-        "submitted": {"approved"},
-        "approved": {"payable"},
-        "payable": {"paid"},
+        "submitted": {"approved", "draft"},
+        "approved": {"payable", "draft"},
+        "payable": {"paid", "draft"},
         "paid": set(),
     }
 
@@ -625,9 +625,16 @@ class InvoiceWorkflow(models.Model):
             return
         if new_status not in self.VALID_TRANSITIONS.get(self.status, set()):
             raise ValueError(f"Invalid transition from {self.status} to {new_status}")
+        
         self.status = new_status
         now = timezone.now()
-        if new_status == "approved":
+        
+        if new_status == "draft":
+            # Reset timeline
+            self.approved_at = None
+            self.payable_at = None
+            self.paid_at = None
+        elif new_status == "approved":
             self.approved_at = now
         elif new_status == "payable":
             self.payable_at = now
