@@ -223,6 +223,10 @@ class BulkAssignPermissionsAPIView(APIView):
             errors = []
             
             with transaction.atomic():
+                # Clear existing permissions for this user and event-department
+                # to ensure the provided list represents the full desired state.
+                ModelPermission.objects.filter(user=user, event_department=event_dept).delete()
+                
                 for idx, perm_data in enumerate(permissions_data):
                     try:
                         content_type_id = perm_data.get('content_type_id')
@@ -254,32 +258,21 @@ class BulkAssignPermissionsAPIView(APIView):
                             })
                             continue
                         
-                        # Get or create permission
-                        permission, created_flag = ModelPermission.objects.get_or_create(
+                        # Create permission (always fresh)
+                        permission = ModelPermission.objects.create(
                             user=user,
                             event_department=event_dept,
                             content_type=content_type,
                             field_name=field_name,
-                            defaults={'permission_type': permission_type}
+                            permission_type=permission_type
                         )
                         
-                        if not created_flag:
-                            # Update existing permission
-                            permission.permission_type = permission_type
-                            permission.save()
-                            updated.append({
-                                "permission_id": str(permission.id),
-                                "content_type": content_type.model,
-                                "field_name": field_name,
-                                "permission_type": permission_type
-                            })
-                        else:
-                            created.append({
-                                "permission_id": str(permission.id),
-                                "content_type": content_type.model,
-                                "field_name": field_name,
-                                "permission_type": permission_type
-                            })
+                        created.append({
+                            "permission_id": str(permission.id),
+                            "content_type": content_type.model,
+                            "field_name": field_name,
+                            "permission_type": permission_type
+                        })
                     
                     except ValidationError as ve:
                         errors.append({

@@ -183,16 +183,10 @@ class EventDetailView(DepartmentAccessMixin, APIView):
 )
 class EventFieldList(APIView):
     permission_classes = [IsAuthenticated]
-    pagination_class = StandardPagination
 
     def get(self, request):
         try:
             qs = EventField.objects.all()
-            paginator = self.pagination_class()
-            page = paginator.paginate_queryset(qs, request)
-            if page is not None:
-                serializer = EventFieldSerializer(page, many=True)
-                return paginator.get_paginated_response(serializer.data)
             return Response(EventFieldSerializer(qs, many=True).data)
         except Exception as e:
             return Response(

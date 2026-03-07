@@ -3,25 +3,21 @@ from django.core.exceptions import ValidationError
 from django.contrib.contenttypes.fields import GenericRelation
 import uuid
 from Logistics.models.hotel_models import EventHotel, EventHotelRoomType
-from Guest.models import Guest
-from Events.models.event_model import Event
-from Events.models.session_registration import SessionRegistration
-from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class Accommodation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(
-        Event, on_delete=models.CASCADE, related_name="accommodations"
+        "Events.Event", on_delete=models.CASCADE, related_name="accommodations"
     )
     event_registrations = models.ManyToManyField(
-        EventRegistration, blank=True, related_name="accommodation_assignments"
+        "Events.EventRegistration", blank=True, related_name="accommodation_assignments"
     )
     extra_attendees = models.ManyToManyField(
-        ExtraAttendee, blank=True, related_name="accommodation_assignments"
+        "Events.ExtraAttendee", blank=True, related_name="accommodation_assignments"
     )
     session_registration = models.ForeignKey(
-        SessionRegistration,
+        "Events.SessionRegistration",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
@@ -31,7 +27,7 @@ class Accommodation(models.Model):
         EventHotel, on_delete=models.CASCADE, related_name="accommodations"
     )
     sharing_with = models.ForeignKey(
-        Guest,
+        "Guest.Guest",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

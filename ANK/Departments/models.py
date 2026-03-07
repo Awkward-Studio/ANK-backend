@@ -275,12 +275,10 @@ def get_model_fields(model_class):
     """Get all field names from a model, excluding reverse relations."""
     fields = []
     for field in model_class._meta.get_fields():
-        # Exclude reverse relations (many_to_many, one_to_many)
-        if field.many_to_many or (hasattr(field, 'reverse') and field.reverse):
-            continue
-        # Include direct fields and ForeignKey
-        if hasattr(field, 'name'):
-            fields.append(field.name)
+        # Include concrete fields and ManyToManyFields defined on this model
+        if field.concrete or (field.many_to_many and not field.auto_created):
+            if hasattr(field, "name"):
+                fields.append(field.name)
     return fields
 
 
