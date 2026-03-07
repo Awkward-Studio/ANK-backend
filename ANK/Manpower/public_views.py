@@ -61,6 +61,7 @@ def generate_invoice_pdf(invoice):
                 f"AMOUNT: INR {float(invoice.payable_amount):,.2f}")
     pdf.multi_cell(w=epw/2, h=5, txt=clean_text(inv_info), align="R")
     pdf.ln(10)
+
     
     # 3. Bill To
     f = invoice.freelancer
@@ -88,12 +89,14 @@ def generate_invoice_pdf(invoice):
     pdf.cell(w=epw*0.2, h=8, txt=f"{adj.total_engagement_days} Days", border=1, align="C")
     pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.total_engagement_days * rate):,.2f}", border=1, align="R")
     pdf.ln()
+
     
     # Line 2: Meals
     pdf.cell(w=epw*0.6, h=8, txt="Meal Logistics & Per Diem", border=1)
     pdf.cell(w=epw*0.2, h=8, txt="Reconciled", border=1, align="C")
     pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.actual_meal_allowance):,.2f}", border=1, align="R")
     pdf.ln()
+
     
     # Line 3: Travel
     if float(adj.travel_adjustments) != 0 or float(cost.travel_costs) != 0:
@@ -102,6 +105,7 @@ def generate_invoice_pdf(invoice):
         pdf.cell(w=epw*0.2, h=8, txt="Actuals", border=1, align="C")
         pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(total_travel):,.2f}", border=1, align="R")
         pdf.ln()
+
         
     # Line 4: Misc
     if float(adj.other_adjustments) != 0:
@@ -109,6 +113,7 @@ def generate_invoice_pdf(invoice):
         pdf.cell(w=epw*0.2, h=8, txt="Manual", border=1, align="C")
         pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.other_adjustments):,.2f}", border=1, align="R")
         pdf.ln()
+
         
     # Total
     pdf.set_font("helvetica", "B", 11)

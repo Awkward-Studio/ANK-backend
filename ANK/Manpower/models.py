@@ -595,7 +595,7 @@ class InvoiceWorkflow(models.Model):
         Freelancer, on_delete=models.CASCADE, related_name="invoices"
     )
     invoice_number = models.CharField(max_length=64, unique=True)
-    secure_token = models.UUIDField(default=uuid.uuid4, unique=True)
+    secure_token = models.UUIDField(default=uuid.uuid4, unique=True, null=True)
     due_date = models.DateField(null=True, blank=True)
     payable_amount = models.DecimalField(
         max_digits=15, decimal_places=2, default=Decimal("0.00")
