@@ -23,7 +23,7 @@ class INVOICE_PDF(FPDF):
         self.set_font("helvetica", "B", 10)
         self.set_text_color(150)
         self.set_x(self.l_margin)
-        self.cell(w=self.epw, h=10, txt="ANK ENTERTAINMENT LLP - PAYMENT VOUCHER", align="R")
+        self.cell(w=self.epw, h=10, txt="ANK ENTERTAINMENT LLP - INVOICE / VOUCHER", align="R")
         self.ln(10)
 
     def footer(self):
