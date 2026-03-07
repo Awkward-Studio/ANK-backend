@@ -206,6 +206,7 @@ def _create_revision(adjustment, action_type, user=None, comments=""):
             total_engagement_days=adjustment.total_engagement_days,
             engagement_periods=adjustment.engagement_periods,
             travel_adjustments=adjustment.travel_adjustments,
+            actual_meal_allowance=adjustment.actual_meal_allowance,
             other_adjustments=adjustment.other_adjustments,
             override_negotiated_rate=adjustment.override_negotiated_rate,
             revised_total=adjustment.revised_total,
