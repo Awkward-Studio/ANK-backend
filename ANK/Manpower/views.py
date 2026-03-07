@@ -203,7 +203,7 @@ def _create_revision(adjustment, action_type, user=None, comments=""):
             actor=user if user and user.is_authenticated else None,
             actor_name=user.name if user and user.is_authenticated else adjustment.allocation.freelancer.name,
             actual_days_worked=adjustment.actual_days_worked,
-            actual_daily_allowance=adjustment.actual_daily_allowance,
+            travel_adjustments=adjustment.travel_adjustments,
             other_adjustments=adjustment.other_adjustments,
             override_negotiated_rate=adjustment.override_negotiated_rate,
             revised_total=adjustment.revised_total,
@@ -1905,7 +1905,6 @@ def issue_adjustment_secure_link(request, allocation_id):
     if not adjustment.freelancer_submitted_at:
         cost = allocation.cost_sheet
         adjustment.actual_days_worked = cost.days_planned
-        adjustment.actual_daily_allowance = cost.daily_allowance
         adjustment.override_negotiated_rate = cost.negotiated_rate
         if not adjustment.secure_token:
             adjustment.secure_token = uuid.uuid4()
@@ -1931,11 +1930,23 @@ def public_adjustment_interaction(request, token):
             "allocation__freelancer",
             "allocation__event_department__event",
             "allocation__cost_sheet",
+            "allocation__requirement",
+        ).prefetch_related(
+            "allocation__daily_meals",
+            "allocation__requirement__sessions"
         ).get(secure_token=token)
     except (PostEventAdjustment.DoesNotExist, ValueError):
         return Response({"error": "Invalid token"}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == "GET":
+        from .serializers import AllocationDailyMealSerializer
+        from Events.serializers.session_serializers import SessionSerializer
+        
+        # Get sessions from requirement
+        sessions_data = []
+        if adjustment.allocation.requirement:
+            sessions_data = SessionSerializer(adjustment.allocation.requirement.sessions.all(), many=True).data
+
         return Response(
             {
                 "id": adjustment.id,
@@ -1943,15 +1954,16 @@ def public_adjustment_interaction(request, token):
                 "freelancer_name": adjustment.allocation.freelancer.name,
                 "is_editable": adjustment.allocation.is_adjustment_editable,
                 "planned_days": adjustment.allocation.cost_sheet.days_planned,
-                "planned_rate": adjustment.allocation.cost_sheet.negotiated_rate,
-                "planned_allowance": adjustment.allocation.cost_sheet.daily_allowance,
                 "actual_days_worked": adjustment.actual_days_worked,
-                "actual_daily_allowance": adjustment.actual_daily_allowance,
+                "travel_adjustments": adjustment.travel_adjustments,
                 "other_adjustments": adjustment.other_adjustments,
                 "override_negotiated_rate": adjustment.override_negotiated_rate,
                 "freelancer_comments": adjustment.freelancer_comments,
                 "freelancer_submitted_at": adjustment.freelancer_submitted_at,
                 "status": adjustment.admin_approval_status,
+                "total_meal_allowance": adjustment.allocation.total_meal_allowance,
+                "daily_meals": AllocationDailyMealSerializer(adjustment.allocation.daily_meals.all(), many=True).data,
+                "sessions": sessions_data,
             }
         )
 
