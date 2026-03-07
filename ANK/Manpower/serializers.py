@@ -96,6 +96,7 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "freelancer_name",
             "skill_category",
             "event_department",
+            "requirement",
             "status",
             "role_description",
             "event_name",

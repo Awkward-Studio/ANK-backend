@@ -94,6 +94,13 @@ class FreelancerAllocation(models.Model):
         on_delete=models.CASCADE,
         related_name="manpower_allocations",
     )
+    requirement = models.ForeignKey(
+        ManpowerRequirement,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="allocations",
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="soft_blocked")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
