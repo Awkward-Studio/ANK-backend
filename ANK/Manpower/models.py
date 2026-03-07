@@ -472,6 +472,7 @@ class PostEventAdjustmentRevision(models.Model):
     total_engagement_days = models.DecimalField(max_digits=5, decimal_places=1, default=Decimal("1.0"))
     engagement_periods = models.JSONField(default=list, blank=True)
     travel_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    actual_meal_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     other_adjustments = models.DecimalField(max_digits=12, decimal_places=2)
     override_negotiated_rate = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     revised_total = models.DecimalField(max_digits=15, decimal_places=2)
