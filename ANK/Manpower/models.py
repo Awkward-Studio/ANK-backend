@@ -612,6 +612,11 @@ class InvoiceWorkflow(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+    def save(self, *args, **kwargs):
+        if not self.secure_token:
+            self.secure_token = uuid.uuid4()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.invoice_number} ({self.status})"
 
