@@ -170,7 +170,11 @@ def _check_lock_or_override(request, event_id):
 
     is_admin = _has_any_role(request, ADMIN_ROLES)
     override = bool(request.data.get("admin_override")) if hasattr(request, "data") else False
-    if is_admin and override:
+    
+    # Bypass lock for Extra Manpower
+    is_extra = bool(request.data.get("is_extra")) if hasattr(request, "data") else False
+    
+    if (is_admin and override) or is_extra:
         return None
 
     return Response(
@@ -443,9 +447,12 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
         if denied:
             return denied
         try:
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            # Allow creation if marked as Extra even if event is locked
+            if not request.data.get("is_extra"):
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = ManpowerRequirementSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             obj = ser.save()
@@ -515,9 +522,13 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Allow update if existing is extra OR new data marks it as extra
+            if not obj.is_extra and not request.data.get("is_extra"):
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = ManpowerRequirementSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
@@ -539,9 +550,13 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Allow delete if marked as extra
+            if not obj.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             obj.delete()
             _log_action(request, "requirement_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -613,9 +628,11 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
         if denied:
             return denied
         try:
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            if not request.data.get("is_extra"):
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = FreelancerAllocationSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             obj = ser.save()
@@ -679,9 +696,13 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Allow update if existing is extra OR new data marks it as extra
+            if not obj.is_extra and not request.data.get("is_extra"):
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = FreelancerAllocationSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
@@ -718,9 +739,11 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            if not allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
                 
             meal_id = request.data.get("meal_id")
             if not meal_id:
@@ -760,9 +783,11 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            if not allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
             
             meal_type = request.data.get("meal_type")  # breakfast, lunch, dinner
             action_type = request.data.get("action_type")  # crew_meal, allowance
