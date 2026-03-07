@@ -62,6 +62,12 @@ class ManpowerRequirement(models.Model):
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    sessions = models.ManyToManyField(
+        "Events.Session",
+        related_name="manpower_requirements",
+        blank=True,
+        help_text="Sessions this requirement is applicable for"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -107,30 +113,49 @@ class FreelancerAllocation(models.Model):
 
     def clean(self):
         from django.core.exceptions import ValidationError
-        if self.status == "confirmed":
-            # Check if already has ANY allocation in this event
+        if self.status in ["confirmed", "soft_blocked"]:
+            # Check if already has ANY allocation in this event (excluding itself)
             event_id = self.event_department.event_id
             exists = FreelancerAllocation.objects.filter(
                 freelancer=self.freelancer,
                 event_department__event_id=event_id
             ).exclude(pk=self.pk).exists()
+            
             if exists:
                 raise ValidationError(f"Freelancer is already allocated to this event.")
-            # Check for overlapping confirmed assignments
-            current_event = self.event_department.event
-            if current_event.start_date and current_event.end_date:
+
+            # Use allocation dates if set, otherwise fallback to event dates
+            current_start = self.start_date or self.event_department.event.start_date
+            current_end = self.end_date or self.event_department.event.end_date
+
+            if current_start and current_end:
+                # Find overlapping allocations that are not released
                 overlapping = FreelancerAllocation.objects.filter(
                     freelancer=self.freelancer,
-                    status="confirmed",
-                    event_department__event__start_date__lte=current_event.end_date,
-                    event_department__event__end_date__gte=current_event.start_date,
-                ).exclude(pk=self.pk)
+                ).exclude(pk=self.pk).exclude(status="released")
 
-                if overlapping.exists():
-                    events = ", ".join([str(a.event_department.event) for a in overlapping])
+                conflicts = []
+                for other in overlapping:
+                    other_start = other.start_date or other.event_department.event.start_date
+                    other_end = other.end_date or other.event_department.event.end_date
+                    
+                    if other_start and other_end:
+                        # Standard overlap: (StartA <= EndB) and (EndA >= StartB)
+                        if other_start <= current_end and other_end >= current_start:
+                            conflicts.append(other)
+
+                # Gracefully handle based on status
+                confirmed_conflicts = [c for c in conflicts if c.status == "confirmed"]
+                
+                if self.status == "confirmed" and confirmed_conflicts:
+                    events = ", ".join([str(c.event_department.event) for c in confirmed_conflicts])
                     raise ValidationError(
-                        f"Freelancer is already confirmed for overlapping events: {events}"
+                        f"Freelancer is already CONFIRMED for overlapping dates in: {events}"
                     )
+                
+                # If we are soft blocking, we just warn or allow, but the backend clean 
+                # should probably prevent double CONFIRMED. 
+                # For now, let's keep it strict for confirmed status.
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -607,6 +632,7 @@ class AllocationDailyMeal(models.Model):
     MEAL_TYPE_CHOICES = [
         ("crew_meal", "Crew Meal"),
         ("allowance", "Allowance"),
+        ("cash", "Cash (Paid on Spot)"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

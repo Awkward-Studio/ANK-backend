@@ -19,6 +19,7 @@ from utils.swagger import (
     document_api_view,
     query_param,
 )
+from utils.pagination import StandardPagination
 
 
 @document_api_view(
@@ -174,10 +175,16 @@ class AccommodationDetail(DepartmentAccessMixin, APIView):
 )
 class AccommodationFieldList(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
 
     def get(self, request):
         try:
             qs = AccommodationField.objects.all()
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(qs, request)
+            if page is not None:
+                serializer = AccommodationFieldSerializer(page, many=True)
+                return paginator.get_paginated_response(serializer.data)
             return Response(AccommodationFieldSerializer(qs, many=True).data)
         except Exception as e:
             return Response(
