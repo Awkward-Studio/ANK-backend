@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from fpdf import FPDF
-from .models import MoU
+from .models import MoU, InvoiceWorkflow
 from utils.swagger import (
     document_api_view,
     doc_retrieve,
@@ -17,6 +17,138 @@ from utils.swagger import (
 )
 
 logger = logging.getLogger(__name__)
+
+class INVOICE_PDF(FPDF):
+    def header(self):
+        self.set_font("helvetica", "B", 10)
+        self.set_text_color(150)
+        self.set_x(self.l_margin)
+        self.cell(w=self.epw, h=10, txt="ANK ENTERTAINMENT LLP - PAYMENT VOUCHER", align="R")
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("helvetica", "I", 8)
+        self.set_text_color(150)
+        self.set_x(self.l_margin)
+        self.cell(w=self.epw, h=10, txt=f"Page {self.page_no()}", align="C")
+
+
+def generate_invoice_pdf(invoice):
+    pdf = INVOICE_PDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(20, 20, 20)
+    pdf.add_page()
+    epw = pdf.epw
+    
+    # 1. Header & Title
+    pdf.set_font("helvetica", "B", 20)
+    pdf.cell(w=epw, h=10, txt=clean_text("INVOICE / VOUCHER"), align="L")
+    pdf.ln(12)
+    
+    # 2. Company & Invoice Details
+    pdf.set_font("helvetica", "B", 10)
+    y_start = pdf.get_y()
+    
+    # Left: Company Info
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(w=epw/2, h=5, txt=clean_text("FROM:\nANK ENTERTAINMENT LLP\n802, Sun Paradise Plaza,\nOpp. Kamla Mills, Lower Parel,\nMumbai - 400013"))
+    
+    # Right: Invoice Info
+    pdf.set_xy(pdf.l_margin + epw/2, y_start)
+    inv_info = (f"INVOICE #: {invoice.invoice_number}\n"
+                f"DATE: {invoice.created_at.strftime('%d %b %Y')}\n"
+                f"STATUS: {invoice.status.upper()}\n"
+                f"AMOUNT: INR {float(invoice.payable_amount):,.2f}")
+    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(inv_info), align="R")
+    pdf.ln(10)
+    
+    # 3. Bill To
+    f = invoice.freelancer
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(w=epw, h=6, txt=clean_text("BILL TO:"), ln=1)
+    pdf.set_font("helvetica", "", 10)
+    pdf.multi_cell(w=epw, h=5, txt=clean_text(f"{f.name}\n{f.address or 'Address not provided'}\nPAN: {f.id_number or 'N/A'}"))
+    pdf.ln(8)
+    
+    # 4. Breakdown Table
+    pdf.set_font("helvetica", "B", 10)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(w=epw*0.6, h=8, txt="Description", border=1, fill=True)
+    pdf.cell(w=epw*0.2, h=8, txt="Details", border=1, fill=True, align="C")
+    pdf.cell(w=epw*0.2, h=8, txt="Amount", border=1, fill=True, align="R")
+    pdf.ln()
+    
+    pdf.set_font("helvetica", "", 10)
+    adj = invoice.adjustment
+    cost = invoice.adjustment.allocation.cost_sheet
+    
+    # Line 1: Engagement
+    rate = adj.override_negotiated_rate if adj.override_negotiated_rate else cost.negotiated_rate
+    pdf.cell(w=epw*0.6, h=8, txt=f"Professional Fees - {invoice.event.name}", border=1)
+    pdf.cell(w=epw*0.2, h=8, txt=f"{adj.total_engagement_days} Days", border=1, align="C")
+    pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.total_engagement_days * rate):,.2f}", border=1, align="R")
+    pdf.ln()
+    
+    # Line 2: Meals
+    pdf.cell(w=epw*0.6, h=8, txt="Meal Logistics & Per Diem", border=1)
+    pdf.cell(w=epw*0.2, h=8, txt="Reconciled", border=1, align="C")
+    pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.actual_meal_allowance):,.2f}", border=1, align="R")
+    pdf.ln()
+    
+    # Line 3: Travel
+    if float(adj.travel_adjustments) != 0 or float(cost.travel_costs) != 0:
+        total_travel = float(cost.travel_costs) + float(adj.travel_adjustments)
+        pdf.cell(w=epw*0.6, h=8, txt="Travel Reimbursements & Adjustments", border=1)
+        pdf.cell(w=epw*0.2, h=8, txt="Actuals", border=1, align="C")
+        pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(total_travel):,.2f}", border=1, align="R")
+        pdf.ln()
+        
+    # Line 4: Misc
+    if float(adj.other_adjustments) != 0:
+        pdf.cell(w=epw*0.6, h=8, txt="Miscellaneous Adjustments / Penalties", border=1)
+        pdf.cell(w=epw*0.2, h=8, txt="Manual", border=1, align="C")
+        pdf.cell(w=epw*0.2, h=8, txt=f"INR {float(adj.other_adjustments):,.2f}", border=1, align="R")
+        pdf.ln()
+        
+    # Total
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(w=epw*0.8, h=10, txt="GRAND TOTAL (PAYABLE)", border=1, align="R")
+    pdf.cell(w=epw*0.2, h=10, txt=f"INR {float(invoice.payable_amount):,.2f}", border=1, align="R")
+    pdf.ln(20)
+    
+    # 5. Terms & Signature
+    pdf.set_font("helvetica", "I", 9)
+    pdf.multi_cell(w=epw, h=5, txt=clean_text("Notes:\n1. Payment will be processed within 30 days of approval.\n2. This is a system-generated voucher based on reconciled actuals."))
+    pdf.ln(10)
+    
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(w=epw, h=10, txt="[DIGITALLY APPROVED BY ACCOUNTS]", border=0, align="C")
+    
+    return bytes(pdf.output())
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def public_invoice_pdf_download(request, token):
+    try:
+        invoice = InvoiceWorkflow.objects.select_related(
+            "freelancer", 
+            "event", 
+            "adjustment__allocation__cost_sheet"
+        ).get(secure_token=token)
+    except (InvoiceWorkflow.DoesNotExist, ValueError):
+        return HttpResponse("Invalid or expired token", status=404)
+    
+    try:
+        pdf_content = generate_invoice_pdf(invoice)
+        filename = f"Invoice_{invoice.invoice_number}.pdf"
+        response = HttpResponse(pdf_content, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as e:
+        logger.exception("Error generating invoice PDF")
+        return HttpResponse(f"Error generating PDF: {str(e)}", status=500)
+
 
 class MOU_PDF(FPDF):
     def header(self):
