@@ -203,6 +203,8 @@ def _create_revision(adjustment, action_type, user=None, comments=""):
             actor=user if user and user.is_authenticated else None,
             actor_name=user.name if user and user.is_authenticated else adjustment.allocation.freelancer.name,
             actual_days_worked=adjustment.actual_days_worked,
+            total_engagement_days=adjustment.total_engagement_days,
+            engagement_periods=adjustment.engagement_periods,
             travel_adjustments=adjustment.travel_adjustments,
             other_adjustments=adjustment.other_adjustments,
             override_negotiated_rate=adjustment.override_negotiated_rate,
@@ -1905,6 +1907,16 @@ def issue_adjustment_secure_link(request, allocation_id):
     if not adjustment.freelancer_submitted_at:
         cost = allocation.cost_sheet
         adjustment.actual_days_worked = cost.days_planned
+        adjustment.total_engagement_days = cost.days_planned
+        
+        # Initial period from allocation dates
+        if allocation.start_date and allocation.end_date:
+            adjustment.engagement_periods = [{
+                "start": str(allocation.start_date),
+                "end": str(allocation.end_date),
+                "days": float(cost.days_planned)
+            }]
+        
         adjustment.override_negotiated_rate = cost.negotiated_rate
         if not adjustment.secure_token:
             adjustment.secure_token = uuid.uuid4()
@@ -1954,7 +1966,11 @@ def public_adjustment_interaction(request, token):
                 "freelancer_name": adjustment.allocation.freelancer.name,
                 "is_editable": adjustment.allocation.is_adjustment_editable,
                 "planned_days": adjustment.allocation.cost_sheet.days_planned,
+                "planned_rate": adjustment.allocation.cost_sheet.negotiated_rate,
+                "travel_costs": adjustment.allocation.cost_sheet.travel_costs,
                 "actual_days_worked": adjustment.actual_days_worked,
+                "total_engagement_days": adjustment.total_engagement_days,
+                "engagement_periods": adjustment.engagement_periods,
                 "travel_adjustments": adjustment.travel_adjustments,
                 "other_adjustments": adjustment.other_adjustments,
                 "override_negotiated_rate": adjustment.override_negotiated_rate,
@@ -1975,11 +1991,14 @@ def public_adjustment_interaction(request, token):
 
     allowed_fields = {
         "actual_days_worked",
-        "actual_daily_allowance",
+        "total_engagement_days",
+        "engagement_periods",
+        "travel_adjustments",
         "other_adjustments",
         "override_negotiated_rate",
         "freelancer_comments",
     }
+
     updates = {k: v for k, v in request.data.items() if k in allowed_fields}
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)

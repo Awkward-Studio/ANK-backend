@@ -314,7 +314,16 @@ class PostEventAdjustment(models.Model):
         FreelancerAllocation, on_delete=models.CASCADE, related_name="adjustment"
     )
     actual_days_worked = models.DecimalField(
-        max_digits=5, decimal_places=1, default=Decimal("1.0")
+        max_digits=5, decimal_places=1, default=Decimal("1.0"),
+        help_text="Used for meal allowance calculations (set number of days)"
+    )
+    total_engagement_days = models.DecimalField(
+        max_digits=5, decimal_places=1, default=Decimal("1.0"),
+        help_text="Sum of days from all engagement periods for rate calculation"
+    )
+    engagement_periods = models.JSONField(
+        default=list, blank=True,
+        help_text="List of periods: [{'start': 'YYYY-MM-DD', 'end': 'YYYY-MM-DD', 'days': 1.0}]"
     )
     travel_adjustments = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
@@ -339,33 +348,57 @@ class PostEventAdjustment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # 1. Sync is_worked in AllocationDailyMeal if actual_days_worked changed
-        # We need to track if actual_days_worked changed.
+        # 1. Capture state
         old_actual_days_worked = None
+        old_engagement_periods = []
         is_new = self._state.adding
         if not is_new:
             try:
                 old_instance = PostEventAdjustment.objects.get(pk=self.pk)
                 old_actual_days_worked = old_instance.actual_days_worked
+                old_engagement_periods = old_instance.engagement_periods
             except PostEventAdjustment.DoesNotExist:
                 pass
 
-        # Auto-compute revised_total
+        # 2. Expand allocation dates if periods changed
+        if self.engagement_periods and self.engagement_periods != old_engagement_periods:
+            try:
+                starts = [p['start'] for p in self.engagement_periods if p.get('start')]
+                ends = [p['end'] for p in self.engagement_periods if p.get('end')]
+                if starts and ends:
+                    new_min_start = min([models.DateField().to_python(s) for s in starts])
+                    new_max_end = max([models.DateField().to_python(e) for e in ends])
+                    
+                    alloc = self.allocation
+                    date_changed = False
+                    if not alloc.start_date or new_min_start < alloc.start_date:
+                        alloc.start_date = new_min_start
+                        date_changed = True
+                    if not alloc.end_date or new_max_end > alloc.end_date:
+                        alloc.end_date = new_max_end
+                        date_changed = True
+                    
+                    if date_changed:
+                        alloc.save(update_fields=['start_date', 'end_date'])
+            except Exception as e:
+                print(f"Error syncing allocation dates: {e}")
+
+        # 3. Sync worked status for meals BEFORE calculating total
+        if is_new or self.actual_days_worked != old_actual_days_worked or self.engagement_periods != old_engagement_periods:
+            self.sync_worked_days()
+
+        # 4. Auto-compute revised_total
         cost_sheet = self.allocation.cost_sheet
         per_day_rate = self.override_negotiated_rate if self.override_negotiated_rate is not None else cost_sheet.negotiated_rate
         
         self.revised_total = (
-            (per_day_rate * self.actual_days_worked)
+            (per_day_rate * self.total_engagement_days)
             + (self.actual_meal_allowance)
             + cost_sheet.travel_costs
             + self.travel_adjustments
             + self.other_adjustments
         )
         super().save(*args, **kwargs)
-
-        # 2. Update daily meal records' is_worked status if actual_days_worked changed
-        if not is_new and self.actual_days_worked != old_actual_days_worked:
-            self.sync_worked_days()
 
     def sync_worked_days(self):
         """
@@ -416,6 +449,8 @@ class PostEventAdjustmentRevision(models.Model):
     
     # Snapshot of values
     actual_days_worked = models.DecimalField(max_digits=5, decimal_places=1)
+    total_engagement_days = models.DecimalField(max_digits=5, decimal_places=1, default=Decimal("1.0"))
+    engagement_periods = models.JSONField(default=list, blank=True)
     travel_adjustments = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     other_adjustments = models.DecimalField(max_digits=12, decimal_places=2)
     override_negotiated_rate = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
