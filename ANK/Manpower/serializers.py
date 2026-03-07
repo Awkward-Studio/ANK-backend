@@ -20,7 +20,14 @@ from Staff.serializers import UserSerializer
 class FreelancerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Freelancer
-        fields = "__all__"
+        fields = [
+            "id", "name", "skill_category", "city", "address", 
+            "parent_name", "id_type", "id_number",
+            "bank_account_name", "bank_name", "bank_account_number",
+            "bank_branch", "bank_ifsc", "contact_phone", "email",
+            "base_daily_rate", "documents", "average_rating", "is_active",
+            "created_at", "updated_at"
+        ]
 
 
 class EventCostSheetSerializer(serializers.ModelSerializer):
