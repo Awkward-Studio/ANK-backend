@@ -2,24 +2,21 @@ from django.db import models
 from django.core.exceptions import ValidationError
 from django.contrib.contenttypes.fields import GenericRelation
 import uuid
-from Events.models.event_model import Event
-from Events.models.session_registration import SessionRegistration
-from Events.models.event_registration_model import EventRegistration, ExtraAttendee
 
 
 class TravelDetail(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(
-        Event, on_delete=models.CASCADE, related_name="travel_details"
+        "Events.Event", on_delete=models.CASCADE, related_name="travel_details"
     )
     event_registrations = models.ManyToManyField(
-        EventRegistration, blank=True, related_name="travel_detail_assignments"
+        "Events.EventRegistration", blank=True, related_name="travel_detail_assignments"
     )
     extra_attendees = models.ManyToManyField(
-        ExtraAttendee, blank=True, related_name="travel_detail_assignments"
+        "Events.ExtraAttendee", blank=True, related_name="travel_detail_assignments"
     )
     session_registration = models.ForeignKey(
-        SessionRegistration,
+        "Events.SessionRegistration",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
