@@ -170,9 +170,11 @@ def generate_invoice_pdf(invoice):
     pdf.ln(8)
 
     # Amount in words
+    pdf.ln(2)
     pdf.set_font("helvetica", "B", 9)
     words = num2words_indian(invoice.payable_amount)
-    pdf.cell(w=epw, h=6, txt=clean_text(f"AMOUNT IN WORDS: {words}"), ln=1)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(w=epw, h=6, txt=clean_text(f"AMOUNT IN WORDS: {words}"), align="L")
     pdf.ln(10)
 
     # 4. Bank Details & Signature
