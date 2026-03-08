@@ -310,6 +310,9 @@ class FreelancerList(APIView):
         except Http404:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
+            from rest_framework.exceptions import APIException
+            if isinstance(e, APIException):
+                raise e
             return Response(
                 {"detail": "Error creating freelancer", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
