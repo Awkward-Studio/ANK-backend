@@ -15,6 +15,7 @@ from django.db.models import Sum, Count, Q
 from Events.models.event_model import Event
 from Events.models.event_registration_model import EventRegistration
 from Events.serializers.public_serializers import PublicEventSerializer
+from Manpower.models import ManpowerRequirement, FreelancerAllocation
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,36 @@ class ClientViewAPIView(APIView):
         # Calculate summary statistics
         summary = self._calculate_summary(registrations)
 
+        # Fetch Manpower Data
+        requirements = ManpowerRequirement.objects.filter(
+            event_department__event_id=event_id
+        ).select_related("skill")
+        
+        allocations = FreelancerAllocation.objects.filter(
+            event_department__event_id=event_id
+        ).select_related("freelancer", "requirement")
+
+        manpower_data = []
+        for req in requirements:
+            # Count fulfilled for this specific requirement
+            fulfilled = allocations.filter(
+                Q(requirement_id=req.id) | Q(skill_id=req.skill_id)
+            ).filter(status="confirmed").count()
+            
+            manpower_data.append({
+                "id": str(req.id),
+                "role": req.skill.name if req.skill else req.skill_category,
+                "required": req.quantity_required,
+                "fulfilled": fulfilled,
+                "is_extra": req.is_extra
+            })
+
         # Build response
         response_data = {
             "event": PublicEventSerializer(event).data,
             "guests": guests,
             "summary": summary,
+            "manpower": manpower_data,
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
