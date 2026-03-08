@@ -909,9 +909,12 @@ def confirm_allocation(request, pk):
         denied = _require_manpower_event_access(request, allocation.event_department.event_id)
         if denied:
             return denied
-        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
-        if lock_error:
-            return lock_error
+        
+        if not allocation.is_extra:
+            lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+            if lock_error:
+                return lock_error
+            
         allocation.status = "confirmed"
         allocation.save()
         _log_action(
@@ -940,9 +943,12 @@ def release_allocation(request, pk):
         denied = _require_manpower_event_access(request, allocation.event_department.event_id)
         if denied:
             return denied
-        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
-        if lock_error:
-            return lock_error
+        
+        if not allocation.is_extra:
+            lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+            if lock_error:
+                return lock_error
+            
         allocation.status = "released"
         allocation.save()
         _log_action(
@@ -971,9 +977,12 @@ def generate_mou(request, pk):
         denied = _require_manpower_event_access(request, allocation.event_department.event_id)
         if denied:
             return denied
-        lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
-        if lock_error:
-            return lock_error
+        
+        if not allocation.is_extra:
+            lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
+            if lock_error:
+                return lock_error
+            
         mou, created = MoU.objects.get_or_create(
             allocation=allocation,
             defaults={"status": "draft", "template_data": {"terms": "Standard MoU terms..."}}
@@ -1066,9 +1075,13 @@ class EventCostSheetList(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not allocation or not allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = EventCostSheetSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             obj = ser.save()
@@ -1132,9 +1145,13 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not obj.allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = EventCostSheetSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
@@ -1156,9 +1173,13 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not obj.allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             obj.delete()
             _log_action(request, "cost_sheet_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -1380,9 +1401,13 @@ class PostEventAdjustmentList(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not allocation or not allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = PostEventAdjustmentSerializer(data=request.data, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             obj = ser.save()
@@ -1446,9 +1471,13 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not obj.allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             ser = PostEventAdjustmentSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
@@ -1473,9 +1502,13 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            lock_error = _check_lock_or_override(request, event_id)
-            if lock_error:
-                return lock_error
+            
+            # Bypass lock if allocation is extra
+            if not obj.allocation.is_extra:
+                lock_error = _check_lock_or_override(request, event_id)
+                if lock_error:
+                    return lock_error
+            
             obj.delete()
             _log_action(request, "adjustment_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
