@@ -75,6 +75,10 @@
         {
           "name": "WABA_ACCESS_TOKEN",
           "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/WABA_ACCESS_TOKEN:WABA_ACCESS_TOKEN:AWSCURRENT:"
+        },
+        {
+          "name": "WHATSAPP_ENCRYPTION_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/WHATSAPP_ENCRYPTION_KEY:WHATSAPP_ENCRYPTION_KEY:AWSCURRENT:"
         }
       ],
       "logConfiguration": {
