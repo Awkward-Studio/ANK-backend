@@ -703,12 +703,12 @@ def whatsapp_rsvp(request):
             try:
                 session = waiting_flow_session
                 if session:
-                    log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Visual Flow Engine for reg {er.id}")
+                    flow_input = body.get("button_id") or raw_status
+                    log.info(f"[WEBHOOK] Delegating text '{flow_input}' to Visual Flow Engine for reg {er.id}")
                     runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
                     
-                    # Process input (buttons send button_id as text in our forwarder)
                     payload_type = "interactive" if bool(body.get("button_id")) else "text"
-                    error_reply, is_done = runner.process_input(raw_status, payload_type=payload_type)
+                    error_reply, is_done = runner.process_input(flow_input, payload_type=payload_type)
                     
                     if error_reply:
                         from Events.services.message_logger import MessageLogger
