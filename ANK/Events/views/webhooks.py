@@ -4,6 +4,7 @@ import os
 import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as tz
+from typing import Optional
 
 from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.utils import timezone as dj_tz  # ← use alias; never shadow inside functions
@@ -17,6 +18,8 @@ from Events.models.whatsapp_message_log import WhatsAppMessageLog
 from Events.serializers.whatsapp_message_log_serializer import (
     WhatsAppMessageLogSerializer,
 )
+from MessageTemplates.models import FlowSession
+from MessageTemplates.services.flow_runner import FlowRunner
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -51,6 +54,32 @@ def _ensure_aware(dt: datetime) -> datetime:
     return dt
 
 
+def _normalize_flow_type(flow_type: Optional[str]) -> Optional[str]:
+    normalized = (flow_type or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"text", "content"}:
+        return "custom"
+    if normalized in {"travel", "rsvp", "flow", "standalone", "custom"}:
+        return normalized
+    return "custom"
+
+
+def _normalize_message_type(message_type: Optional[str], flow_type: Optional[str] = None) -> str:
+    normalized = (message_type or "").strip().lower()
+    if normalized in {"text", "content"}:
+        return "custom"
+    if normalized == "interactive":
+        return "button"
+    if normalized in {"rsvp", "custom", "travel", "template", "bulk", "flow", "button"}:
+        return normalized
+
+    normalized_flow = _normalize_flow_type(flow_type)
+    if normalized_flow in {"travel", "rsvp", "flow", "custom"}:
+        return normalized_flow
+    return "custom"
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def track_send(request):
@@ -69,8 +98,8 @@ def track_send(request):
     event_id = body.get("event_id")
     reg_id = body.get("event_registration_id") or ""
     template_wamid = body.get("template_wamid") or None
-    flow_type = (body.get("flow_type") or "").strip() or None
-    message_type = body.get("message_type") or flow_type or "rsvp"
+    flow_type = _normalize_flow_type(body.get("flow_type") or body.get("message_type"))
+    message_type = _normalize_message_type(body.get("message_type"), flow_type)
     body_text = body.get("body") or body.get("message") or body.get("text")
     media_url = body.get("media_url")
     media_type_arg = body.get("media_type") # specific media type (image, video)
@@ -143,7 +172,7 @@ def track_send(request):
                     "event_id": None,
                     "template_name": template_name,
                     "flow_type": flow_type or "standalone",
-                    "message_type": message_type or ("text" if is_inbound else "template"),
+                    "message_type": message_type if not is_inbound else "custom",
                     "direction": direction,
                     "guest_id": None,
                     "guest_name": guest_name,
@@ -263,7 +292,7 @@ def track_send(request):
             template_name = body.get("template_name")
             guest_id = body.get("guest_id")
             guest_name = body.get("guest_name")
-            message_type = body.get("message_type") or flow_type or "rsvp"
+            message_type = _normalize_message_type(body.get("message_type"), flow_type)
 
             WhatsAppMessageLog.objects.update_or_create(
                 wamid=template_wamid,
@@ -427,7 +456,7 @@ def whatsapp_rsvp(request):
             latest_map_qs = latest_map_qs.filter(sender_phone_number_id=to_phone_number_id)
         latest_map = latest_map_qs.order_by("-created_at").values("flow_type", "event_registration", "created_at").first()
     
-    current_flow = latest_map.get("flow_type") if latest_map else None
+    current_flow = _normalize_flow_type(latest_map.get("flow_type")) if latest_map else None
 
     # [DEBUG LOGGING]
     log.warning(f"[RSVP-CONTEXT] wa_id={wa_id} | latest_map_id={latest_map} | current_flow={current_flow}")
@@ -660,9 +689,37 @@ def whatsapp_rsvp(request):
         
         # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
+    # [NEW] DELEGATE TO VISUAL FLOWS (DAG)
+    waiting_flow_session = None
+    if er:
+        waiting_flow_session = (
+            FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT')
+            .order_by("-last_interaction")
+            .first()
+        )
+
+    if current_flow == "flow" or waiting_flow_session:
+        if er and not is_menu_command:
+            try:
+                session = waiting_flow_session
+                if session:
+                    log.info(f"[WEBHOOK] Delegating text '{raw_status}' to Visual Flow Engine for reg {er.id}")
+                    runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
+                    
+                    # Process input (buttons send button_id as text in our forwarder)
+                    payload_type = "interactive" if bool(body.get("button_id")) else "text"
+                    error_reply, is_done = runner.process_input(raw_status, payload_type=payload_type)
+                    
+                    if error_reply:
+                        from Events.services.message_logger import MessageLogger
+                        MessageLogger.send_text(er, error_reply, "flow", phone_number_id=to_phone_number_id)
+                    
+                    return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
+            except Exception as e:
+                log.exception(f"[WEBHOOK] Failed to delegate to Visual Flow: {e}")
+
     
     # [FIX] DELEGATE TO TRAVEL CAPTURE IF ACTIVE FLOW IS TRAVEL
-    # Use the `current_flow` we fetched at the top
     if current_flow == "travel":
         # We are in Travel Flow -> All text input should go to the travel orchestrator
         # unless it's a specialized command like "menu" (handled above)
@@ -838,12 +895,13 @@ def resolve_wa(request, wa_id):
 
     wa_digits = "".join(c for c in wa_id if c.isdigit())[-15:]
 
-    row = (
-        WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=timezone.now())
-        .order_by("-created_at")
-        .values("event_id", "event_registration_id", "flow_type")
-        .first()
-    )
+    sender_phone_number_id = request.GET.get("sender_phone_number_id")
+
+    qs = WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=timezone.now())
+    if sender_phone_number_id:
+        qs = qs.filter(sender_phone_number_id=sender_phone_number_id)
+
+    row = qs.order_by("-created_at").values("event_id", "event_registration_id", "flow_type").first()
 
     if not row:
         return JsonResponse({"ok": False, "found": False})
@@ -854,7 +912,7 @@ def resolve_wa(request, wa_id):
             "found": True,
             "event_id": row["event_id"],
             "registration_id": row["event_registration_id"],
-            "flow_type": row.get("flow_type"),
+            "flow_type": _normalize_flow_type(row.get("flow_type")),
         }
     )
 

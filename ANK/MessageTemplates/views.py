@@ -1,17 +1,21 @@
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 
 from Events.models.event_model import Event
-from MessageTemplates.models import MessageTemplate, MessageTemplateVariable
+from MessageTemplates.models import MessageTemplate, MessageTemplateVariable, FlowBlueprint, FlowSession
 from MessageTemplates.serializers import (
     MessageTemplateSerializer,
     MessageTemplateWriteSerializer,
     MessageTemplateVariableSerializer,
+    FlowBlueprintSerializer,
+    FlowSessionSerializer,
 )
+from MessageTemplates.services.flow_runner import FlowRunner
 
 from utils.swagger import (
     document_api_view,
@@ -298,3 +302,68 @@ class EventMessageTemplatesAPIView(APIView):
                 {"detail": "Error fetching templates for event", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class FlowBlueprintViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    queryset = FlowBlueprint.objects.all()
+    serializer_class = FlowBlueprintSerializer
+
+    @action(detail=True, methods=['post'])
+    def start_flow(self, request, pk=None):
+        blueprint = self.get_object()
+        reg_id = request.data.get("registration_id")
+        sender_id = request.data.get("sender_phone_number_id")
+        
+        if not reg_id:
+            return Response({"ok": False, "detail": "registration_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not blueprint.is_active:
+            return Response({"ok": False, "detail": "Flow blueprint is inactive"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from Events.models.event_registration_model import EventRegistration
+        registration = get_object_or_404(EventRegistration, pk=reg_id)
+        
+        # Get or create session
+        session, created = FlowSession.objects.get_or_create(
+            registration=registration,
+            flow=blueprint,
+            defaults={'status': 'RUNNING'}
+        )
+        
+        # If it was completed or errored, reset it to RUNNING to start over
+        if not created and session.status in ['COMPLETED', 'ERROR']:
+            session.status = 'RUNNING'
+            session.current_node_id = None
+            session.context_data = {}
+            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+            
+        runner = FlowRunner(session, sender_phone_number_id=sender_id)
+        runner.start()
+        
+        return Response({
+            "ok": True,
+            "status": "Flow started", 
+            "session_id": session.id,
+            "session_status": session.status
+        })
+
+
+class FlowSessionViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    queryset = FlowSession.objects.all()
+    serializer_class = FlowSessionSerializer
+
+    @action(detail=True, methods=['post'])
+    def start_flow(self, request, pk=None):
+        session = self.get_object()
+        sender_id = request.data.get("sender_phone_number_id")
+        if not session.flow.is_active:
+            return Response({"ok": False, "detail": "Flow blueprint is inactive"}, status=status.HTTP_400_BAD_REQUEST)
+        if session.status in ['COMPLETED', 'ERROR']:
+            session.status = 'RUNNING'
+            session.current_node_id = None
+            session.context_data = {}
+            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+        runner = FlowRunner(session, sender_phone_number_id=sender_id)
+        runner.start()
+        return Response({"ok": True, "status": "Flow started", "session_status": session.status, "session_id": session.id})

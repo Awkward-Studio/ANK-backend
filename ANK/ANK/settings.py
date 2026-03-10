@@ -238,7 +238,9 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 # ---------------------------
 # Host/CORS/CSRF
 # ---------------------------
-ALLOWED_HOSTS = ["*", "192.168.1.34"]
+ALLOWED_HOSTS = hosts_env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,192.168.1.34")
+if "*" in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True

@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from django.utils import timezone
 from Events.models.conversation_message import ConversationMessage
@@ -6,6 +7,28 @@ from Events.models.event_registration_model import EventRegistration
 from Events.models.whatsapp_message_log import WhatsAppMessageLog
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_message_type(message_type: Optional[str]) -> str:
+    normalized = (message_type or "custom").strip().lower()
+    if normalized in {"content", "text"}:
+        return "custom"
+    if normalized == "interactive":
+        return "button"
+    if normalized in {"rsvp", "custom", "travel", "template", "bulk", "flow", "button"}:
+        return normalized
+    return "custom"
+
+
+def _normalize_flow_type(flow_type: Optional[str]) -> Optional[str]:
+    normalized = (flow_type or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"text", "content"}:
+        return "custom"
+    if normalized in {"travel", "rsvp", "flow", "standalone", "custom"}:
+        return normalized
+    return "custom"
 
 
 class MessageLogger:
@@ -57,8 +80,8 @@ class MessageLogger:
                             if event_registration.event_id
                             else None,
                             "template_name": None,
-                            "flow_type": "rsvp", # Defaulting to RSVP context for inbound logged here
-                            "message_type": message_type,
+                            "flow_type": _normalize_flow_type(message_type) or "custom",
+                            "message_type": _normalize_message_type(message_type),
                             "guest_id": str(event_registration.guest_id)
                             if event_registration.guest_id
                             else None,
@@ -128,17 +151,7 @@ class MessageLogger:
                     recipient_id = "".join(c for c in phone if c.isdigit())[-15:]
 
                     # Map conversation message_type to WhatsAppMessageLog message_type
-                    log_message_type = message_type
-                    if message_type == "content":
-                        log_message_type = "custom"
-                    elif message_type not in (
-                        "rsvp",
-                        "custom",
-                        "travel",
-                        "template",
-                        "bulk",
-                    ):
-                        log_message_type = "custom"
+                    log_message_type = _normalize_message_type(message_type)
 
                     WhatsAppMessageLog.objects.update_or_create(
                         wamid=wa_message_id,
@@ -184,12 +197,10 @@ class MessageLogger:
                 
                 # Determine effective flow type
                 # Map generic types if possible, but usually the caller (Travel View) sends 'travel'
-                flow_type = message_type
-                if flow_type == "content":
-                    flow_type = "custom"
+                flow_type = _normalize_flow_type(message_type)
                 
                 # We only want to track specific flows that need context
-                if flow_type in ["travel", "rsvp"]:
+                if flow_type in ["travel", "rsvp", "flow", "custom"]:
                     
                     phone = getattr(event_registration.guest, "phone", "") or ""
                     wa_id = "".join(c for c in phone if c.isdigit())[-15:]

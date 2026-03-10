@@ -57,6 +57,9 @@ class WaSendMap(models.Model):
         choices=(
             ("travel", "Travel Capture Flow"),
             ("rsvp", "RSVP Reply"),
+            ("flow", "Visual Flow"),
+            ("standalone", "Standalone Message"),
+            ("custom", "Custom Message"),
         ),
     )
 

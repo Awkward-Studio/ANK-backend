@@ -5,6 +5,8 @@ from MessageTemplates.models import (
     MessageTemplateVariable,
     WhatsAppBusinessAccount,
     WhatsAppPhoneNumber,
+    FlowBlueprint,
+    FlowSession,
 )
 
 
@@ -84,3 +86,19 @@ class WhatsAppPhoneNumberAdmin(admin.ModelAdmin):
 
 admin.site.register(MessageTemplate)
 admin.site.register(MessageTemplateVariable)
+
+
+@admin.register(FlowBlueprint)
+class FlowBlueprintAdmin(admin.ModelAdmin):
+    list_display = ("name", "trigger_keyword", "is_active", "created_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "trigger_keyword")
+
+
+@admin.register(FlowSession)
+class FlowSessionAdmin(admin.ModelAdmin):
+    list_display = ("registration", "flow", "status", "current_node_id", "last_interaction")
+    list_filter = ("status", "flow")
+    search_fields = ("registration__id", "current_node_id")
+    raw_id_fields = ("registration", "flow")
+
