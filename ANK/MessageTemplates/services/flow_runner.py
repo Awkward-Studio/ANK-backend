@@ -64,7 +64,8 @@ class FlowRunner:
             return "An error occurred with this flow.", False
 
         node = self.nodes[current_node_id]
-        is_valid, parsed_value, error_msg = self._validate_input(node, text, payload_type)
+        incoming_value = self._normalize_incoming_value(text, payload_type)
+        is_valid, parsed_value, error_msg = self._validate_input(node, incoming_value, payload_type)
         
         if not is_valid:
             return error_msg or "Invalid input. Please try again.", False
@@ -82,6 +83,18 @@ class FlowRunner:
         self._execute_node(next_node_id)
         
         return "", self.session.status == "COMPLETED"
+
+    def _normalize_incoming_value(self, text: str, payload_type: str) -> str:
+        text = (text or "").strip()
+        if payload_type != "interactive":
+            return text
+
+        # Interactive replies arrive as button payloads like `flow|<node_id>|<value>`.
+        if text.startswith("flow|"):
+            parts = text.split("|", 2)
+            if len(parts) == 3:
+                return parts[2].strip()
+        return text
 
     def _execute_node(self, node_id: str):
         if node_id not in self.nodes:
