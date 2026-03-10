@@ -75,8 +75,11 @@ urlpatterns = [
 # ViewSets
 from rest_framework.routers import DefaultRouter
 from MessageTemplates.whatsapp_views.campaign_views import BroadcastCampaignViewSet
+from MessageTemplates.views import FlowBlueprintViewSet, FlowSessionViewSet
 
 router = DefaultRouter()
 router.register(r'whatsapp/campaigns', BroadcastCampaignViewSet, basename='whatsapp-campaigns')
+router.register(r'whatsapp/flows/blueprints', FlowBlueprintViewSet, basename='flow-blueprints')
+router.register(r'whatsapp/flows/sessions', FlowSessionViewSet, basename='flow-sessions')
 
 urlpatterns += router.urls

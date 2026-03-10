@@ -378,3 +378,38 @@ class BroadcastCampaignSerializer(serializers.ModelSerializer):
             "failed": failed,
             "total": total
         }
+
+
+class FlowBlueprintSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessageTemplates.models.FlowBlueprint
+        fields = [
+            "id",
+            "name",
+            "trigger_keyword",
+            "graph_json",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class FlowSessionSerializer(serializers.ModelSerializer):
+    flow_name = serializers.CharField(source="flow.name", read_only=True)
+
+    class Meta:
+        model = MessageTemplates.models.FlowSession
+        fields = [
+            "id",
+            "registration",
+            "flow",
+            "flow_name",
+            "current_node_id",
+            "context_data",
+            "status",
+            "created_at",
+            "last_interaction",
+        ]
+        read_only_fields = ["id", "created_at", "last_interaction"]
+

@@ -27,6 +27,9 @@ class WhatsAppMessageLog(models.Model):
         ("travel", "Travel"),
         ("template", "Template"),
         ("bulk", "Bulk"),
+        ("flow", "Flow"),
+        ("button", "Button"),
+        ("interactive", "Interactive"),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -94,15 +97,6 @@ class WhatsAppMessageLog(models.Model):
 
     # Flow type for categorization (legacy, use message_type instead)
     flow_type = models.CharField(max_length=32, null=True, blank=True)
-
-    # Multi-number support: Track which of OUR numbers sent/received this message
-    sender_phone_number_id = models.CharField(
-        max_length=100,
-        null=True,
-        blank=True,
-        db_index=True,
-        help_text="Phone Number ID of the sender (which of OUR numbers sent/received this)",
-    )
 
     # Campaign Link
     campaign = models.ForeignKey(

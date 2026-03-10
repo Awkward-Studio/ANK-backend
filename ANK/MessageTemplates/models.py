@@ -421,3 +421,47 @@ class BroadcastCampaign(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.status})"
+
+
+class FlowBlueprint(models.Model):
+    """
+    Stores a visual conversation flow (DAG) built via React Flow.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200)
+    trigger_keyword = models.CharField(max_length=100, blank=True, null=True, db_index=True)
+    graph_json = models.JSONField(default=dict, help_text="React Flow JSON with nodes and edges")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} ({'Active' if self.is_active else 'Inactive'})"
+
+
+class FlowSession(models.Model):
+    """
+    Tracks a specific guest's progress through a FlowBlueprint.
+    """
+    STATUS_CHOICES = [
+        ('RUNNING', 'Running'),
+        ('WAITING_FOR_INPUT', 'Waiting For Input'),
+        ('COMPLETED', 'Completed'),
+        ('ERROR', 'Error'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    registration = models.ForeignKey(EventRegistration, on_delete=models.CASCADE, related_name="flow_sessions")
+    flow = models.ForeignKey(FlowBlueprint, on_delete=models.CASCADE, related_name="sessions")
+    current_node_id = models.CharField(max_length=100, null=True, blank=True)
+    
+    # Store collected answers, e.g. {"node_1": "Air", "node_3": "15-03-2026"}
+    context_data = models.JSONField(default=dict, blank=True)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='RUNNING')
+    
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    last_interaction = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Session {self.id} for Reg {self.registration_id} (Flow: {self.flow.name})"
