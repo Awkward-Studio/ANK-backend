@@ -242,11 +242,11 @@ ALLOWED_HOSTS = hosts_env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,192.168.1
 if "*" in ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["*"]
 
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = csv_env(
     "DJANGO_CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://ank-test.vercel.app",
+    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://ank-test.vercel.app,https://*.vercel.app",
 )
 
 CSRF_TRUSTED_ORIGINS = csv_env(
