@@ -4,7 +4,9 @@ from datetime import datetime, date
 from typing import Tuple, Optional, Any
 from django.db import transaction
 
+from MessageTemplates.context_builder import build_registration_context
 from MessageTemplates.models import FlowSession
+from MessageTemplates.utils import _resolve_path
 from Events.services.message_logger import MessageLogger
 
 logger = logging.getLogger("whatsapp_flows")
@@ -114,6 +116,8 @@ class FlowRunner:
                     self.session.registration,
                     node_data.get("initialTemplateName"),
                     "flow",
+                    language_code=node_data.get("initialTemplateLanguage") or "en_US",
+                    components=self._build_template_components(node_data),
                     phone_number_id=self.sender_phone_number_id
                 )
             
@@ -150,7 +154,18 @@ class FlowRunner:
         elif node_type == "template":
             template_name = node_data.get("templateName")
             if template_name:
-                MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_template(
+                    self.session.registration,
+                    template_name,
+                    "flow",
+                    language_code=node_data.get("language") or "en_US",
+                    components=self._build_template_components(node_data),
+                    phone_number_id=node_data.get("phoneNumberId") or self.sender_phone_number_id,
+                    metadata={
+                        "template_bindings": node_data.get("templateBindings") or [],
+                        "flow_node_id": node_id,
+                    },
+                )
             
             has_button_edges = any(e.get("source") == node_id and e.get("sourceHandle") for e in self.edges)
             if has_button_edges:
@@ -269,6 +284,10 @@ class FlowRunner:
             return getattr(self.session.registration.guest, field, "")
         if path in self.session.context_data:
             return self.session.context_data[path]
+        runtime_context = self._build_runtime_context()
+        resolved = _resolve_path(runtime_context, path)
+        if resolved != "":
+            return resolved
         return ""
 
     def _interpolate_string(self, text: str) -> str:
@@ -278,6 +297,70 @@ class FlowRunner:
         for node_id, value in self.session.context_data.items():
             text = text.replace(f"{{{{{node_id}}}}}", str(value))
         return text
+
+    def _build_runtime_context(self) -> dict:
+        context = build_registration_context(self.session.registration)
+        context["Flow"] = dict(self.session.context_data or {})
+        return context
+
+    def _resolve_binding_value(self, binding: dict) -> str:
+        source = (binding.get("source") or "literal").strip().lower()
+
+        if source == "literal":
+            return self._interpolate_string(str(binding.get("value") or ""))
+
+        if source == "flow":
+            key = binding.get("path") or binding.get("value") or ""
+            return str((self.session.context_data or {}).get(key, ""))
+
+        path = binding.get("path") or binding.get("value") or ""
+        if not path:
+            return ""
+
+        if path in (self.session.context_data or {}):
+            return str(self.session.context_data.get(path, ""))
+
+        return str(_resolve_path(self._build_runtime_context(), path))
+
+    def _build_template_components(self, node_data: dict) -> list:
+        bindings = node_data.get("templateBindings") or []
+        grouped = {}
+
+        for binding in bindings:
+            component_type = str(binding.get("componentType") or "body").lower()
+            key = (
+                component_type,
+                int(binding.get("buttonIndex") or 0),
+                str(binding.get("buttonSubType") or "url").lower(),
+            )
+            grouped.setdefault(key, []).append(binding)
+
+        components = []
+        for (component_type, button_index, button_sub_type), group_bindings in grouped.items():
+            sorted_bindings = sorted(group_bindings, key=lambda item: int(item.get("parameterIndex") or 1))
+            parameters = []
+
+            for binding in sorted_bindings:
+                value = self._resolve_binding_value(binding)
+                parameter_type = str(binding.get("parameterType") or "text").lower()
+                if parameter_type == "text":
+                    parameters.append({"type": "text", "text": value})
+
+            if not parameters:
+                continue
+
+            component = {
+                "type": component_type,
+                "parameters": parameters,
+            }
+
+            if component_type == "button":
+                component["sub_type"] = button_sub_type
+                component["index"] = str(button_index)
+
+            components.append(component)
+
+        return components
 
     def _execute_orm_update(self, node_data: dict):
         model_name = node_data.get("model")

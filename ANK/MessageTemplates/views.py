@@ -309,6 +309,23 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
     queryset = FlowBlueprint.objects.all()
     serializer_class = FlowBlueprintSerializer
 
+    def _start_or_reset_session(self, blueprint, registration, sender_id=None):
+        session, created = FlowSession.objects.get_or_create(
+            registration=registration,
+            flow=blueprint,
+            defaults={"status": "RUNNING"},
+        )
+
+        if not created and session.status in ["COMPLETED", "ERROR"]:
+            session.status = "RUNNING"
+            session.current_node_id = None
+            session.context_data = {}
+            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+
+        runner = FlowRunner(session, sender_phone_number_id=sender_id)
+        runner.start()
+        return session
+
     @action(detail=True, methods=['post'])
     def start_flow(self, request, pk=None):
         blueprint = self.get_object()
@@ -322,29 +339,67 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
             
         from Events.models.event_registration_model import EventRegistration
         registration = get_object_or_404(EventRegistration, pk=reg_id)
-        
-        # Get or create session
-        session, created = FlowSession.objects.get_or_create(
-            registration=registration,
-            flow=blueprint,
-            defaults={'status': 'RUNNING'}
-        )
-        
-        # If it was completed or errored, reset it to RUNNING to start over
-        if not created and session.status in ['COMPLETED', 'ERROR']:
-            session.status = 'RUNNING'
-            session.current_node_id = None
-            session.context_data = {}
-            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
-            
-        runner = FlowRunner(session, sender_phone_number_id=sender_id)
-        runner.start()
+        session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id)
         
         return Response({
             "ok": True,
             "status": "Flow started", 
             "session_id": session.id,
             "session_status": session.status
+        })
+
+    @action(detail=True, methods=['post'])
+    def start_batch(self, request, pk=None):
+        blueprint = self.get_object()
+        registration_ids = request.data.get("registration_ids") or []
+        sender_id = request.data.get("sender_phone_number_id")
+
+        if not isinstance(registration_ids, list) or not registration_ids:
+            return Response(
+                {"ok": False, "detail": "registration_ids must be a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not blueprint.is_active:
+            return Response({"ok": False, "detail": "Flow blueprint is inactive"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from Events.models.event_registration_model import EventRegistration
+
+        registrations = EventRegistration.objects.filter(pk__in=registration_ids).select_related("guest", "event")
+        registration_map = {str(reg.id): reg for reg in registrations}
+
+        results = []
+        for reg_id in registration_ids:
+            registration = registration_map.get(str(reg_id))
+            if not registration:
+                results.append({
+                    "registration_id": str(reg_id),
+                    "ok": False,
+                    "detail": "registration not found",
+                })
+                continue
+
+            try:
+                session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id)
+                results.append({
+                    "registration_id": str(registration.id),
+                    "ok": True,
+                    "session_id": str(session.id),
+                    "session_status": session.status,
+                })
+            except Exception as exc:
+                results.append({
+                    "registration_id": str(registration.id),
+                    "ok": False,
+                    "detail": str(exc),
+                })
+
+        success_count = sum(1 for item in results if item.get("ok"))
+        return Response({
+            "ok": success_count > 0,
+            "status": "Batch flow started",
+            "results": results,
+            "success_count": success_count,
+            "failure_count": len(results) - success_count,
         })
 
 

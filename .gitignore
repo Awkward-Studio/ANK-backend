@@ -41,4 +41,4 @@ venv/
 .vscode/
 
 # Documentation
-*.md
+*.mdANK/.env
