@@ -459,6 +459,9 @@ class MessageLogger:
                 campaign_id=campaign_id
             )
             return wa_id
+        except Exception as e:
+            logger.exception(f"[SEND_TEMPLATE] Failed for reg {reg.id}: {e}")
+            return ""
 
     @staticmethod
     def send_media_message(
