@@ -337,7 +337,7 @@ class MessageLogger:
             return ""
 
         try:
-            wa_id, sender_id = send_freeform_text(phone, text, phone_number_id)
+            wa_id, sender_id = send_freeform_text(_norm_digits(phone), text, phone_number_id)
             MessageLogger.log_outbound(
                 reg, text, wa_id, message_type,
                 sender_phone_number_id=sender_id,

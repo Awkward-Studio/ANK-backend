@@ -81,10 +81,8 @@ _digits = re.compile(r"\D+")  # -c add global regex for phone normalization
 def _norm_digits(s: str) -> str:
     if not s:
         return ""
-    digits = _digits.sub("", s)[-15:]
-    if not digits.startswith("+"):
-        digits = "+" + digits
-    return digits
+    # Extract only digits and take the last 15
+    return "".join(c for c in str(s) if c.isdigit())[-15:]
 
 
 def _post(path: str, payload: Dict[str, Any], phone_number_id: Optional[str] = None) -> Dict[str, Any]:
@@ -115,7 +113,7 @@ def _post(path: str, payload: Dict[str, Any], phone_number_id: Optional[str] = N
     logger.warning(f"[WA-POST-BODY] {r.text}")
 
     data = r.json() if r.content else {}
-    if r.status_code >= 300:
+    if r.status_code >= 300 or 'error' in data:
         logger.exception(f"[WA-POST] ERROR {r.status_code}: {data}")
         raise WhatsAppError(f"WABA error {r.status_code}: {data}")
     
