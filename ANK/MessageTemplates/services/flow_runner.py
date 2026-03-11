@@ -204,11 +204,15 @@ class FlowRunner:
             template_name = node_data.get("templateName")
             if template_name:
                 try:
+                    # [NEW] Resolve Template Bindings (Variables)
+                    components = self._resolve_template_components(node_data.get("templateBindings", []))
+                    
                     wa_id = MessageLogger.send_template(
                         self.session.registration, 
                         template_name, 
                         "flow", 
                         language_code=node_data.get("templateLanguage", "en"),
+                        components=components,
                         phone_number_id=self.sender_phone_number_id, 
                         campaign_id=self.campaign_id
                     )
@@ -268,6 +272,113 @@ class FlowRunner:
                 return edge.get("target")
         return None
 
+    def _resolve_template_components(self, bindings: list) -> list:
+        """
+        Converts visual bindings into WhatsApp API components format.
+        """
+        if not bindings: return []
+        
+        body_params = []
+        header_params = []
+        
+        # Sort by index to ensure correct ordering in the API call
+        sorted_bindings = sorted(bindings, key=lambda x: x.get("parameterIndex", 0))
+        
+        for b in sorted_bindings:
+            val = ""
+            source = b.get("source")
+            if source == "context":
+                val = self._resolve_variable(b.get("path", ""))
+            elif source == "flow":
+                val = self.session.context_data.get(b.get("path", ""), "")
+            elif source == "literal":
+                val = b.get("value", "")
+                
+            param = {"type": "text", "text": str(val or " ")}
+            
+            if b.get("componentType") == "header":
+                header_params.append(param)
+            else:
+                body_params.append(param)
+                
+        components = []
+        if header_params:
+            components.append({"type": "header", "parameters": header_params})
+        if body_params:
+            components.append({"type": "body", "parameters": body_params})
+            
+        return components
+
+    def _resolve_variable(self, path: str) -> Any:
+        """
+        Supports deep paths: 'Guest.name', 'Event.bride_name', 'Registration.rsvp_status', etc.
+        """
+        if not path: return ""
+        
+        # Backward compatibility for old format 'guest.name'
+        if path.startswith("guest."):
+            field = path.split(".")[1]
+            return getattr(self.session.registration.guest, field, "")
+
+        parts = path.split(".")
+        root = parts[0].lower()
+        reg = self.session.registration
+        
+        try:
+            if root == "guest" or root == "guest":
+                return getattr(reg.guest, parts[1], "")
+            elif root == "event":
+                return getattr(reg.event, parts[1], "")
+            elif root == "registration":
+                return getattr(reg, parts[1], "")
+            elif root == "travel":
+                from Logistics.models.travel_details_models import TravelDetail
+                td = TravelDetail.objects.filter(event_registrations=reg).first()
+                if td: return getattr(td, parts[2] if len(parts) > 2 else parts[1], "")
+        except:
+            pass
+            
+        return self.session.context_data.get(path, "")
+
+    def _interpolate_string(self, text: str) -> str:
+        """
+        Supports {{guest.name}} and {{node_id}} placeholders.
+        """
+        reg = self.session.registration
+        if reg and reg.guest:
+            text = text.replace("{{guest.name}}", str(reg.guest.name or "Guest"))
+        
+        # Replace node references
+        for node_id, value in self.session.context_data.items():
+            text = text.replace(f"{{{{{node_id}}}}}", str(value))
+            
+        return text
+
+    def _execute_orm_update(self, node_data: dict):
+        model_name = node_data.get("model")
+        mappings = node_data.get("mappings", [])
+        if not model_name or not mappings: return
+            
+        reg = self.session.registration
+        
+        if model_name == "TravelDetail":
+            from Logistics.models.travel_details_models import TravelDetail
+            td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
+            if not td:
+                td = TravelDetail.objects.create(event=reg.event, arrival="commercial", departure="commercial")
+                td.event_registrations.add(reg)
+            
+            for m in mappings:
+                val = self.session.context_data.get(m.get("source_node"))
+                if val: setattr(td, m.get("field"), val)
+            td.save()
+            
+        elif model_name == "EventRegistration":
+            for m in mappings:
+                val = self.session.context_data.get(m.get("source_node"))
+                if val: setattr(reg, m.get("field"), val)
+            reg.save()
+
     def _validate_input(self, node: dict, text: str, payload_type: str) -> Tuple[bool, Any, Optional[str]]:
         data = node.get("data", {})
         val_type = data.get("validation", "text")
@@ -314,36 +425,3 @@ class FlowRunner:
         elif ampm == "am" and hh == 12: hh = 0
         if 0 <= hh < 24 and 0 <= mm < 60: return f"{hh:02d}:{mm:02d}"
         return None
-
-    def _resolve_variable(self, path: str) -> Any:
-        if not path: return ""
-        if path.startswith("guest."):
-            field = path.split(".")[1]
-            return getattr(self.session.registration.guest, field, "")
-        return self.session.context_data.get(path, "")
-
-    def _interpolate_string(self, text: str) -> str:
-        reg = self.session.registration
-        if reg and reg.guest:
-            text = text.replace("{{guest.name}}", str(reg.guest.name or "Guest"))
-        for node_id, value in self.session.context_data.items():
-            text = text.replace(f"{{{{{node_id}}}}}", str(value))
-        return text
-
-    def _execute_orm_update(self, node_data: dict):
-        model_name = node_data.get("model")
-        mappings = node_data.get("mappings", [])
-        if not model_name or not mappings: return
-            
-        if model_name == "TravelDetail":
-            from Logistics.models.travel_details_models import TravelDetail
-            reg = self.session.registration
-            td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
-            if not td:
-                td = TravelDetail.objects.create(event=reg.event, arrival="commercial", departure="commercial")
-                td.event_registrations.add(reg)
-            
-            for m in mappings:
-                val = self.session.context_data.get(m.get("source_node"))
-                if val: setattr(td, m.get("field"), val)
-            td.save()
