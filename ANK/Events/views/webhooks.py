@@ -148,6 +148,53 @@ def whatsapp_rsvp(request):
     return JsonResponse({"ok": True})
 
 @csrf_exempt
+@require_http_methods(["POST"])
+def track_send(request):
+    """
+    Called by the frontend (Next.js) whenever it successfully sends a template via the WhatsApp API.
+    Creates a WaSendMap entry to ensure inbound replies are correctly routed.
+    """
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    wa_id = _norm_digits(body.get("wa_id", ""))
+    template_wamid = body.get("template_wamid")
+    event_registration_id = body.get("event_registration_id")
+    sender_phone_number_id = body.get("sender_phone_number_id")
+    flow_type = body.get("flow_type")
+
+    if not wa_id or not template_wamid or not event_registration_id:
+        return JsonResponse({"ok": False, "error": "missing required fields"}, status=400)
+
+    try:
+        from datetime import timedelta
+        er = EventRegistration.objects.get(pk=event_registration_id)
+        WaSendMap.objects.update_or_create(
+            template_wamid=template_wamid,
+            defaults={
+                "wa_id": wa_id,
+                "event_registration": er,
+                "event_id": er.event_id,
+                "sender_phone_number_id": sender_phone_number_id,
+                "flow_type": flow_type,
+                "expires_at": dj_tz.now() + timedelta(days=4),
+            }
+        )
+        return JsonResponse({"ok": True})
+    except EventRegistration.DoesNotExist:
+        return JsonResponse({"ok": False, "error": "registration not found"}, status=404)
+    except Exception as e:
+        log.exception(f"[TRACK-SEND] Error: {e}")
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+@csrf_exempt
 @require_http_methods(["GET"])
 def resolve_wa(request, wa_id):
     token = request.headers.get("X-Webhook-Token", "")
