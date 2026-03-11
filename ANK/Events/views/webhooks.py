@@ -58,11 +58,17 @@ def whatsapp_rsvp(request):
     raw_status = (body.get("rsvp_status") or body.get("body") or "").strip()
     wa_id_raw = body.get("wa_id", "")
     wa_digits = _norm_digits(wa_id_raw)
-    to_phone_number_id = body.get("to_phone_number_id")
+    
+    # [FIX] Support both field names for sender number ID (Next.js vs Internal)
+    to_phone_number_id = body.get("to_phone_number_id") or body.get("sender_phone_number_id")
+    
+    # [FIX] Support explicit WhatsApp Message ID (wamid) from Next.js proxy
+    wamid = body.get("wamid") or body.get("wa_message_id")
+    
     media_id = body.get("media_id")
     media_type = body.get("media_type")
 
-    log.info(f"[WEBHOOK-IN] From: {wa_id_raw} | Text: '{raw_status}' | ToNumberID: {to_phone_number_id}")
+    log.info(f"[WEBHOOK-IN] From: {wa_id_raw} | Text: '{raw_status}' | ToNumberID: {to_phone_number_id} | WAMID: {wamid}")
 
     # 1. Resolve Registration Context
     er = None
@@ -139,7 +145,7 @@ def whatsapp_rsvp(request):
         event_registration=er,
         content=raw_status,
         message_type="custom",
-        wa_message_id=body.get("wa_id", ""),
+        wa_message_id=wamid or wa_id_raw or "no_wamid",
         media_id=media_id,
         media_type=media_type,
         metadata=body,

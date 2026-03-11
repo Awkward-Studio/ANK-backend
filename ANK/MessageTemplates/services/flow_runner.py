@@ -360,7 +360,14 @@ class FlowRunner:
         except:
             pass
             
-        return self.session.context_data.get(path, "")
+        # [FIX] Case-insensitive lookup for captured node answers
+        val = self.session.context_data.get(path)
+        if val is None:
+            for k, v in self.session.context_data.items():
+                if str(k).lower() == str(path).lower():
+                    val = v
+                    break
+        return val or ""
 
     def _interpolate_string(self, text: str) -> str:
         """
