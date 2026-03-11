@@ -102,15 +102,21 @@ class FlowRunner:
         if node_type == "trigger":
             # If trigger sends a template, it MUST pause to open the 24h window
             if node_data.get("startWithTemplate") and node_data.get("initialTemplateName"):
-                wa_id = MessageLogger.send_template(
-                    self.session.registration,
-                    node_data.get("initialTemplateName"),
-                    "flow",
-                    phone_number_id=self.sender_phone_number_id,
-                    campaign_id=self.campaign_id
-                )
-                if not wa_id:
-                    raise Exception(f"Failed to send initial flow template '{node_data.get('initialTemplateName')}'")
+                try:
+                    wa_id = MessageLogger.send_template(
+                        self.session.registration,
+                        node_data.get("initialTemplateName"),
+                        "flow",
+                        phone_number_id=self.sender_phone_number_id,
+                        campaign_id=self.campaign_id
+                    )
+                    if not wa_id:
+                        raise Exception("WhatsApp API returned no message ID.")
+                except Exception as e:
+                    # Mark session as error
+                    self.session.status = "ERROR"
+                    self.session.save(update_fields=["status", "last_interaction"])
+                    raise Exception(f"Failed to send initial flow template '{node_data.get('initialTemplateName')}': {str(e)}")
                     
                 self.session.status = "WAITING_FOR_INPUT"
                 self.session.save(update_fields=["status", "last_interaction"])
@@ -124,33 +130,43 @@ class FlowRunner:
             text = self._interpolate_string(node_data.get("text", ""))
             buttons = node_data.get("buttons", [])
             
-            if buttons:
-                button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                wa_id = MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
-                if not wa_id: raise Exception(f"Failed to send flow buttons for node {node_id}")
-                
-                # Messages with buttons ALWAYS pause
-                self.session.status = "WAITING_FOR_INPUT"
+            try:
+                if buttons:
+                    button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
+                    wa_id = MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                    if not wa_id: raise Exception("WhatsApp API returned no message ID.")
+                    
+                    # Messages with buttons ALWAYS pause
+                    self.session.status = "WAITING_FOR_INPUT"
+                    self.session.save(update_fields=["status", "last_interaction"])
+                else:
+                    wa_id = MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                    if not wa_id: raise Exception("WhatsApp API returned no message ID.")
+                    
+                    next_id = self._get_next_node_id(node_id)
+                    if next_id: self._execute_node(next_id)
+                    else: self._complete_session()
+            except Exception as e:
+                self.session.status = "ERROR"
                 self.session.save(update_fields=["status", "last_interaction"])
-            else:
-                wa_id = MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
-                if not wa_id: raise Exception(f"Failed to send flow text for node {node_id}")
-                
-                next_id = self._get_next_node_id(node_id)
-                if next_id: self._execute_node(next_id)
-                else: self._complete_session()
+                raise Exception(f"Failed to send flow message for node {node_id}: {str(e)}")
                 
         elif node_type == "input":
             prompt = self._interpolate_string(node_data.get("prompt", ""))
             buttons = node_data.get("buttons", [])
             
-            if buttons:
-                button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                wa_id = MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
-            else:
-                wa_id = MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
-            
-            if not wa_id: raise Exception(f"Failed to send flow input prompt for node {node_id}")
+            try:
+                if buttons:
+                    button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
+                    wa_id = MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                else:
+                    wa_id = MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                
+                if not wa_id: raise Exception("WhatsApp API returned no message ID.")
+            except Exception as e:
+                self.session.status = "ERROR"
+                self.session.save(update_fields=["status", "last_interaction"])
+                raise Exception(f"Failed to send flow input prompt for node {node_id}: {str(e)}")
                 
             self.session.status = "WAITING_FOR_INPUT"
             self.session.save(update_fields=["status", "last_interaction"])
@@ -158,8 +174,13 @@ class FlowRunner:
         elif node_type == "template":
             template_name = node_data.get("templateName")
             if template_name:
-                wa_id = MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
-                if not wa_id: raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}")
+                try:
+                    wa_id = MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                    if not wa_id: raise Exception("WhatsApp API returned no message ID.")
+                except Exception as e:
+                    self.session.status = "ERROR"
+                    self.session.save(update_fields=["status", "last_interaction"])
+                    raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}: {str(e)}")
             
             # Templates ALWAYS pause because we need the user to interact to open the 24h window
             self.session.status = "WAITING_FOR_INPUT"
