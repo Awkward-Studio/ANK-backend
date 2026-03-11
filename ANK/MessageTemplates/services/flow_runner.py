@@ -66,17 +66,44 @@ class FlowRunner:
             if len(parts) >= 3:
                 processed_text = parts[2] # Extract the actual 'value'
 
-        is_valid, parsed_value, error_msg = self._validate_input(node, processed_text, payload_type)
+        # Special Case: If we were waiting at a Template or Trigger node, 
+        # the input is just a "continue" signal to move to the next node.
+        if node.get("type") in ["trigger", "template"]:
+            next_node_id = self._get_next_node_id(current_node_id, processed_text)
+            if not next_node_id:
+                self._complete_session()
+                return "", True
+            
+            # [SMART CAPTURE] If the NEXT node is an input node, we can optionally 
+            # consume this same text as the answer to that input node to avoid 
+            # asking "Your answer?" if the template was already the question.
+            next_node = self.nodes.get(next_node_id)
+            if next_node and next_node.get("type") == "input":
+                # Only do this if it's text input (not a button click intended for branching)
+                if payload_type == "text":
+                    logger.info(f"[FLOW] Smart-capturing input '{processed_text}' for node {next_node_id}")
+                    return self._handle_input_node(next_node_id, processed_text, payload_type)
+
+            self.session.status = "RUNNING"
+            self._execute_node(next_node_id)
+            return "", self.session.status == "COMPLETED"
+
+        # Standard Input Node handling
+        return self._handle_input_node(current_node_id, processed_text, payload_type)
+
+    def _handle_input_node(self, node_id: str, text: str, payload_type: str) -> Tuple[str, bool]:
+        node = self.nodes[node_id]
+        is_valid, parsed_value, error_msg = self._validate_input(node, text, payload_type)
         
         if not is_valid:
             return error_msg or "Invalid input. Please try again.", False
             
         # Save answer
-        self.session.context_data[current_node_id] = parsed_value
+        self.session.context_data[node_id] = parsed_value
         self.session.save(update_fields=["context_data", "last_interaction"])
         
         # Find path based on this answer
-        next_node_id = self._get_next_node_id(current_node_id, parsed_value)
+        next_node_id = self._get_next_node_id(node_id, parsed_value)
         
         if not next_node_id:
             self._complete_session()
@@ -96,6 +123,7 @@ class FlowRunner:
         node_type = node.get("type")
         node_data = node.get("data", {})
         
+        logger.info(f"[FLOW-STEP] Executing {node_type} node: {node_id}")
         self.session.current_node_id = node_id
         self.session.save(update_fields=["current_node_id", "last_interaction"])
 
