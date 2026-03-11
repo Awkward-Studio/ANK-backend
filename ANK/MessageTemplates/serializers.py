@@ -420,12 +420,21 @@ class FlowSessionSerializer(serializers.ModelSerializer):
     def get_registration_details(self, obj):
         try:
             reg = obj.registration
+            g_name = "-"
+            if reg.guest:
+                g_name = reg.guest.name
+            elif reg.name_on_message:
+                g_name = reg.name_on_message
+                
             return {
-                "guest_name": reg.guest.name if reg.guest else reg.name_on_message,
+                "guest_name": g_name,
                 "guest_phone": reg.guest.phone if reg.guest else "-",
                 "rsvp_status": reg.rsvp_status,
                 "event_name": reg.event.name if reg.event else "-",
             }
-        except:
+        except Exception as e:
+            import logging
+            logger = logging.getLogger("django")
+            logger.warning(f"Error in FlowSessionSerializer.get_registration_details: {e}")
             return None
 
