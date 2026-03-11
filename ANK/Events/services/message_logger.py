@@ -419,7 +419,7 @@ class MessageLogger:
         reg: EventRegistration,
         template_name: str,
         message_type: str = "template",
-        language_code: str = "en_US",
+        language_code: str = "en",
         components: list = None,
         phone_number_id: str = None,
         metadata: dict = None,
