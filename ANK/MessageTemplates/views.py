@@ -309,7 +309,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
     queryset = FlowBlueprint.objects.all()
     serializer_class = FlowBlueprintSerializer
 
-    def _start_or_reset_session(self, blueprint, registration, sender_id=None):
+    def _start_or_reset_session(self, blueprint, registration, sender_id=None, campaign_id=None):
         session, created = FlowSession.objects.get_or_create(
             registration=registration,
             flow=blueprint,
@@ -322,7 +322,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
         session.context_data = {}
         session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
 
-        runner = FlowRunner(session, sender_phone_number_id=sender_id)
+        runner = FlowRunner(session, sender_phone_number_id=sender_id, campaign_id=campaign_id)
         runner.start()
         return session
 
@@ -331,6 +331,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
         blueprint = self.get_object()
         reg_id = request.data.get("registration_id")
         sender_id = request.data.get("sender_phone_number_id")
+        campaign_id = request.data.get("campaign_id")
         
         if not reg_id:
             return Response({"ok": False, "detail": "registration_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -339,7 +340,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
             
         from Events.models.event_registration_model import EventRegistration
         registration = get_object_or_404(EventRegistration, pk=reg_id)
-        session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id)
+        session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id, campaign_id=campaign_id)
         
         return Response({
             "ok": True,
@@ -353,6 +354,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
         blueprint = self.get_object()
         registration_ids = request.data.get("registration_ids") or []
         sender_id = request.data.get("sender_phone_number_id")
+        campaign_id = request.data.get("campaign_id")
 
         if not isinstance(registration_ids, list) or not registration_ids:
             return Response(
@@ -379,7 +381,7 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
                 continue
 
             try:
-                session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id)
+                session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id, campaign_id=campaign_id)
                 results.append({
                     "registration_id": str(registration.id),
                     "ok": True,

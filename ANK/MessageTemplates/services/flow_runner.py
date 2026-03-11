@@ -17,10 +17,11 @@ class FlowRunner:
     Executes a visual conversation flow (Directed Acyclic Graph) for a WhatsApp session.
     """
 
-    def __init__(self, session: FlowSession, sender_phone_number_id: str = None):
+    def __init__(self, session: FlowSession, sender_phone_number_id: str = None, campaign_id: str = None):
         self.session = session
         self.flow = session.flow
         self.sender_phone_number_id = sender_phone_number_id
+        self.campaign_id = campaign_id
         
         graph = self.flow.graph_json or {}
         self.nodes = {str(n["id"]): n for n in graph.get("nodes", [])}
@@ -105,7 +106,8 @@ class FlowRunner:
                     self.session.registration,
                     node_data.get("initialTemplateName"),
                     "flow",
-                    phone_number_id=self.sender_phone_number_id
+                    phone_number_id=self.sender_phone_number_id,
+                    campaign_id=self.campaign_id
                 )
                 self.session.status = "WAITING_FOR_INPUT"
                 self.session.save(update_fields=["status", "last_interaction"])
@@ -121,12 +123,12 @@ class FlowRunner:
             
             if buttons:
                 button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
                 # Messages with buttons ALWAYS pause
                 self.session.status = "WAITING_FOR_INPUT"
                 self.session.save(update_fields=["status", "last_interaction"])
             else:
-                MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
                 next_id = self._get_next_node_id(node_id)
                 if next_id: self._execute_node(next_id)
                 else: self._complete_session()
@@ -137,9 +139,9 @@ class FlowRunner:
             
             if buttons:
                 button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
             else:
-                MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
                 
             self.session.status = "WAITING_FOR_INPUT"
             self.session.save(update_fields=["status", "last_interaction"])
@@ -147,7 +149,7 @@ class FlowRunner:
         elif node_type == "template":
             template_name = node_data.get("templateName")
             if template_name:
-                MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id)
+                MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
             
             # Templates ALWAYS pause because we need the user to interact to open the 24h window
             self.session.status = "WAITING_FOR_INPUT"

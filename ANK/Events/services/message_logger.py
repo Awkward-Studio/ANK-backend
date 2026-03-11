@@ -65,14 +65,15 @@ class MessageLogger:
             # [FIX] Log to WhatsAppMessageLog for unified history view
             if wa_message_id:
                 try:
+                    from MessageTemplates.services.whatsapp import _norm_digits
                     phone = getattr(event_registration.guest, "phone", "") or ""
-                    # Store only digits
-                    guest_wa_id = "".join(c for c in phone if c.isdigit())[-15:]
+                    # Store standardized E164 format for consistency with frontend
+                    recipient_id = _norm_digits(phone)
 
                     WhatsAppMessageLog.objects.update_or_create(
                         wamid=wa_message_id,
                         defaults={
-                            "recipient_id": guest_wa_id,
+                            "recipient_id": recipient_id,
                             "status": "received",
                             "sent_at": timezone.now(),
                             "event_registration_id": str(event_registration.id),
@@ -122,6 +123,7 @@ class MessageLogger:
         media_id: str = None,
         metadata: dict = None,
         sender_phone_number_id: str = None,
+        campaign_id: str = None,
     ):
         """
         Log an outbound message to ConversationMessage and WhatsAppMessageLog for delivery tracking.
@@ -146,9 +148,10 @@ class MessageLogger:
             # Also create WhatsAppMessageLog for delivery status tracking
             if wa_message_id:
                 try:
+                    from MessageTemplates.services.whatsapp import _norm_digits
                     # Get phone digits for recipient_id
                     phone = getattr(event_registration.guest, "phone", "") or ""
-                    recipient_id = "".join(c for c in phone if c.isdigit())[-15:]
+                    recipient_id = _norm_digits(phone)
 
                     # Map conversation message_type to WhatsAppMessageLog message_type
                     log_message_type = _normalize_message_type(message_type)
@@ -177,6 +180,7 @@ class MessageLogger:
                             "media_type": media_type,
                             "media_id": media_id,
                             "sender_phone_number_id": sender_phone_number_id,
+                            "campaign_id": campaign_id,
                         },
                     )
                     logger.info(
@@ -316,19 +320,11 @@ class MessageLogger:
         reg: EventRegistration,
         text: str,
         message_type: str = "content",
-        phone_number_id: str = None
+        phone_number_id: str = None,
+        campaign_id: str = None
     ) -> str:
         """
         Send a freeform text message AND log it.
-        
-        Args:
-            reg: EventRegistration
-            text: Message text
-            message_type: Type of message
-            phone_number_id: Optional specific sender number
-            
-        Returns:
-            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_freeform_text
 
@@ -341,7 +337,8 @@ class MessageLogger:
             wa_id, sender_id = send_freeform_text(phone, text, phone_number_id)
             MessageLogger.log_outbound(
                 reg, text, wa_id, message_type,
-                sender_phone_number_id=sender_id
+                sender_phone_number_id=sender_id,
+                campaign_id=campaign_id
             )
             return wa_id
         except Exception as e:
@@ -356,22 +353,11 @@ class MessageLogger:
         message_type: str = "content",
         header: str = None,
         footer: str = None,
-        phone_number_id: str = None
+        phone_number_id: str = None,
+        campaign_id: str = None
     ) -> str:
         """
         Send an interactive button message AND log it.
-        
-        Args:
-            reg: EventRegistration
-            body: Message body
-            choices: Button choices
-            message_type: Type of message
-            header: Optional header
-            footer: Optional footer
-            phone_number_id: Optional specific sender number
-            
-        Returns:
-            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_choice_buttons
 
@@ -387,7 +373,8 @@ class MessageLogger:
             content = f"{body}\n[Buttons: {button_titles}]"
             MessageLogger.log_outbound(
                 reg, content, wa_id, message_type,
-                sender_phone_number_id=sender_id
+                sender_phone_number_id=sender_id,
+                campaign_id=campaign_id
             )
             return wa_id
         except Exception as e:
@@ -398,18 +385,11 @@ class MessageLogger:
     def send_resume_template(
         reg: EventRegistration,
         opener_param: str = None,
-        phone_number_id: str = None
+        phone_number_id: str = None,
+        campaign_id: str = None
     ) -> str:
         """
         Send the 'resume conversation' template AND log it.
-        
-        Args:
-            reg: EventRegistration
-            opener_param: Optional template parameter
-            phone_number_id: Optional specific sender number
-            
-        Returns:
-            WhatsApp message ID
         """
         from MessageTemplates.services.whatsapp import send_resume_opener
 
@@ -426,7 +406,8 @@ class MessageLogger:
                 wa_id,
                 "template",
                 "resume_conversation",
-                sender_phone_number_id=sender_id
+                sender_phone_number_id=sender_id,
+                campaign_id=campaign_id
             )
             return wa_id
         except Exception as e:
@@ -442,6 +423,7 @@ class MessageLogger:
         components: list = None,
         phone_number_id: str = None,
         metadata: dict = None,
+        campaign_id: str = None
     ) -> str:
         """
         Send a Meta template message and log the outbound payload.
@@ -474,11 +456,9 @@ class MessageLogger:
                     **(metadata or {}),
                 },
                 sender_phone_number_id=sender_id,
+                campaign_id=campaign_id
             )
             return wa_id
-        except Exception as e:
-            logger.exception(f"[SEND_TEMPLATE] Failed for reg {reg.id}: {e}")
-            return ""
 
     @staticmethod
     def send_media_message(
