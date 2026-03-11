@@ -348,7 +348,10 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
         except EventRegistration.DoesNotExist:
             return Response({"ok": False, "detail": f"Registration with ID {reg_id} not found on this server."}, status=status.HTTP_404_NOT_FOUND)
             
-        session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id, campaign_id=campaign_id)
+        try:
+            session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id, campaign_id=campaign_id)
+        except Exception as e:
+            return Response({"ok": False, "detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response({
             "ok": True,
