@@ -44,8 +44,6 @@ def _get_secret():
 def whatsapp_rsvp(request):
     """
     Unified Inbound Webhook for WhatsApp.
-    Now exclusively handles Visual Flows and Keyword Triggers.
-    Legacy system commands and travel flows have been REMOVED.
     """
     token = _get_header_token(request)
     secret = _get_secret()
@@ -64,6 +62,8 @@ def whatsapp_rsvp(request):
     media_id = body.get("media_id")
     media_type = body.get("media_type")
 
+    log.info(f"[WEBHOOK-IN] From: {wa_id_raw} | Text: '{raw_status}' | ToNumberID: {to_phone_number_id}")
+
     # 1. Resolve Registration Context
     er = None
     reg_id = body.get("event_registration_id")
@@ -71,16 +71,23 @@ def whatsapp_rsvp(request):
         er = EventRegistration.objects.filter(pk=reg_id).first()
     
     if not er and wa_digits:
-        # Fallback: Latest active session or map for this phone
-        latest_map = WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=dj_tz.now()).order_by("-created_at").first()
+        search_suffix = wa_digits[-10:]
+        latest_map = WaSendMap.objects.filter(
+            wa_id__endswith=search_suffix, 
+            expires_at__gt=dj_tz.now()
+        ).order_by("-created_at").first()
+        
         if latest_map:
             er = latest_map.event_registration
+            log.info(f"[WEBHOOK-RESOLVE] Found via WaSendMap: {er.id}")
         else:
-            # Last resort fallback lookup
-            er = EventRegistration.objects.filter(guest__phone__endswith=wa_digits[-10:]).order_by("-created_at").first()
+            er = EventRegistration.objects.filter(
+                guest__phone__endswith=search_suffix
+            ).order_by("-created_at").first()
+            if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone endswith: {er.id}")
 
     if not er:
-        log.warning(f"[WEBHOOK] Could not resolve registration for phone {wa_digits}. Logging as standalone.")
+        log.warning(f"[WEBHOOK] Could not resolve registration for phone suffix {wa_digits[-10:]}")
         return JsonResponse({"ok": True, "resolved": False})
 
     # 2. PRIORITY: Delegate to Active Visual Flow
@@ -88,14 +95,12 @@ def whatsapp_rsvp(request):
     
     button_id = body.get("button_id") or ""
     is_flow_button = button_id.startswith("flow|")
-    
-    # Hard reset commands that override flows
     is_reset_cmd = raw_status.lower().strip() in {"restart", "stop", "unsubscribe"}
     
     if waiting_flow_session and (is_flow_button or not is_reset_cmd):
         try:
             flow_input = button_id or raw_status
-            log.info(f"[WEBHOOK-PRIORITY] Delegating '{flow_input}' to Visual Flow for reg {er.id}")
+            log.info(f"[WEBHOOK-FLOW] Delegating '{flow_input}' to Flow {waiting_flow_session.flow.name}")
             runner = FlowRunner(waiting_flow_session, sender_phone_number_id=to_phone_number_id)
             
             payload_type = "interactive" if bool(button_id) else "text"
@@ -107,7 +112,7 @@ def whatsapp_rsvp(request):
             
             return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
         except Exception as e:
-            log.exception(f"[WEBHOOK-PRIORITY] Failed: {e}")
+            log.exception(f"[WEBHOOK-FLOW] Execution Failed: {e}")
 
     # 3. Handle STOP / Unsubscribe
     if raw_status.lower().strip() in {"stop", "unsubscribe"}:
@@ -121,14 +126,14 @@ def whatsapp_rsvp(request):
     # 4. START FLOW BY KEYWORD
     blueprint = FlowBlueprint.objects.filter(trigger_keyword__iexact=raw_status, is_active=True).first()
     if blueprint:
-        log.info(f"[WEBHOOK] Keyword match '{raw_status}' -> Starting Flow {blueprint.name} for reg {er.id}")
+        log.info(f"[WEBHOOK-KEYWORD] Starting Flow {blueprint.name} for reg {er.id}")
         FlowSession.objects.filter(registration=er, flow=blueprint).delete()
         session = FlowSession.objects.create(registration=er, flow=blueprint, status='RUNNING')
         runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
         runner.start()
         return JsonResponse({"ok": True, "flow_started": blueprint.name})
 
-    # 5. Log as general interaction if nothing else caught it
+    # 5. Log as general interaction
     from Events.services.message_logger import MessageLogger
     MessageLogger.log_inbound(
         event_registration=er,
@@ -141,8 +146,7 @@ def whatsapp_rsvp(request):
         sender_phone_number_id=to_phone_number_id,
     )
 
-    # Clean up maps
-    try: WaSendMap.objects.filter(wa_id=wa_digits).update(consumed_at=dj_tz.now())
+    try: WaSendMap.objects.filter(wa_id__endswith=wa_digits[-10:]).update(consumed_at=dj_tz.now())
     except: pass
 
     return JsonResponse({"ok": True})
@@ -151,27 +155,20 @@ def whatsapp_rsvp(request):
 @require_http_methods(["POST"])
 def track_send(request):
     """
-    Called by the frontend (Next.js) whenever it successfully sends a template via the WhatsApp API.
     Creates a WaSendMap entry to ensure inbound replies are correctly routed.
     """
     token = _get_header_token(request)
     secret = _get_secret()
-    if not secret or token != secret:
-        return HttpResponseForbidden("invalid token")
+    if not secret or token != secret: return HttpResponseForbidden("invalid token")
 
-    try:
-        body = json.loads(request.body.decode("utf-8"))
-    except Exception:
-        return HttpResponseBadRequest("invalid json")
+    try: body = json.loads(request.body.decode("utf-8"))
+    except: return HttpResponseBadRequest("invalid json")
 
     wa_id = _norm_digits(body.get("wa_id", ""))
     template_wamid = body.get("template_wamid")
     event_registration_id = body.get("event_registration_id")
     sender_phone_number_id = body.get("sender_phone_number_id")
     flow_type = body.get("flow_type")
-
-    if not wa_id or not template_wamid or not event_registration_id:
-        return JsonResponse({"ok": False, "error": "missing required fields"}, status=400)
 
     try:
         from datetime import timedelta
@@ -188,11 +185,7 @@ def track_send(request):
             }
         )
         return JsonResponse({"ok": True})
-    except EventRegistration.DoesNotExist:
-        return JsonResponse({"ok": False, "error": "registration not found"}, status=404)
-    except Exception as e:
-        log.exception(f"[TRACK-SEND] Error: {e}")
-        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+    except: return JsonResponse({"ok": False}, status=400)
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -201,10 +194,10 @@ def resolve_wa(request, wa_id):
     if token != os.getenv("DJANGO_RSVP_SECRET"):
         return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
 
-    wa_digits = "".join(c for c in wa_id if c.isdigit())[-15:]
+    wa_digits = _norm_digits(wa_id)
     sender_phone_number_id = request.GET.get("sender_phone_number_id")
 
-    qs = WaSendMap.objects.filter(wa_id=wa_digits, expires_at__gt=dj_tz.now())
+    qs = WaSendMap.objects.filter(wa_id__endswith=wa_digits[-10:], expires_at__gt=dj_tz.now())
     if sender_phone_number_id:
         qs = qs.filter(sender_phone_number_id=sender_phone_number_id)
 
@@ -233,8 +226,6 @@ def message_status_webhook(request):
     status = body.get("status")
     recipient_id = _norm_digits(body.get("recipient_id", ""))
     errors = body.get("errors")
-
-    if not wamid or not status: return HttpResponseBadRequest("missing wamid or status")
 
     msg_log, _ = WhatsAppMessageLog.objects.get_or_create(wamid=wamid, defaults={"recipient_id": recipient_id, "status": status})
     
