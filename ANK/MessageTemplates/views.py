@@ -316,11 +316,11 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
             defaults={"status": "RUNNING"},
         )
 
-        if not created and session.status in ["COMPLETED", "ERROR"]:
-            session.status = "RUNNING"
-            session.current_node_id = None
-            session.context_data = {}
-            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+        # [FIX] Always reset session to RUNNING and clear old state when manually triggered
+        session.status = "RUNNING"
+        session.current_node_id = None
+        session.context_data = {}
+        session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
 
         runner = FlowRunner(session, sender_phone_number_id=sender_id)
         runner.start()

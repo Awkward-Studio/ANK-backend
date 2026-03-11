@@ -399,6 +399,24 @@ def whatsapp_rsvp(request):
     raw_status = (body.get("rsvp_status") or body.get("body") or "").strip()
     media_id = body.get("media_id")
     media_type = body.get("media_type")
+
+    # [NEW] START FLOW BY KEYWORD
+    # Check if text matches any active blueprint keyword
+    if raw_status and not (body.get("button_id") or "").startswith("tc|"):
+        from MessageTemplates.models import FlowBlueprint
+        blueprint = FlowBlueprint.objects.filter(trigger_keyword__iexact=raw_status, is_active=True).first()
+        if blueprint:
+            # We need the registration to start a flow
+            wa_digits = _norm_digits(body.get("wa_id", ""))
+            er_flow = EventRegistration.objects.filter(guest__phone__endswith=wa_digits[-10:]).order_by("-created_at").first()
+            if er_flow:
+                log.info(f"[WEBHOOK] Keyword match '{raw_status}' -> Starting Flow {blueprint.name} for reg {er_flow.id}")
+                # Reset any existing session for this flow
+                FlowSession.objects.filter(registration=er_flow, flow=blueprint).delete()
+                session = FlowSession.objects.create(registration=er_flow, flow=blueprint, status='RUNNING')
+                runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
+                runner.start()
+                return JsonResponse({"ok": True, "flow_started": blueprint.name})
     
     # [FIX] Check for Travel Capture (tc|) buttons that might be sent here
     # This happens when a user clicks "Add Travel Details" on the RSVP confirmation message
