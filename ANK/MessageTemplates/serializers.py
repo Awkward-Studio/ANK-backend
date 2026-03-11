@@ -419,22 +419,36 @@ class FlowSessionSerializer(serializers.ModelSerializer):
 
     def get_registration_details(self, obj):
         try:
+            # Safely resolve the registration object
             reg = obj.registration
+            if not reg: return None
+            
+            # Extract guest name with multiple fallbacks
             g_name = "-"
-            if reg.guest:
+            if hasattr(reg, 'guest') and reg.guest:
                 g_name = reg.guest.name
-            elif reg.name_on_message:
+            elif hasattr(reg, 'name_on_message') and reg.name_on_message:
                 g_name = reg.name_on_message
+            
+            # Extract phone with fallback
+            g_phone = "-"
+            if hasattr(reg, 'guest') and reg.guest and reg.guest.phone:
+                g_phone = reg.guest.phone
                 
             return {
                 "guest_name": g_name,
-                "guest_phone": reg.guest.phone if reg.guest else "-",
-                "rsvp_status": reg.rsvp_status,
-                "event_name": reg.event.name if reg.event else "-",
+                "guest_phone": g_phone,
+                "rsvp_status": reg.rsvp_status or "Not Responded",
+                "event_name": reg.event.name if reg.event else "Unknown Event",
             }
         except Exception as e:
             import logging
             logger = logging.getLogger("django")
-            logger.warning(f"Error in FlowSessionSerializer.get_registration_details: {e}")
-            return None
+            logger.warning(f"[SERIALIZER-ERROR] FlowSession details resolution failed: {e}")
+            return {
+                "guest_name": "Error resolving name",
+                "guest_phone": "-",
+                "rsvp_status": "-",
+                "event_name": "-",
+            }
 
