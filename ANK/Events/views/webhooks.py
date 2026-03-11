@@ -606,76 +606,40 @@ def whatsapp_rsvp(request):
             if rid: er = EventRegistration.objects.get(pk=rid)
 
 
-    # [Universal Command Handling]
-    # Intercept "menu", "hi", "help", etc. to show options regardless of flow state.
-    universal_commands = {"menu", "options", "help", "hi", "hello", "start", "restart", "test"}
-    stop_commands = {"stop", "unsubscribe"}
-    
-    normalized_cmd = raw_status.lower().strip()
-    is_menu_command = normalized_cmd in universal_commands
-    is_stop_command = normalized_cmd in stop_commands
-
-    if is_stop_command:
-         # Handle Opt-Out
-         if er:
-             er.whatsapp_opt_in_status = 'opt_out'
-             er.save(update_fields=['whatsapp_opt_in_status'])
-             
-             from MessageTemplates.services.whatsapp import send_freeform_text
-             try:
-                 # Multi-number support: Use current number for system messages
-                 msg_id, sender_id = send_freeform_text(wa_id, "You have been unsubscribed from updates for this event.", phone_number_id=to_phone_number_id)
-                 log.info(f"[OPT-OUT] Sent unsubscribe confirmation to {wa_id} from {sender_id}")
-             except Exception:
-                 pass
-             
-             log.info(f"[OPT-OUT] Unsubscribed {wa_id} (reg {er.id})")
-             return JsonResponse({"ok": True, "status": "opt_out"})
-         else:
-             # TODO: Global unsubscribe if no ER found?
-             # For now, just log it.
-             log.info(f"[OPT-OUT] Received STOP from {wa_id} but no active registration context found.")
-
-    if is_menu_command and not er:
-        # Try global lookup by phone if context is missing
-        if wa_id:
-            wa_digits = _norm_digits(wa_id)
-            # Find latest future event or recent past
-            er = EventRegistration.objects.filter(
-                guest__phone__endswith=wa_digits
-            ).order_by("-event__start_date", "-created_at").first()
-            if er:
-                log.info(f"[MENU-LOOKUP] Found reg {er.id} for {wa_id}")
-
-    if is_menu_command and er:
-        from Events.services.message_logger import MessageLogger
-        
-        # Log the inbound command
-        MessageLogger.log_inbound(
-            event_registration=er,
-            content=raw_status,
-            message_type="custom",
-            wa_message_id=body.get("wa_id", ""),
-            metadata=body,
-            sender_phone_number_id=to_phone_number_id
+    # [NEW] DELEGATE TO VISUAL FLOWS (DAG)
+    # Priority 1: If we are in an active Visual Flow session, handle it first.
+    # This prevents universal commands like "hello" from breaking the flow if the flow needs that input.
+    waiting_flow_session = None
+    if er:
+        waiting_flow_session = (
+            FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT')
+            .order_by("-last_interaction")
+            .first()
         )
-        
-        # Send Menu Buttons
-        event_name = er.event.name if er.event else "the event"
-        msg = f"👋 Hello! Here are your options for {event_name}:"
-        buttons = [
-            {"id": f"tc|start_travel|{er.id}", "title": "✈️ Add Travel Info"},
-            {"id": f"tc|update_rsvp_menu|{er.id}", "title": "📝 Update RSVP"},
-            {"id": f"tc|remind_later|{er.id}", "title": "⏰ Remind Later"},
-        ]
-        MessageLogger.send_buttons(er, msg, buttons, "system", phone_number_id=to_phone_number_id)
-        
-        return JsonResponse({"ok": True, "menu_sent": True})
-    
-    elif is_menu_command and not er:
-        # Command sent but user unknown -> Do nothing (log only via fallthrough)
-        log.info(f"[UNKNOWN-USER] Received menu command from {wa_id} but no active registration found. Silently logging.")
-        pass
+
+    # Check for flow-specific button clicks regardless of command status
+    button_id = body.get("button_id") or ""
+    is_flow_button = button_id.startswith("flow|")
+
+    if waiting_flow_session and (not (raw_status.lower().strip() in {"menu", "options", "help", "start", "restart", "test"}) or is_flow_button):
+        try:
+            session = waiting_flow_session
+            flow_input = button_id or raw_status
+            log.info(f"[WEBHOOK] Delegating text '{flow_input}' to Visual Flow Engine for reg {er.id}")
+            runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
+            
+            payload_type = "interactive" if bool(button_id) else "text"
+            error_reply, is_done = runner.process_input(flow_input, payload_type=payload_type)
+            
+            if error_reply:
+                from Events.services.message_logger import MessageLogger
+                MessageLogger.send_text(er, error_reply, "flow", phone_number_id=to_phone_number_id)
+            
+            return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
+        except Exception as e:
+            log.exception(f"[WEBHOOK] Failed to delegate to Visual Flow: {e}")
+
+    # [Universal Command Handling]
 
     if not er:
         # STANDALONE / UNREGISTERED MESSAGE HANDLING
@@ -721,36 +685,6 @@ def whatsapp_rsvp(request):
         
         # Old behavior: return HttpResponseBadRequest("no mapping found for wa_id")
 
-    # [NEW] DELEGATE TO VISUAL FLOWS (DAG)
-    waiting_flow_session = None
-    if er:
-        waiting_flow_session = (
-            FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT')
-            .order_by("-last_interaction")
-            .first()
-        )
-
-    if current_flow == "flow" or waiting_flow_session:
-        if er and not is_menu_command:
-            try:
-                session = waiting_flow_session
-                if session:
-                    flow_input = body.get("button_id") or raw_status
-                    log.info(f"[WEBHOOK] Delegating text '{flow_input}' to Visual Flow Engine for reg {er.id}")
-                    runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
-                    
-                    payload_type = "interactive" if bool(body.get("button_id")) else "text"
-                    error_reply, is_done = runner.process_input(flow_input, payload_type=payload_type)
-                    
-                    if error_reply:
-                        from Events.services.message_logger import MessageLogger
-                        MessageLogger.send_text(er, error_reply, "flow", phone_number_id=to_phone_number_id)
-                    
-                    return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
-            except Exception as e:
-                log.exception(f"[WEBHOOK] Failed to delegate to Visual Flow: {e}")
-
-    
     # [FIX] DELEGATE TO TRAVEL CAPTURE IF ACTIVE FLOW IS TRAVEL
     if current_flow == "travel":
         # We are in Travel Flow -> All text input should go to the travel orchestrator
