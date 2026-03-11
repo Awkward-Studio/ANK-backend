@@ -397,19 +397,35 @@ class FlowBlueprintSerializer(serializers.ModelSerializer):
 
 class FlowSessionSerializer(serializers.ModelSerializer):
     flow_name = serializers.CharField(source="flow.name", read_only=True)
+    registration_details = serializers.SerializerMethodField()
 
     class Meta:
         model = MessageTemplates.models.FlowSession
         fields = [
             "id",
             "registration",
+            "registration_details",
             "flow",
             "flow_name",
             "current_node_id",
             "context_data",
+            "history",
+            "error_details",
             "status",
             "created_at",
             "last_interaction",
         ]
         read_only_fields = ["id", "created_at", "last_interaction"]
+
+    def get_registration_details(self, obj):
+        try:
+            reg = obj.registration
+            return {
+                "guest_name": reg.guest.name if reg.guest else reg.name_on_message,
+                "guest_phone": reg.guest.phone if reg.guest else "-",
+                "rsvp_status": reg.rsvp_status,
+                "event_name": reg.event.name if reg.event else "-",
+            }
+        except:
+            return None
 
