@@ -107,6 +107,7 @@ class FlowRunner:
                         self.session.registration,
                         node_data.get("initialTemplateName"),
                         "flow",
+                        language_code=node_data.get("initialTemplateLanguage", "en"),
                         phone_number_id=self.sender_phone_number_id,
                         campaign_id=self.campaign_id
                     )
@@ -175,7 +176,14 @@ class FlowRunner:
             template_name = node_data.get("templateName")
             if template_name:
                 try:
-                    wa_id = MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                    wa_id = MessageLogger.send_template(
+                        self.session.registration, 
+                        template_name, 
+                        "flow", 
+                        language_code=node_data.get("templateLanguage", "en"),
+                        phone_number_id=self.sender_phone_number_id, 
+                        campaign_id=self.campaign_id
+                    )
                     if not wa_id: raise Exception("WhatsApp API returned no message ID.")
                 except Exception as e:
                     self.session.status = "ERROR"
