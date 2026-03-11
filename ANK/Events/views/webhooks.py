@@ -430,6 +430,20 @@ def whatsapp_rsvp(request):
                      er_target = EventRegistration.objects.filter(guest__phone__endswith=w_id).order_by("-created_at").first()
 
             if er_target:
+                # [NEW] Check for Visual Flow override for travel capture
+                if step == "start_travel":
+                    from MessageTemplates.models import FlowBlueprint, FlowSession
+                    # Look for an active blueprint with 'travel' or 'master' keyword
+                    bp = FlowBlueprint.objects.filter(trigger_keyword__in=["travel", "master"], is_active=True).first()
+                    if bp:
+                        log.info(f"[RSVP-WEBHOOK] Overriding legacy travel with Visual Flow {bp.name} for reg {er_target.id}")
+                        # Ensure any old session is cleared/reset
+                        FlowSession.objects.filter(registration=er_target, flow=bp).delete()
+                        session = FlowSession.objects.create(registration=er_target, flow=bp, status='RUNNING')
+                        runner = FlowRunner(session, sender_phone_number_id=to_phone_number_id)
+                        runner.start()
+                        return JsonResponse({"ok": True, "flow_started": bp.name})
+
                 log.info(f"[RSVP-WEBHOOK] Delegating button {effective_payload} to Travel Capture for reg {er_target.id}")
                 try:
                     apply_button_choice(er_target, step, value, sender_phone_number_id=to_phone_number_id)

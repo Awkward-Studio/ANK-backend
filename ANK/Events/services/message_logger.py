@@ -434,6 +434,53 @@ class MessageLogger:
             return ""
 
     @staticmethod
+    def send_template(
+        reg: EventRegistration,
+        template_name: str,
+        message_type: str = "template",
+        language_code: str = "en_US",
+        components: list = None,
+        phone_number_id: str = None,
+        metadata: dict = None,
+    ) -> str:
+        """
+        Send a Meta template message and log the outbound payload.
+        """
+        from MessageTemplates.services.whatsapp import send_template
+
+        phone = getattr(reg.guest, "phone", None)
+        if not phone:
+            logger.warning(f"[SEND_TEMPLATE] No phone for reg {reg.id}")
+            return ""
+
+        try:
+            wa_id, sender_id = send_template(
+                phone,
+                template_name,
+                language_code=language_code or "en_US",
+                components=components or [],
+                phone_number_id=phone_number_id,
+            )
+            MessageLogger.log_outbound(
+                reg,
+                content=f"Template: {template_name}",
+                wa_message_id=wa_id,
+                message_type=message_type,
+                template_name=template_name,
+                metadata={
+                    "template_name": template_name,
+                    "language_code": language_code or "en_US",
+                    "components": components or [],
+                    **(metadata or {}),
+                },
+                sender_phone_number_id=sender_id,
+            )
+            return wa_id
+        except Exception as e:
+            logger.exception(f"[SEND_TEMPLATE] Failed for reg {reg.id}: {e}")
+            return ""
+
+    @staticmethod
     def send_media_message(
         reg: EventRegistration,
         media_type: str,
