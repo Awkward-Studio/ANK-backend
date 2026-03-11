@@ -1,12 +1,12 @@
 import logging
 import re
 from datetime import datetime, date
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, Dict
+from django.utils import timezone as dj_tz
 from django.db import transaction
 
-from MessageTemplates.context_builder import build_registration_context
-from MessageTemplates.models import FlowSession
-from MessageTemplates.utils import _resolve_path
+from MessageTemplates.models import FlowBlueprint, FlowSession
+from MessageTemplates.services.whatsapp import send_freeform_text, send_choice_buttons
 from Events.services.message_logger import MessageLogger
 
 logger = logging.getLogger("whatsapp_flows")
@@ -26,18 +26,6 @@ class FlowRunner:
         self.nodes = {str(n["id"]): n for n in graph.get("nodes", [])}
         self.edges = graph.get("edges", [])
 
-    def _set_status(self, status: str):
-        self.session.status = status
-        self.session.save(update_fields=["status", "last_interaction"])
-
-    def _set_error(self, reason: str):
-        logger.error("[FLOW] %s | session=%s flow=%s", reason, self.session.id, self.flow.id)
-        self.session.status = "ERROR"
-        context = dict(self.session.context_data or {})
-        context["_last_error"] = reason
-        self.session.context_data = context
-        self.session.save(update_fields=["status", "context_data", "last_interaction"])
-
     def start(self):
         """Starts the flow by triggering the first node."""
         if self.session.status != "RUNNING":
@@ -49,7 +37,8 @@ class FlowRunner:
             start_nodes = [n for n in self.nodes.values() if n["id"] not in incoming_edges]
             
         if not start_nodes:
-            self._set_error("No trigger node found")
+            logger.error(f"No trigger node found for Flow {self.flow.id}")
+            self._complete_session()
             return
             
         first_node = start_nodes[0]
@@ -57,24 +46,35 @@ class FlowRunner:
 
     @transaction.atomic
     def process_input(self, text: str, payload_type: str = "text") -> Tuple[str, bool]:
+        """
+        Handles user input or button clicks.
+        """
         if self.session.status != "WAITING_FOR_INPUT":
             return "", self.session.status == "COMPLETED"
 
         current_node_id = self.session.current_node_id
         if not current_node_id or current_node_id not in self.nodes:
-            self._set_error("Current node missing during input processing")
             return "An error occurred with this flow.", False
 
         node = self.nodes[current_node_id]
-        incoming_value = self._normalize_incoming_value(text, payload_type)
-        is_valid, parsed_value, error_msg = self._validate_input(node, incoming_value, payload_type)
+        
+        # [FIX] Handle our internal button ID format: "flow|node_id|value"
+        processed_text = text
+        if payload_type == "interactive" and "|" in text:
+            parts = text.split("|")
+            if len(parts) >= 3:
+                processed_text = parts[2] # Extract the actual 'value'
+
+        is_valid, parsed_value, error_msg = self._validate_input(node, processed_text, payload_type)
         
         if not is_valid:
             return error_msg or "Invalid input. Please try again.", False
             
+        # Save answer
         self.session.context_data[current_node_id] = parsed_value
         self.session.save(update_fields=["context_data", "last_interaction"])
         
+        # Find path based on this answer
         next_node_id = self._get_next_node_id(current_node_id, parsed_value)
         
         if not next_node_id:
@@ -86,21 +86,9 @@ class FlowRunner:
         
         return "", self.session.status == "COMPLETED"
 
-    def _normalize_incoming_value(self, text: str, payload_type: str) -> str:
-        text = (text or "").strip()
-        if payload_type != "interactive":
-            return text
-
-        # Interactive replies arrive as button payloads like `flow|<node_id>|<value>`.
-        if text.startswith("flow|"):
-            parts = text.split("|", 2)
-            if len(parts) == 3:
-                return parts[2].strip()
-        return text
-
     def _execute_node(self, node_id: str):
         if node_id not in self.nodes:
-            self._set_error(f"Missing node '{node_id}'")
+            self._complete_session()
             return
             
         node = self.nodes[node_id]
@@ -111,16 +99,18 @@ class FlowRunner:
         self.session.save(update_fields=["current_node_id", "last_interaction"])
 
         if node_type == "trigger":
+            # If trigger sends a template, it MUST pause to open the 24h window
             if node_data.get("startWithTemplate") and node_data.get("initialTemplateName"):
                 MessageLogger.send_template(
                     self.session.registration,
                     node_data.get("initialTemplateName"),
                     "flow",
-                    language_code=node_data.get("initialTemplateLanguage") or "en_US",
-                    components=self._build_template_components(node_data),
                     phone_number_id=self.sender_phone_number_id
                 )
-            
+                self.session.status = "WAITING_FOR_INPUT"
+                self.session.save(update_fields=["status", "last_interaction"])
+                return # Stop here! Wait for user to click a button or reply.
+
             next_id = self._get_next_node_id(node_id)
             if next_id: self._execute_node(next_id)
             else: self._complete_session()
@@ -132,7 +122,9 @@ class FlowRunner:
             if buttons:
                 button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
                 MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id)
-                self._set_status("WAITING_FOR_INPUT")
+                # Messages with buttons ALWAYS pause
+                self.session.status = "WAITING_FOR_INPUT"
+                self.session.save(update_fields=["status", "last_interaction"])
             else:
                 MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id)
                 next_id = self._get_next_node_id(node_id)
@@ -149,31 +141,17 @@ class FlowRunner:
             else:
                 MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id)
                 
-            self._set_status("WAITING_FOR_INPUT")
+            self.session.status = "WAITING_FOR_INPUT"
+            self.session.save(update_fields=["status", "last_interaction"])
 
         elif node_type == "template":
             template_name = node_data.get("templateName")
             if template_name:
-                MessageLogger.send_template(
-                    self.session.registration,
-                    template_name,
-                    "flow",
-                    language_code=node_data.get("language") or "en_US",
-                    components=self._build_template_components(node_data),
-                    phone_number_id=node_data.get("phoneNumberId") or self.sender_phone_number_id,
-                    metadata={
-                        "template_bindings": node_data.get("templateBindings") or [],
-                        "flow_node_id": node_id,
-                    },
-                )
+                MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id)
             
-            has_button_edges = any(e.get("source") == node_id and e.get("sourceHandle") for e in self.edges)
-            if has_button_edges:
-                self._set_status("WAITING_FOR_INPUT")
-            else:
-                next_id = self._get_next_node_id(node_id)
-                if next_id: self._execute_node(next_id)
-                else: self._complete_session()
+            # Templates ALWAYS pause because we need the user to interact to open the 24h window
+            self.session.status = "WAITING_FOR_INPUT"
+            self.session.save(update_fields=["status", "last_interaction"])
 
         elif node_type == "logic":
             val = self._resolve_variable(node_data.get("field", ""))
@@ -181,19 +159,13 @@ class FlowRunner:
             target = node_data.get("value", "")
             
             result = False
-            if op == "==": result = str(val).lower() == str(target).lower()
-            elif op == "!=": result = str(val).lower() != str(target).lower()
-            elif op == ">":
-                try:
-                    result = float(val) > float(target)
-                except (TypeError, ValueError):
-                    result = False
-            elif op == "<":
-                try:
-                    result = float(val) < float(target)
-                except (TypeError, ValueError):
-                    result = False
-            elif op == "contains": result = str(target).lower() in str(val).lower()
+            try:
+                if op == "==": result = str(val).lower() == str(target).lower()
+                elif op == "!=": result = str(val).lower() != str(target).lower()
+                elif op == ">": result = float(val) > float(target)
+                elif op == "<": result = float(val) < float(target)
+                elif op == "contains": result = str(target).lower() in str(val).lower()
+            except: result = False
             
             next_id = self._get_next_node_id(node_id, "true" if result else "false")
             if next_id: self._execute_node(next_id)
@@ -201,24 +173,27 @@ class FlowRunner:
                 
         elif node_type == "orm_update":
             self._execute_orm_update(node_data)
-            if self.session.status == "ERROR":
-                return
             next_id = self._get_next_node_id(node_id)
             if next_id: self._execute_node(next_id)
             else: self._complete_session()
         else:
-            self._set_error(f"Unsupported node type '{node_type}'")
+            self._complete_session()
 
     def _complete_session(self):
-        self._set_status("COMPLETED")
+        self.session.status = "COMPLETED"
+        self.session.save(update_fields=["status", "last_interaction"])
 
     def _get_next_node_id(self, current_node_id: str, last_value: Any = None) -> Optional[str]:
         val_str = str(last_value).lower().strip() if last_value else None
+        
+        # 1. Handle explicit branches (handles)
         if val_str:
             for edge in self.edges:
                 if edge.get("source") == current_node_id and edge.get("sourceHandle"):
                     if str(edge.get("sourceHandle")).lower().strip() == val_str:
                         return edge.get("target")
+        
+        # 2. Default fallthrough edge
         for edge in self.edges:
             if edge.get("source") == current_node_id and not edge.get("sourceHandle"):
                 return edge.get("target")
@@ -235,25 +210,20 @@ class FlowRunner:
         if val_type == "date":
             parsed = self._parse_date(text)
             if parsed: return True, parsed.isoformat(), None
-            return False, None, "📅 Please provide a valid date (e.g., 15-03-2026 or 15th March)."
+            return False, None, "📅 Please provide a valid date (e.g. 15-03-2026)."
 
         if val_type == "time":
             parsed = self._parse_time(text)
             if parsed: return True, parsed, None
-            return False, None, "⏰ Please provide a valid time (e.g., 14:30 or 2:30 PM)."
-
-        if val_type == "pnr":
-            if len(text) >= 5 and len(text) <= 10: return True, text.upper(), None
-            return False, None, "🎫 Please provide a valid PNR/Booking code (5-10 characters)."
+            return False, None, "⏰ Please provide a valid time (e.g. 14:30)."
 
         if val_type == "number":
             try: return True, int(text), None
-            except: return False, None, "🔢 Please enter a numeric value."
+            except: return False, None, "🔢 Please enter a number."
                 
         return True, text, None
 
     def _parse_date(self, text: str) -> Optional[date]:
-        """Sophisticated date parser from travel_info_capture."""
         clean = re.sub(r'(st|nd|rd|th)', '', text, flags=re.IGNORECASE)
         formats = ["%d-%m-%Y", "%d/%m/%Y", "%d %m %Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d"]
         for fmt in formats:
@@ -265,7 +235,6 @@ class FlowRunner:
         return None
 
     def _parse_time(self, text: str) -> Optional[str]:
-        """Sophisticated time parser from travel_info_capture."""
         t = text.lower().replace(".", "").replace(" ", "")
         m = re.search(r'(\d{1,2})[:h]?(\d{2})?\s*(am|pm)?', t)
         if not m: return None
@@ -282,13 +251,7 @@ class FlowRunner:
         if path.startswith("guest."):
             field = path.split(".")[1]
             return getattr(self.session.registration.guest, field, "")
-        if path in self.session.context_data:
-            return self.session.context_data[path]
-        runtime_context = self._build_runtime_context()
-        resolved = _resolve_path(runtime_context, path)
-        if resolved != "":
-            return resolved
-        return ""
+        return self.session.context_data.get(path, "")
 
     def _interpolate_string(self, text: str) -> str:
         reg = self.session.registration
@@ -298,75 +261,10 @@ class FlowRunner:
             text = text.replace(f"{{{{{node_id}}}}}", str(value))
         return text
 
-    def _build_runtime_context(self) -> dict:
-        context = build_registration_context(self.session.registration)
-        context["Flow"] = dict(self.session.context_data or {})
-        return context
-
-    def _resolve_binding_value(self, binding: dict) -> str:
-        source = (binding.get("source") or "literal").strip().lower()
-
-        if source == "literal":
-            return self._interpolate_string(str(binding.get("value") or ""))
-
-        if source == "flow":
-            key = binding.get("path") or binding.get("value") or ""
-            return str((self.session.context_data or {}).get(key, ""))
-
-        path = binding.get("path") or binding.get("value") or ""
-        if not path:
-            return ""
-
-        if path in (self.session.context_data or {}):
-            return str(self.session.context_data.get(path, ""))
-
-        return str(_resolve_path(self._build_runtime_context(), path))
-
-    def _build_template_components(self, node_data: dict) -> list:
-        bindings = node_data.get("templateBindings") or []
-        grouped = {}
-
-        for binding in bindings:
-            component_type = str(binding.get("componentType") or "body").lower()
-            key = (
-                component_type,
-                int(binding.get("buttonIndex") or 0),
-                str(binding.get("buttonSubType") or "url").lower(),
-            )
-            grouped.setdefault(key, []).append(binding)
-
-        components = []
-        for (component_type, button_index, button_sub_type), group_bindings in grouped.items():
-            sorted_bindings = sorted(group_bindings, key=lambda item: int(item.get("parameterIndex") or 1))
-            parameters = []
-
-            for binding in sorted_bindings:
-                value = self._resolve_binding_value(binding)
-                parameter_type = str(binding.get("parameterType") or "text").lower()
-                if parameter_type == "text":
-                    parameters.append({"type": "text", "text": value})
-
-            if not parameters:
-                continue
-
-            component = {
-                "type": component_type,
-                "parameters": parameters,
-            }
-
-            if component_type == "button":
-                component["sub_type"] = button_sub_type
-                component["index"] = str(button_index)
-
-            components.append(component)
-
-        return components
-
     def _execute_orm_update(self, node_data: dict):
         model_name = node_data.get("model")
         mappings = node_data.get("mappings", [])
-        if not model_name or not mappings:
-            return
+        if not model_name or not mappings: return
             
         if model_name == "TravelDetail":
             from Logistics.models.travel_details_models import TravelDetail
@@ -380,6 +278,3 @@ class FlowRunner:
                 val = self.session.context_data.get(m.get("source_node"))
                 if val: setattr(td, m.get("field"), val)
             td.save()
-            return
-
-        self._set_error(f"Unsupported ORM target '{model_name}'")
