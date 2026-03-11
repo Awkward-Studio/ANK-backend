@@ -200,8 +200,11 @@ class MessageLogger:
                 from datetime import timedelta
                 
                 # Determine effective flow type
-                # Map generic types if possible, but usually the caller (Travel View) sends 'travel'
+                # [FIX] If message_type is 'flow' or it's coming from FlowRunner, ensure flow_type is 'flow'
+                # This allows the Webhook to know that the next reply from this user belongs to a Visual Flow.
                 flow_type = _normalize_flow_type(message_type)
+                if message_type == "flow":
+                    flow_type = "flow"
                 
                 # We only want to track specific flows that need context
                 if flow_type in ["travel", "rsvp", "flow", "custom"]:
