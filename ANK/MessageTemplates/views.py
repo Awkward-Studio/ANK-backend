@@ -328,7 +328,11 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def start_flow(self, request, pk=None):
-        blueprint = self.get_object()
+        try:
+            blueprint = self.get_object()
+        except:
+            return Response({"ok": False, "detail": f"Flow blueprint with ID {pk} not found on this server."}, status=status.HTTP_404_NOT_FOUND)
+            
         reg_id = request.data.get("registration_id")
         sender_id = request.data.get("sender_phone_number_id")
         campaign_id = request.data.get("campaign_id")
@@ -339,7 +343,11 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
             return Response({"ok": False, "detail": "Flow blueprint is inactive"}, status=status.HTTP_400_BAD_REQUEST)
             
         from Events.models.event_registration_model import EventRegistration
-        registration = get_object_or_404(EventRegistration, pk=reg_id)
+        try:
+            registration = EventRegistration.objects.get(pk=reg_id)
+        except EventRegistration.DoesNotExist:
+            return Response({"ok": False, "detail": f"Registration with ID {reg_id} not found on this server."}, status=status.HTTP_404_NOT_FOUND)
+            
         session = self._start_or_reset_session(blueprint, registration, sender_id=sender_id, campaign_id=campaign_id)
         
         return Response({
