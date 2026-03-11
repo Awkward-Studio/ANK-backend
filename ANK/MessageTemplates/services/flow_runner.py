@@ -98,9 +98,17 @@ class FlowRunner:
         if not is_valid:
             return error_msg or "Invalid input. Please try again.", False
             
+        # [NEW] Record interaction in history
+        self.session.history.append({
+            "node_id": node_id,
+            "type": "user_input",
+            "label": f"User replied: {str(text)[:30]}",
+            "timestamp": dj_tz.now().isoformat()
+        })
+
         # Save answer
         self.session.context_data[node_id] = parsed_value
-        self.session.save(update_fields=["context_data", "last_interaction"])
+        self.session.save(update_fields=["context_data", "history", "last_interaction"])
         
         # Find path based on this answer
         next_node_id = self._get_next_node_id(node_id, parsed_value)
@@ -125,7 +133,17 @@ class FlowRunner:
         
         logger.info(f"[FLOW-STEP] Executing {node_type} node: {node_id}")
         self.session.current_node_id = node_id
-        self.session.save(update_fields=["current_node_id", "last_interaction"])
+        
+        # [NEW] Record this step in history for the timeline UI
+        step_label = node_data.get("templateName") or node_data.get("text") or node_data.get("prompt") or node_id
+        self.session.history.append({
+            "node_id": node_id,
+            "type": node_type,
+            "label": str(step_label)[:50],
+            "timestamp": dj_tz.now().isoformat()
+        })
+        
+        self.session.save(update_fields=["current_node_id", "history", "last_interaction"])
 
         if node_type == "trigger":
             # If trigger sends a template, it MUST pause to open the 24h window
@@ -144,7 +162,8 @@ class FlowRunner:
                 except Exception as e:
                     # Mark session as error
                     self.session.status = "ERROR"
-                    self.session.save(update_fields=["status", "last_interaction"])
+                    self.session.error_details = {"node_id": node_id, "error": str(e)}
+                    self.session.save(update_fields=["status", "error_details", "last_interaction"])
                     raise Exception(f"Failed to send initial flow template '{node_data.get('initialTemplateName')}': {str(e)}")
                     
                 self.session.status = "WAITING_FOR_INPUT"
@@ -177,7 +196,8 @@ class FlowRunner:
                     else: self._complete_session()
             except Exception as e:
                 self.session.status = "ERROR"
-                self.session.save(update_fields=["status", "last_interaction"])
+                self.session.error_details = {"node_id": node_id, "error": str(e)}
+                self.session.save(update_fields=["status", "error_details", "last_interaction"])
                 raise Exception(f"Failed to send flow message for node {node_id}: {str(e)}")
                 
         elif node_type == "input":
@@ -194,7 +214,8 @@ class FlowRunner:
                 if not wa_id: raise Exception("WhatsApp API returned no message ID.")
             except Exception as e:
                 self.session.status = "ERROR"
-                self.session.save(update_fields=["status", "last_interaction"])
+                self.session.error_details = {"node_id": node_id, "error": str(e)}
+                self.session.save(update_fields=["status", "error_details", "last_interaction"])
                 raise Exception(f"Failed to send flow input prompt for node {node_id}: {str(e)}")
                 
             self.session.status = "WAITING_FOR_INPUT"
@@ -219,7 +240,8 @@ class FlowRunner:
                     if not wa_id: raise Exception("WhatsApp API returned no message ID.")
                 except Exception as e:
                     self.session.status = "ERROR"
-                    self.session.save(update_fields=["status", "last_interaction"])
+                    self.session.error_details = {"node_id": node_id, "error": str(e)}
+                    self.session.save(update_fields=["status", "error_details", "last_interaction"])
                     raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}: {str(e)}")
             
             # Templates ALWAYS pause because we need the user to interact to open the 24h window

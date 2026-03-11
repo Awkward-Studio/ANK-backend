@@ -1,32 +1,35 @@
 import uuid
 import os
+import logging
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
 from Events.models.event_registration_model import EventRegistration
 from Events.models.event_model import Event
 from cryptography.fernet import Fernet
-import logging
 
-logger = logging.getLogger(__name__)
-
+logger = logging.getLogger("whatsapp")
 
 class MessageTemplate(models.Model):
     """
-    A message template scoped (optionally) to an Event.
+    Stores Meta-approved WhatsApp message templates and their metadata.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event = models.ForeignKey(
-        Event,
-        on_delete=models.CASCADE,
-        related_name="message_templates",
-        null=True,
-        blank=True,
+        Event, on_delete=models.CASCADE, related_name="message_templates",
+        null=True, blank=True # [FIX] Allow null to avoid migration blockers
     )
-    name = models.CharField(max_length=200, db_index=True)
-    message = models.TextField()
-    desc = models.TextField(blank=True, null=True)
+    name = models.CharField(max_length=255, help_text="Template name from Meta dashboard")
+    language = models.CharField(max_length=10, default="en_US")
+    category = models.CharField(max_length=50, blank=True)
+    status = models.CharField(max_length=50, blank=True)  # APPROVED, REJECTED, etc.
+
+    # Template structure (as stored in Meta)
+    components = models.JSONField(
+        default=list, help_text="Body, Header, Footer components"
+    )
+
     is_rsvp_message = models.BooleanField(default=False)
 
     # Media attachment fields for template messages
@@ -453,12 +456,18 @@ class FlowSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     registration = models.ForeignKey(EventRegistration, on_delete=models.CASCADE, related_name="flow_sessions")
     flow = models.ForeignKey(FlowBlueprint, on_delete=models.CASCADE, related_name="sessions")
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='RUNNING')
     current_node_id = models.CharField(max_length=100, null=True, blank=True)
     
     # Store collected answers, e.g. {"node_1": "Air", "node_3": "15-03-2026"}
     context_data = models.JSONField(default=dict, blank=True)
     
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='RUNNING')
+    # [NEW] Track timeline of node executions and interactions
+    history = models.JSONField(default=list, blank=True)
+    
+    # [NEW] Store specific API error details for UI debugging
+    error_details = models.JSONField(null=True, blank=True)
     
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     last_interaction = models.DateTimeField(auto_now=True)
