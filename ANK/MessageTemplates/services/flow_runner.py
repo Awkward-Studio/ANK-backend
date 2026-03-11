@@ -102,13 +102,16 @@ class FlowRunner:
         if node_type == "trigger":
             # If trigger sends a template, it MUST pause to open the 24h window
             if node_data.get("startWithTemplate") and node_data.get("initialTemplateName"):
-                MessageLogger.send_template(
+                wa_id = MessageLogger.send_template(
                     self.session.registration,
                     node_data.get("initialTemplateName"),
                     "flow",
                     phone_number_id=self.sender_phone_number_id,
                     campaign_id=self.campaign_id
                 )
+                if not wa_id:
+                    raise Exception(f"Failed to send initial flow template '{node_data.get('initialTemplateName')}'")
+                    
                 self.session.status = "WAITING_FOR_INPUT"
                 self.session.save(update_fields=["status", "last_interaction"])
                 return # Stop here! Wait for user to click a button or reply.
@@ -123,12 +126,16 @@ class FlowRunner:
             
             if buttons:
                 button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                wa_id = MessageLogger.send_buttons(self.session.registration, text, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                if not wa_id: raise Exception(f"Failed to send flow buttons for node {node_id}")
+                
                 # Messages with buttons ALWAYS pause
                 self.session.status = "WAITING_FOR_INPUT"
                 self.session.save(update_fields=["status", "last_interaction"])
             else:
-                MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                wa_id = MessageLogger.send_text(self.session.registration, text, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                if not wa_id: raise Exception(f"Failed to send flow text for node {node_id}")
+                
                 next_id = self._get_next_node_id(node_id)
                 if next_id: self._execute_node(next_id)
                 else: self._complete_session()
@@ -139,9 +146,11 @@ class FlowRunner:
             
             if buttons:
                 button_list = [{"id": f"flow|{node_id}|{b['value']}", "title": b["label"]} for b in buttons]
-                MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                wa_id = MessageLogger.send_buttons(self.session.registration, prompt, button_list, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
             else:
-                MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                wa_id = MessageLogger.send_text(self.session.registration, prompt, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+            
+            if not wa_id: raise Exception(f"Failed to send flow input prompt for node {node_id}")
                 
             self.session.status = "WAITING_FOR_INPUT"
             self.session.save(update_fields=["status", "last_interaction"])
@@ -149,7 +158,8 @@ class FlowRunner:
         elif node_type == "template":
             template_name = node_data.get("templateName")
             if template_name:
-                MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                wa_id = MessageLogger.send_template(self.session.registration, template_name, "flow", phone_number_id=self.sender_phone_number_id, campaign_id=self.campaign_id)
+                if not wa_id: raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}")
             
             # Templates ALWAYS pause because we need the user to interact to open the 24h window
             self.session.status = "WAITING_FOR_INPUT"
