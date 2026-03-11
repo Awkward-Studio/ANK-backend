@@ -45,16 +45,19 @@ class FlowRunner:
         first_node = start_nodes[0]
         self._execute_node(first_node["id"])
 
-    @transaction.atomic
     def process_input(self, text: str, payload_type: str = "text") -> Tuple[str, bool]:
         """
         Handles user input or button clicks.
         """
+        logger.info(f"[FLOW-INPUT] Processing {payload_type} input for session {self.session.id}. Text: '{text[:50]}'")
+        
         if self.session.status != "WAITING_FOR_INPUT":
+            logger.warning(f"[FLOW-INPUT] Session {self.session.id} is not WAITING_FOR_INPUT (status: {self.session.status})")
             return "", self.session.status == "COMPLETED"
 
         current_node_id = self.session.current_node_id
         if not current_node_id or current_node_id not in self.nodes:
+            logger.error(f"[FLOW-INPUT] Current node {current_node_id} not found in graph nodes for session {self.session.id}")
             return "An error occurred with this flow.", False
 
         node = self.nodes[current_node_id]
@@ -70,16 +73,14 @@ class FlowRunner:
         # the input is just a "continue" signal to move to the next node.
         if node.get("type") in ["trigger", "template"]:
             next_node_id = self._get_next_node_id(current_node_id, processed_text)
+            
             if not next_node_id:
                 self._complete_session()
                 return "", True
             
-            # [SMART CAPTURE] If the NEXT node is an input node, we can optionally 
-            # consume this same text as the answer to that input node to avoid 
-            # asking "Your answer?" if the template was already the question.
+            # [SMART CAPTURE]
             next_node = self.nodes.get(next_node_id)
             if next_node and next_node.get("type") == "input":
-                # Only do this if it's text input (not a button click intended for branching)
                 if payload_type == "text":
                     logger.info(f"[FLOW] Smart-capturing input '{processed_text}' for node {next_node_id}")
                     return self._handle_input_node(next_node_id, processed_text, payload_type)
@@ -93,9 +94,12 @@ class FlowRunner:
 
     def _handle_input_node(self, node_id: str, text: str, payload_type: str) -> Tuple[str, bool]:
         node = self.nodes[node_id]
+        logger.info(f"[FLOW-INPUT] Handling input node {node_id}. Value: '{text[:30]}'")
+        
         is_valid, parsed_value, error_msg = self._validate_input(node, text, payload_type)
         
         if not is_valid:
+            logger.warning(f"[FLOW-INPUT] Validation failed for node {node_id}: {error_msg}")
             return error_msg or "Invalid input. Please try again.", False
             
         # [NEW] Record interaction in history
@@ -109,11 +113,14 @@ class FlowRunner:
         # Save answer
         self.session.context_data[node_id] = parsed_value
         self.session.save(update_fields=["context_data", "history", "last_interaction"])
+        logger.info(f"[FLOW-INPUT] Saved context for node {node_id}. Context size: {len(self.session.context_data)}")
         
         # Find path based on this answer
         next_node_id = self._get_next_node_id(node_id, parsed_value)
+        logger.info(f"[FLOW-INPUT] Next node after input {node_id}: {next_node_id}")
         
         if not next_node_id:
+            logger.info(f"[FLOW-INPUT] No path found from input {node_id}. Completing session.")
             self._complete_session()
             return "", True
             
@@ -249,20 +256,28 @@ class FlowRunner:
             self.session.save(update_fields=["status", "last_interaction"])
 
         elif node_type == "logic":
-            val = self._resolve_variable(node_data.get("field", ""))
+            field = node_data.get("field", "")
+            val = self._resolve_variable(field)
             op = node_data.get("operator", "==")
             target = node_data.get("value", "")
             
+            logger.info(f"[FLOW-LOGIC] Evaluating: '{val}' {op} '{target}'")
+            
             result = False
             try:
-                if op == "==": result = str(val).lower() == str(target).lower()
-                elif op == "!=": result = str(val).lower() != str(target).lower()
+                if op == "==": result = str(val).lower().strip() == str(target).lower().strip()
+                elif op == "!=": result = str(val).lower().strip() != str(target).lower().strip()
                 elif op == ">": result = float(val) > float(target)
                 elif op == "<": result = float(val) < float(target)
-                elif op == "contains": result = str(target).lower() in str(val).lower()
-            except: result = False
+                elif op == "contains": result = str(target).lower().strip() in str(val).lower().strip()
+            except Exception as e: 
+                logger.error(f"[FLOW-LOGIC] Comparison error: {e}")
+                result = False
             
-            next_id = self._get_next_node_id(node_id, "true" if result else "false")
+            branch = "true" if result else "false"
+            next_id = self._get_next_node_id(node_id, branch)
+            logger.info(f"[FLOW-LOGIC] Result: {result}, Branch: {branch}, Next: {next_id}")
+            
             if next_id: self._execute_node(next_id)
             else: self._complete_session()
                 
@@ -285,8 +300,13 @@ class FlowRunner:
         if val_str:
             for edge in self.edges:
                 if edge.get("source") == current_node_id and edge.get("sourceHandle"):
-                    if str(edge.get("sourceHandle")).lower().strip() == val_str:
+                    handle_id = str(edge.get("sourceHandle")).lower().strip()
+                    # [FIX] Lenient matching for logic branches
+                    if handle_id == val_str:
                         return edge.get("target")
+                    # Handle cases where UI labels might be used as IDs
+                    if val_str == "true" and "true" in handle_id: return edge.get("target")
+                    if val_str == "false" and "false" in handle_id: return edge.get("target")
         
         # 2. Default fallthrough edge
         for edge in self.edges:

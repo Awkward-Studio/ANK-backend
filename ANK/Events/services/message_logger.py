@@ -5,6 +5,7 @@ from django.utils import timezone
 from Events.models.conversation_message import ConversationMessage
 from Events.models.event_registration_model import EventRegistration
 from Events.models.whatsapp_message_log import WhatsAppMessageLog
+from MessageTemplates.services.whatsapp import _norm_digits
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,6 @@ class MessageLogger:
             # [FIX] Log to WhatsAppMessageLog for unified history view
             if wa_message_id:
                 try:
-                    from MessageTemplates.services.whatsapp import _norm_digits
                     phone = getattr(event_registration.guest, "phone", "") or ""
                     # Store standardized E164 format for consistency with frontend
                     recipient_id = _norm_digits(phone)
@@ -148,7 +148,6 @@ class MessageLogger:
             # Also create WhatsAppMessageLog for delivery status tracking
             if wa_message_id:
                 try:
-                    from MessageTemplates.services.whatsapp import _norm_digits
                     # Get phone digits for recipient_id
                     phone = getattr(event_registration.guest, "phone", "") or ""
                     recipient_id = _norm_digits(phone)
