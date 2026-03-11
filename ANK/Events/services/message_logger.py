@@ -343,7 +343,7 @@ class MessageLogger:
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_TEXT] Failed for reg {reg.id}: {e}")
-            return ""
+            raise e
 
     @staticmethod
     def send_buttons(
@@ -379,7 +379,7 @@ class MessageLogger:
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_BUTTONS] Failed for reg {reg.id}: {e}")
-            return ""
+            raise e
 
     @staticmethod
     def send_resume_template(
@@ -461,7 +461,8 @@ class MessageLogger:
             return wa_id
         except Exception as e:
             logger.exception(f"[SEND_TEMPLATE] Failed for reg {reg.id}: {e}")
-            return ""
+            # [FIX] Propagate the original error message if it's a WhatsAppError
+            raise e
 
     @staticmethod
     def send_media_message(
