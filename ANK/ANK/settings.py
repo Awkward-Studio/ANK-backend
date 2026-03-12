@@ -64,6 +64,7 @@ def hosts_env(name: str, default: str = "") -> list[str]:
 SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = get_bool_env("DEBUG", True)
 USE_JWT = get_bool_env("USE_JWT", True)
+APPEND_SLASH = False # Handled by custom ApiSlashMiddleware to prevent token-stripping redirects
 
 if not DEBUG and not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG=False")
@@ -110,6 +111,8 @@ INSTALLED_APPS = [
 # Middleware
 # ---------------------------
 MIDDLEWARE = [
+    "ANK.middleware.ApiSlashMiddleware",
+    "ANK.middleware.JsonErrorMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -251,7 +254,7 @@ CORS_ALLOWED_ORIGINS = csv_env(
 
 CSRF_TRUSTED_ORIGINS = csv_env(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://*",
+    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://*.vercel.app,https://*.anewknot.com,https://ank-test.vercel.app",
 )
 
 CORS_ALLOW_HEADERS = [
