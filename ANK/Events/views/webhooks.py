@@ -162,6 +162,7 @@ def whatsapp_rsvp(request):
 def track_send(request):
     """
     Creates a WaSendMap entry to ensure inbound replies are correctly routed.
+    Also logs the outbound message to WhatsAppMessageLog for tracking.
     """
     token = _get_header_token(request)
     secret = _get_secret()
@@ -175,23 +176,71 @@ def track_send(request):
     event_registration_id = body.get("event_registration_id")
     sender_phone_number_id = body.get("sender_phone_number_id")
     flow_type = body.get("flow_type")
+    
+    # [NEW] Tracking metadata for WhatsAppMessageLog
+    campaign_id = body.get("campaign_id")
+    guest_name = body.get("guest_name")
+    template_name = body.get("template_name")
+    message_type = body.get("message_type") or (template_name and "template") or "custom"
+    content = body.get("body") or body.get("text") or body.get("content") or body.get("message")
 
     try:
         from datetime import timedelta
-        er = EventRegistration.objects.get(pk=event_registration_id)
-        WaSendMap.objects.update_or_create(
-            template_wamid=template_wamid,
-            defaults={
-                "wa_id": wa_id,
-                "event_registration": er,
-                "event_id": er.event_id,
-                "sender_phone_number_id": sender_phone_number_id,
-                "flow_type": flow_type,
-                "expires_at": dj_tz.now() + timedelta(days=4),
-            }
-        )
+        from Events.services.message_logger import MessageLogger
+        
+        er = None
+        if event_registration_id:
+            er = EventRegistration.objects.filter(pk=event_registration_id).first()
+        
+        # 1. Update/Create WaSendMap for reply routing
+        if template_wamid:
+            WaSendMap.objects.update_or_create(
+                template_wamid=template_wamid,
+                defaults={
+                    "wa_id": wa_id,
+                    "event_registration": er,
+                    "event_id": er.event_id if er else body.get("event_id"),
+                    "sender_phone_number_id": sender_phone_number_id,
+                    "flow_type": flow_type,
+                    "expires_at": dj_tz.now() + timedelta(days=4),
+                }
+            )
+        
+        # 2. [NEW] Log the outbound message for history & status tracking
+        # If we have a registration, use MessageLogger.log_outbound
+        if er and template_wamid:
+            MessageLogger.log_outbound(
+                event_registration=er,
+                content=content or (f"Template: {template_name}" if template_name else "Outbound message"),
+                wa_message_id=template_wamid,
+                message_type=message_type,
+                template_name=template_name,
+                sender_phone_number_id=sender_phone_number_id,
+                campaign_id=campaign_id,
+                metadata=body
+            )
+        elif template_wamid:
+            # Standalone message (no registration) - log directly to WhatsAppMessageLog
+            WhatsAppMessageLog.objects.update_or_create(
+                wamid=template_wamid,
+                defaults={
+                    "recipient_id": wa_id,
+                    "status": "sent",
+                    "sent_at": dj_tz.now(),
+                    "message_type": message_type,
+                    "template_name": template_name,
+                    "guest_name": guest_name,
+                    "direction": "outbound",
+                    "body": content,
+                    "sender_phone_number_id": sender_phone_number_id,
+                    "campaign_id": campaign_id,
+                }
+            )
+
         return JsonResponse({"ok": True})
-    except: return JsonResponse({"ok": False}, status=400)
+    except Exception as e:
+        log.exception(f"[track-send] Failed: {e}")
+        return JsonResponse({"ok": False, "error": str(e)}, status=400)
 
 @csrf_exempt
 @require_http_methods(["GET"])
