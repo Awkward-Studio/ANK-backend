@@ -100,8 +100,9 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         pwd = validated_data.pop("password")
+        email = validated_data["email"].lower().strip()
         user = User(
-            email=validated_data["email"],
+            email=email,
             name=validated_data.get("name", ""),
             contact_phone=validated_data.get("contact_phone", ""),
             role="staff",
