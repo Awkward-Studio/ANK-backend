@@ -142,6 +142,9 @@ def whatsapp_travel_webhook(request):
     reg_id = body.get("registration_id")
     sender_id = body.get("sender_phone_number_id")
     
+    # [FIX] Correctly extract WAMID from Next.js payload
+    wamid = body.get("wamid") or body.get("wa_message_id")
+    
     # [FIX] Robust text extraction (Next.js sends 'text', logging tools might send 'body'/'message')
     # Extract this early so we can log it even if user is unknown
     raw_text = body.get("text") or body.get("body") or body.get("message") or ""
@@ -212,7 +215,7 @@ def whatsapp_travel_webhook(request):
     if kind == "resume":
         logger.warning(f"[RESUME] reg={reg.id} restarting/continuing flow")
         # Update responded_on when guest resumes conversation
-        MessageLogger.log_inbound(reg, "Resume / Continue", "system", wa_id, body)
+        MessageLogger.log_inbound(reg, "Resume / Continue", "system", wamid or wa_id, body, sender_phone_number_id=sender_id)
         try:
             resume_or_start(reg, sender_phone_number_id=sender_id)
         except Exception as exc:
@@ -270,7 +273,7 @@ def whatsapp_travel_webhook(request):
                     f"[WEBHOOK-BUTTON] step={step!r} value={value!r} reg={reg.id}"
                 )
                 # Log inbound button click
-                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "button", btn_id or wa_id, body, sender_phone_number_id=sender_id)
+                MessageLogger.log_inbound(reg, f"Button: {step}={value}", "button", wamid or btn_id or wa_id, body, sender_phone_number_id=sender_id)
                 # Delegate EVERYTHING to the orchestrator
                 apply_button_choice(reg, step, value, sender_phone_number_id=sender_id)
             except Exception as exc:
@@ -284,7 +287,7 @@ def whatsapp_travel_webhook(request):
     if kind == "wake":
         logger.warning(f"[WAKE] Registration={reg.id} WAKE triggered")
         # Update responded_on when guest initiates conversation
-        MessageLogger.log_inbound(reg, "Wake / Init", "system", wa_id, body)
+        MessageLogger.log_inbound(reg, "Wake / Init", "system", wamid or wa_id, body, sender_phone_number_id=sender_id)
         try:
             # If session exists and is complete, send update instructions
             if sess and sess.is_complete:
@@ -317,7 +320,7 @@ def whatsapp_travel_webhook(request):
             return JsonResponse({"ok": True}, status=200)
         
         # Update responded_on when guest sends a text message
-        MessageLogger.log_inbound(reg, text, "content", wa_id, body, sender_phone_number_id=sender_id)
+        MessageLogger.log_inbound(reg, text, "content", wamid or wa_id, body, sender_phone_number_id=sender_id)
 
         # Check for explicit commands FIRST (before any state checks)
         text_lower = text.lower()
