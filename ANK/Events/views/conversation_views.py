@@ -19,11 +19,16 @@ class ConversationHistoryView(APIView):
         # Verify reg belongs to event
         reg = get_object_or_404(EventRegistration, id=registration_id, event_id=event_id)
         
-        messages = ConversationMessage.objects.filter(
+        queryset = ConversationMessage.objects.filter(
             event_registration=reg
         ).order_by('-timestamp')
+
+        # [NEW] Multi-number isolation: Filter by which of our numbers is being used
+        sender_phone_number_id = request.GET.get("sender_phone_number_id")
+        if sender_phone_number_id:
+             queryset = queryset.filter(sender_phone_number_id=sender_phone_number_id)
         
-        serializer = ConversationMessageSerializer(messages, many=True)
+        serializer = ConversationMessageSerializer(queryset, many=True)
         return Response(serializer.data)
 
 class ServiceWindowStatusView(APIView):

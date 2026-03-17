@@ -93,8 +93,25 @@ def whatsapp_rsvp(request):
             if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone endswith: {er.id}")
 
     if not er:
-        log.warning(f"[WEBHOOK] Could not resolve registration for phone suffix {wa_digits[-10:]}")
-        return JsonResponse({"ok": True, "resolved": False})
+        log.warning(f"[WEBHOOK] Could not resolve registration for phone suffix {wa_digits[-10:]}. Logging as standalone message.")
+        
+        # Log as standalone message if no registration found
+        if wa_digits:
+            WhatsAppMessageLog.objects.update_or_create(
+                wamid=wamid or f"inbound_{wa_digits}_{dj_tz.now().timestamp()}",
+                defaults={
+                    "recipient_id": wa_digits,
+                    "status": "received",
+                    "sent_at": dj_tz.now(),
+                    "direction": "inbound",
+                    "body": raw_status,
+                    "media_id": media_id,
+                    "media_type": media_type,
+                    "sender_phone_number_id": to_phone_number_id,
+                    "message_type": "custom",
+                }
+            )
+        return JsonResponse({"ok": True, "resolved": False, "logged": True})
 
     # 2. PRIORITY: Delegate to Active Visual Flow
     waiting_flow_session = FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT').order_by("-last_interaction").first()
@@ -317,9 +334,43 @@ def message_logs(request):
     if not secret or token != secret: return JsonResponse({"detail": "Invalid token"}, status=403)
 
     queryset = WhatsAppMessageLog.objects.all().order_by("-sent_at")
+    
+    # 1. Filter by Registration
     rid = request.GET.get("registration_id")
     if rid: queryset = queryset.filter(event_registration_id=rid)
     
+    # 2. Filter by Event
+    eid = request.GET.get("event_id")
+    if eid: queryset = queryset.filter(event_id=eid)
+
+    # 3. Filter by Recipient (Phone Number)
+    recipient_id = request.GET.get("recipient_id")
+    if recipient_id:
+        # Normalize incoming phone for search
+        clean_recipient = _norm_digits(recipient_id)
+        if clean_recipient:
+            # Match either full number or last 10 digits to be safe with E.164 variations
+            queryset = queryset.filter(
+                Q(recipient_id=clean_recipient) | 
+                Q(recipient_id__endswith=clean_recipient[-10:])
+            )
+
+    # 4. Filter by Sender (Multi-number support)
+    sender_id = request.GET.get("sender_phone_number_id")
+    if sender_id:
+        queryset = queryset.filter(sender_phone_number_id=sender_id)
+
+    # 5. Filter by Guest
+    gid = request.GET.get("guest_id")
+    if gid: queryset = queryset.filter(guest_id=gid)
+
+    # 6. Filter by Standalone
+    standalone = request.GET.get("standalone")
+    if standalone == "true":
+        queryset = queryset.filter(event_registration_id__isnull=True)
+
+    log.info(f"[API-LOGS] Fetching logs. Rid: {rid}, Eid: {eid}, Recipient: {recipient_id}, Sender: {sender_id}. Total matches: {queryset.count()}")
+
     paginator = PageNumberPagination()
     paginator.page_size = int(request.GET.get("limit", 20))
     result_page = paginator.paginate_queryset(queryset, request)
