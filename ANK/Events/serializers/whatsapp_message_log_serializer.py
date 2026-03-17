@@ -10,6 +10,7 @@ class WhatsAppMessageLogSerializer(serializers.ModelSerializer):
             "id",
             "wamid",
             "recipient_id",
+            "sender_phone_number_id",
             "status",
             "direction",
             "message_type",
