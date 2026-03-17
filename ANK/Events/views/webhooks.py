@@ -90,8 +90,8 @@ def whatsapp_rsvp(request):
             log.info(f"[WEBHOOK-RESOLVE] Found via template_wamid context '{template_wamid}': {er.id if er else 'Map found but no er'}")
 
     # 3. Match by Phone Number (Last 10 digits suffix)
-    if not er and wa_digits:
-        search_suffix = wa_digits[-10:]
+    search_suffix = wa_digits[-10:] if len(wa_digits) >= 10 else wa_digits
+    if not er and search_suffix:
         latest_map = WaSendMap.objects.filter(
             wa_id__endswith=search_suffix, 
             expires_at__gt=dj_tz.now()
@@ -100,16 +100,30 @@ def whatsapp_rsvp(request):
         if latest_map:
             er = latest_map.event_registration
             log.info(f"[WEBHOOK-RESOLVE] Found via WaSendMap suffix '{search_suffix}': {er.id if er else 'Map found but no er'}")
-        else:
+        
+        if not er:
+            # BROAD SEARCH: Try to find any registration where the guest's phone ends with our suffix
+            # We use __contains to handle cases where there might be spaces or other characters in the DB
             er = EventRegistration.objects.filter(
-                guest__phone__endswith=search_suffix
+                guest__phone__contains=search_suffix
             ).order_by("-created_at").first()
-            if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone suffix '{search_suffix}': {er.id}")
+            if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone contains '{search_suffix}': {er.id}")
 
     if not er:
-        log.warning(f"[WEBHOOK] Could not resolve registration for phone suffix {wa_digits[-10:]}. Logging as standalone message.")
+        log.warning(f"[WEBHOOK] Could not resolve registration for phone {wa_digits}. Logging as standalone message.")
         
-        # Log as standalone message if no registration found
+        # [NEW] Try to find the Guest anyway to at least get a name for the standalone log
+        guest_name = None
+        guest_id = None
+        if search_suffix:
+            from Guest.models import Guest
+            guest = Guest.objects.filter(phone__contains=search_suffix).first()
+            if guest:
+                guest_name = guest.name
+                guest_id = str(guest.id)
+                log.info(f"[WEBHOOK-RESOLVE] Found Guest '{guest_name}' (ID: {guest_id}) but no active registration.")
+
+        # Log as standalone message
         if wa_digits:
             WhatsAppMessageLog.objects.update_or_create(
                 wamid=wamid or f"inbound_{wa_digits}_{dj_tz.now().timestamp()}",
@@ -123,9 +137,11 @@ def whatsapp_rsvp(request):
                     "media_type": media_type,
                     "sender_phone_number_id": to_phone_number_id,
                     "message_type": "custom",
+                    "guest_name": guest_name,
+                    "guest_id": guest_id,
                 }
             )
-        return JsonResponse({"ok": True, "resolved": False, "logged": True})
+        return JsonResponse({"ok": True, "resolved": False, "logged": True, "guest_name": guest_name})
 
     # 2. PRIORITY: Delegate to Active Visual Flow
     waiting_flow_session = FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT').order_by("-last_interaction").first()
