@@ -75,7 +75,21 @@ def whatsapp_rsvp(request):
     reg_id = body.get("event_registration_id")
     if reg_id:
         er = EventRegistration.objects.filter(pk=reg_id).first()
+        if er: log.info(f"[WEBHOOK-RESOLVE] Found via direct registration_id: {er.id}")
     
+    # 2. Match by Template Context (Strongest Match)
+    # When a guest replies to a template, Next.js sends the original template's wamid as template_wamid
+    template_wamid = body.get("template_wamid")
+    if not er and template_wamid:
+        latest_map = WaSendMap.objects.filter(
+            template_wamid=template_wamid, 
+            expires_at__gt=dj_tz.now()
+        ).order_by("-created_at").first()
+        if latest_map:
+            er = latest_map.event_registration
+            log.info(f"[WEBHOOK-RESOLVE] Found via template_wamid context '{template_wamid}': {er.id if er else 'Map found but no er'}")
+
+    # 3. Match by Phone Number (Last 10 digits suffix)
     if not er and wa_digits:
         search_suffix = wa_digits[-10:]
         latest_map = WaSendMap.objects.filter(
@@ -85,12 +99,12 @@ def whatsapp_rsvp(request):
         
         if latest_map:
             er = latest_map.event_registration
-            log.info(f"[WEBHOOK-RESOLVE] Found via WaSendMap: {er.id}")
+            log.info(f"[WEBHOOK-RESOLVE] Found via WaSendMap suffix '{search_suffix}': {er.id if er else 'Map found but no er'}")
         else:
             er = EventRegistration.objects.filter(
                 guest__phone__endswith=search_suffix
             ).order_by("-created_at").first()
-            if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone endswith: {er.id}")
+            if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone suffix '{search_suffix}': {er.id}")
 
     if not er:
         log.warning(f"[WEBHOOK] Could not resolve registration for phone suffix {wa_digits[-10:]}. Logging as standalone message.")
