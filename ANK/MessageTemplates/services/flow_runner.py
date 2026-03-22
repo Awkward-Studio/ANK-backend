@@ -12,6 +12,9 @@ from Events.services.message_logger import MessageLogger
 logger = logging.getLogger("whatsapp_flows")
 
 
+MAX_NODE_EXECUTIONS = 50
+
+
 class FlowRunner:
     """
     Executes a visual conversation flow (Directed Acyclic Graph) for a WhatsApp session.
@@ -22,6 +25,7 @@ class FlowRunner:
         self.flow = session.flow
         self.sender_phone_number_id = sender_phone_number_id
         self.campaign_id = campaign_id
+        self._exec_count = 0
         
         graph = self.flow.graph_json or {}
         self.nodes = {str(n["id"]): n for n in graph.get("nodes", [])}
@@ -86,6 +90,7 @@ class FlowRunner:
                     return self._handle_input_node(next_node_id, processed_text, payload_type)
 
             self.session.status = "RUNNING"
+            self.session.save(update_fields=["status", "last_interaction"])
             self._execute_node(next_node_id)
             return "", self.session.status == "COMPLETED"
 
@@ -110,9 +115,10 @@ class FlowRunner:
             "timestamp": dj_tz.now().isoformat()
         })
 
-        # Save answer
+        # Save answer and transition to RUNNING in a single write
         self.session.context_data[node_id] = parsed_value
-        self.session.save(update_fields=["context_data", "history", "last_interaction"])
+        self.session.status = "RUNNING"
+        self.session.save(update_fields=["context_data", "history", "status", "last_interaction"])
         logger.info(f"[FLOW-INPUT] Saved context for node {node_id}. Context size: {len(self.session.context_data)}")
         
         # Find path based on this answer
@@ -124,12 +130,19 @@ class FlowRunner:
             self._complete_session()
             return "", True
             
-        self.session.status = "RUNNING"
         self._execute_node(next_node_id)
         
         return "", self.session.status == "COMPLETED"
 
     def _execute_node(self, node_id: str):
+        self._exec_count += 1
+        if self._exec_count > MAX_NODE_EXECUTIONS:
+            logger.error(f"[FLOW-CYCLE] Exceeded {MAX_NODE_EXECUTIONS} node executions for session {self.session.id}. Likely cycle in graph.")
+            self.session.status = "ERROR"
+            self.session.error_details = {"node_id": node_id, "error": f"Flow exceeded {MAX_NODE_EXECUTIONS} steps — possible cycle in graph."}
+            self.session.save(update_fields=["status", "error_details", "last_interaction"])
+            return
+
         if node_id not in self.nodes:
             self._complete_session()
             return
@@ -230,28 +243,31 @@ class FlowRunner:
 
         elif node_type == "template":
             template_name = node_data.get("templateName")
-            if template_name:
-                try:
-                    # [NEW] Resolve Template Bindings (Variables)
-                    components = self._resolve_template_components(node_data.get("templateBindings", []))
-                    
-                    wa_id = MessageLogger.send_template(
-                        self.session.registration, 
-                        template_name, 
-                        "flow", 
-                        language_code=node_data.get("templateLanguage", "en"),
-                        components=components,
-                        phone_number_id=self.sender_phone_number_id, 
-                        campaign_id=self.campaign_id
-                    )
-                    if not wa_id: raise Exception("WhatsApp API returned no message ID.")
-                except Exception as e:
-                    self.session.status = "ERROR"
-                    self.session.error_details = {"node_id": node_id, "error": str(e)}
-                    self.session.save(update_fields=["status", "error_details", "last_interaction"])
-                    raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}: {str(e)}")
+            if not template_name:
+                self.session.status = "ERROR"
+                self.session.error_details = {"node_id": node_id, "error": "Template node has no templateName configured."}
+                self.session.save(update_fields=["status", "error_details", "last_interaction"])
+                raise Exception(f"Template node {node_id} has no templateName configured.")
+
+            try:
+                components = self._resolve_template_components(node_data.get("templateBindings", []))
+                
+                wa_id = MessageLogger.send_template(
+                    self.session.registration, 
+                    template_name, 
+                    "flow", 
+                    language_code=node_data.get("templateLanguage", "en"),
+                    components=components,
+                    phone_number_id=self.sender_phone_number_id, 
+                    campaign_id=self.campaign_id
+                )
+                if not wa_id: raise Exception("WhatsApp API returned no message ID.")
+            except Exception as e:
+                self.session.status = "ERROR"
+                self.session.error_details = {"node_id": node_id, "error": str(e)}
+                self.session.save(update_fields=["status", "error_details", "last_interaction"])
+                raise Exception(f"Failed to send flow template '{template_name}' for node {node_id}: {str(e)}")
             
-            # Templates ALWAYS pause because we need the user to interact to open the 24h window
             self.session.status = "WAITING_FOR_INPUT"
             self.session.save(update_fields=["status", "last_interaction"])
 
@@ -336,7 +352,7 @@ class FlowRunner:
             elif source == "literal":
                 val = b.get("value", "")
                 
-            param = {"type": "text", "text": str(val or " ")}
+            param = {"type": "text", "text": str(val) if val not in (None, "") else " "}
             
             if b.get("componentType") == "header":
                 header_params.append(param)
@@ -354,79 +370,86 @@ class FlowRunner:
     def _resolve_variable(self, path: str) -> Any:
         """
         Supports deep paths: 'Guest.name', 'Event.bride_name', 'Registration.rsvp_status', etc.
+        Falls back to context_data (captured node answers) for unrecognized paths.
         """
         if not path: return ""
-        
-        # Backward compatibility for old format 'guest.name'
-        if path.startswith("guest."):
-            field = path.split(".")[1]
-            return getattr(self.session.registration.guest, field, "")
 
         parts = path.split(".")
         root = parts[0].lower()
         reg = self.session.registration
         
         try:
-            if root == "guest" or root == "guest":
+            if root == "guest" and len(parts) > 1:
                 return getattr(reg.guest, parts[1], "")
-            elif root == "event":
+            elif root == "event" and len(parts) > 1:
                 return getattr(reg.event, parts[1], "")
-            elif root == "registration":
+            elif root == "registration" and len(parts) > 1:
                 return getattr(reg, parts[1], "")
-            elif root == "travel":
+            elif root == "travel" and len(parts) > 1:
                 from Logistics.models.travel_details_models import TravelDetail
                 td = TravelDetail.objects.filter(event_registrations=reg).first()
                 if td: return getattr(td, parts[2] if len(parts) > 2 else parts[1], "")
-        except:
+        except Exception:
             pass
             
-        # [FIX] Case-insensitive lookup for captured node answers
         val = self.session.context_data.get(path)
         if val is None:
             for k, v in self.session.context_data.items():
                 if str(k).lower() == str(path).lower():
                     val = v
                     break
-        return val or ""
+        return val if val is not None else ""
 
     def _interpolate_string(self, text: str) -> str:
         """
-        Supports {{guest.name}} and {{node_id}} placeholders.
+        Supports {{Guest.name}}, {{Event.name}}, {{Registration.rsvp_status}}, and {{node_id}} placeholders.
         """
-        reg = self.session.registration
-        if reg and reg.guest:
-            text = text.replace("{{guest.name}}", str(reg.guest.name or "Guest"))
-        
-        # Replace node references
-        for node_id, value in self.session.context_data.items():
-            text = text.replace(f"{{{{{node_id}}}}}", str(value))
-            
+        import re as _re
+        def _replacer(match):
+            path = match.group(1).strip()
+            resolved = self._resolve_variable(path)
+            if resolved == "":
+                return match.group(0)
+            return str(resolved)
+
+        text = _re.sub(r'\{\{(.+?)\}\}', _replacer, text)
         return text
 
     def _execute_orm_update(self, node_data: dict):
         model_name = node_data.get("model")
         mappings = node_data.get("mappings", [])
-        if not model_name or not mappings: return
+        if not model_name or not mappings:
+            logger.warning(f"[FLOW-ORM] Skipped: model={model_name}, mappings count={len(mappings)}")
+            return
             
         reg = self.session.registration
         
-        if model_name == "TravelDetail":
-            from Logistics.models.travel_details_models import TravelDetail
-            td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
-            if not td:
-                td = TravelDetail.objects.create(event=reg.event, arrival="commercial", departure="commercial")
-                td.event_registrations.add(reg)
-            
-            for m in mappings:
-                val = self.session.context_data.get(m.get("source_node"))
-                if val: setattr(td, m.get("field"), val)
-            td.save()
-            
-        elif model_name == "EventRegistration":
-            for m in mappings:
-                val = self.session.context_data.get(m.get("source_node"))
-                if val: setattr(reg, m.get("field"), val)
-            reg.save()
+        try:
+            if model_name == "TravelDetail":
+                from Logistics.models.travel_details_models import TravelDetail
+                td = TravelDetail.objects.filter(event=reg.event, event_registrations=reg).first()
+                if not td:
+                    td = TravelDetail.objects.create(event=reg.event, arrival="commercial", departure="commercial")
+                    td.event_registrations.add(reg)
+                
+                for m in mappings:
+                    val = self.session.context_data.get(m.get("source_node"))
+                    if val is not None:
+                        setattr(td, m.get("field"), val)
+                td.save()
+                
+            elif model_name == "EventRegistration":
+                for m in mappings:
+                    val = self.session.context_data.get(m.get("source_node"))
+                    if val is not None:
+                        setattr(reg, m.get("field"), val)
+                reg.save()
+            else:
+                logger.warning(f"[FLOW-ORM] Unknown model: {model_name}")
+        except Exception as e:
+            logger.exception(f"[FLOW-ORM] Failed to update {model_name} for session {self.session.id}: {e}")
+            self.session.error_details = {"node_id": self.session.current_node_id, "error": f"DB update failed: {e}"}
+            self.session.save(update_fields=["error_details"])
 
     def _validate_input(self, node: dict, text: str, payload_type: str) -> Tuple[bool, Any, Optional[str]]:
         data = node.get("data", {})
@@ -449,7 +472,13 @@ class FlowRunner:
         if val_type == "number":
             try: return True, int(text), None
             except: return False, None, "🔢 Please enter a number."
-                
+
+        if val_type == "pnr":
+            cleaned = re.sub(r'\s', '', text).upper()
+            if re.fullmatch(r'[A-Z0-9]{6}', cleaned):
+                return True, cleaned, None
+            return False, None, "✈️ Please provide a valid 6-character PNR (e.g. ABC123)."
+
         return True, text, None
 
     def _parse_date(self, text: str) -> Optional[date]:

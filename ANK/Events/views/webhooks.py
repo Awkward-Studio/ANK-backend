@@ -144,28 +144,37 @@ def whatsapp_rsvp(request):
         return JsonResponse({"ok": True, "resolved": False, "logged": True, "guest_name": guest_name})
 
     # 2. PRIORITY: Delegate to Active Visual Flow
-    waiting_flow_session = FlowSession.objects.filter(registration=er, status='WAITING_FOR_INPUT').order_by("-last_interaction").first()
-    
     button_id = body.get("button_id") or ""
     is_flow_button = button_id.startswith("flow|")
     is_reset_cmd = raw_status.lower().strip() in {"restart", "stop", "unsubscribe"}
-    
-    if waiting_flow_session and (is_flow_button or not is_reset_cmd):
+
+    if is_flow_button or not is_reset_cmd:
+        from django.db import transaction
         try:
-            flow_input = button_id or raw_status
-            log.info(f"[WEBHOOK-FLOW] Delegating '{flow_input}' to Flow {waiting_flow_session.flow.name}")
-            runner = FlowRunner(waiting_flow_session, sender_phone_number_id=to_phone_number_id)
-            
-            payload_type = "interactive" if bool(button_id) else "text"
-            error_reply, is_done = runner.process_input(flow_input, payload_type=payload_type)
-            
-            if error_reply:
-                from Events.services.message_logger import MessageLogger
-                MessageLogger.send_text(er, error_reply, "flow", phone_number_id=to_phone_number_id)
-            
-            return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
+            with transaction.atomic():
+                waiting_flow_session = (
+                    FlowSession.objects
+                    .select_for_update(skip_locked=True)
+                    .filter(registration=er, status='WAITING_FOR_INPUT')
+                    .order_by("-last_interaction")
+                    .first()
+                )
+                if waiting_flow_session:
+                    flow_input = button_id or raw_status
+                    log.info(f"[WEBHOOK-FLOW] Delegating '{flow_input}' to Flow {waiting_flow_session.flow.name}")
+                    runner = FlowRunner(waiting_flow_session, sender_phone_number_id=to_phone_number_id)
+
+                    payload_type = "interactive" if bool(button_id) else "text"
+                    error_reply, is_done = runner.process_input(flow_input, payload_type=payload_type)
+
+                    if error_reply:
+                        from Events.services.message_logger import MessageLogger
+                        MessageLogger.send_text(er, error_reply, "flow", phone_number_id=to_phone_number_id)
+
+                    return JsonResponse({"ok": True, "delegated_flow": True, "done": is_done})
         except Exception as e:
             log.exception(f"[WEBHOOK-FLOW] Execution Failed: {e}")
+            return JsonResponse({"ok": False, "error": "flow_execution_failed", "detail": str(e)}, status=500)
 
     # 3. Handle STOP / Unsubscribe
     if raw_status.lower().strip() in {"stop", "unsubscribe"}:
