@@ -320,7 +320,18 @@ class FlowBlueprintViewSet(viewsets.ModelViewSet):
         session.status = "RUNNING"
         session.current_node_id = None
         session.context_data = {}
-        session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+        session.history = []
+        session.error_details = None
+        session.save(
+            update_fields=[
+                "status",
+                "current_node_id",
+                "context_data",
+                "history",
+                "error_details",
+                "last_interaction",
+            ]
+        )
 
         runner = FlowRunner(session, sender_phone_number_id=sender_id, campaign_id=campaign_id)
         runner.start()
@@ -427,11 +438,32 @@ class FlowSessionViewSet(viewsets.ModelViewSet):
         sender_id = request.data.get("sender_phone_number_id")
         if not session.flow.is_active:
             return Response({"ok": False, "detail": "Flow blueprint is inactive"}, status=status.HTTP_400_BAD_REQUEST)
-        if session.status in ['COMPLETED', 'ERROR']:
-            session.status = 'RUNNING'
-            session.current_node_id = None
-            session.context_data = {}
-            session.save(update_fields=["status", "current_node_id", "context_data", "last_interaction"])
+        # Match blueprint start_flow: always reset so FlowRunner.start() runs (it no-ops unless status is RUNNING).
+        session.status = "RUNNING"
+        session.current_node_id = None
+        session.context_data = {}
+        session.history = []
+        session.error_details = None
+        session.save(
+            update_fields=[
+                "status",
+                "current_node_id",
+                "context_data",
+                "history",
+                "error_details",
+                "last_interaction",
+            ]
+        )
         runner = FlowRunner(session, sender_phone_number_id=sender_id)
-        runner.start()
-        return Response({"ok": True, "status": "Flow started", "session_status": session.status, "session_id": session.id})
+        try:
+            runner.start()
+        except Exception as e:
+            return Response({"ok": False, "detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "ok": True,
+                "status": "Flow started",
+                "session_status": session.status,
+                "session_id": session.id,
+            }
+        )

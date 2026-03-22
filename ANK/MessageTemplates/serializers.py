@@ -394,6 +394,11 @@ class FlowBlueprintSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def validate_trigger_keyword(self, value):
+        if value:
+            return value.strip() or None
+        return value
+
 
 class FlowSessionSerializer(serializers.ModelSerializer):
     flow_name = serializers.CharField(source="flow.name", read_only=True)
