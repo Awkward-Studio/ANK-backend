@@ -49,7 +49,7 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
                 
                 # If no event from request, find from EventRegistration
                 if not event_id:
-                    reg = EventRegistration.objects.filter(guest=instance).select_related('event').first()
+                    reg = EventRegistration.objects.filter(guest=instance).select_related('event').order_by('-created_at').first()
                     if reg:
                         event = reg.event
                     else:
@@ -167,7 +167,7 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
             # Try to find event_department if not in context (for Guest model)
             if not event_department and user and self.Meta.model.__name__ == 'Guest':
                 from Events.models.event_registration_model import EventRegistration
-                reg = EventRegistration.objects.filter(guest=self.instance).select_related('event').first()
+                reg = EventRegistration.objects.filter(guest=self.instance).select_related('event').order_by('-created_at').first()
                 if reg:
                     event = reg.event
                     if user.role == 'staff':

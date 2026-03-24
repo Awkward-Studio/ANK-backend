@@ -92,10 +92,14 @@ def whatsapp_rsvp(request):
     # 3. Match by Phone Number (Last 10 digits suffix)
     search_suffix = wa_digits[-10:] if len(wa_digits) >= 10 else wa_digits
     if not er and search_suffix:
-        latest_map = WaSendMap.objects.filter(
-            wa_id__endswith=search_suffix, 
+        map_qs = WaSendMap.objects.filter(
+            wa_id__endswith=search_suffix,
             expires_at__gt=dj_tz.now()
-        ).order_by("-created_at").first()
+        )
+        latest_map = (
+            map_qs.exclude(event_registration=None).order_by("-created_at").first()
+            or map_qs.order_by("-created_at").first()
+        )
         
         if latest_map:
             er = latest_map.event_registration
@@ -108,6 +112,19 @@ def whatsapp_rsvp(request):
                 guest__phone__contains=search_suffix
             ).order_by("-created_at").first()
             if er: log.info(f"[WEBHOOK-RESOLVE] Found via Guest Phone contains '{search_suffix}': {er.id}")
+
+    # 4. LAST RESORT: Find registration via active FlowSession for this phone
+    if not er and search_suffix:
+        _active_fs = (
+            FlowSession.objects
+            .filter(registration__guest__phone__endswith=search_suffix, status='WAITING_FOR_INPUT')
+            .select_related('registration')
+            .order_by("-last_interaction")
+            .first()
+        )
+        if _active_fs:
+            er = _active_fs.registration
+            log.info(f"[WEBHOOK-RESOLVE] Found via active FlowSession for phone '{search_suffix}': reg {er.id}")
 
     if not er:
         log.warning(f"[WEBHOOK] Could not resolve registration for phone {wa_digits}. Logging as standalone message.")
@@ -159,6 +176,21 @@ def whatsapp_rsvp(request):
                     .order_by("-last_interaction")
                     .first()
                 )
+                if not waiting_flow_session and search_suffix:
+                    waiting_flow_session = (
+                        FlowSession.objects
+                        .select_for_update(skip_locked=True)
+                        .filter(
+                            registration__guest__phone__endswith=search_suffix,
+                            status='WAITING_FOR_INPUT',
+                        )
+                        .order_by("-last_interaction")
+                        .first()
+                    )
+                    if waiting_flow_session:
+                        er = waiting_flow_session.registration
+                        log.info(f"[WEBHOOK-FLOW] Corrected registration via phone fallback: {er.id}")
+
                 if waiting_flow_session:
                     flow_input = button_id or raw_status
                     log.info(f"[WEBHOOK-FLOW] Delegating '{flow_input}' to Flow {waiting_flow_session.flow.name}")
@@ -208,7 +240,7 @@ def whatsapp_rsvp(request):
         sender_phone_number_id=to_phone_number_id,
     )
 
-    try: WaSendMap.objects.filter(wa_id__endswith=wa_digits[-10:]).update(consumed_at=dj_tz.now())
+    try: WaSendMap.objects.filter(wa_id__endswith=wa_digits[-10:], event_registration=er).update(consumed_at=dj_tz.now())
     except: pass
 
     return JsonResponse({"ok": True})
@@ -312,7 +344,9 @@ def resolve_wa(request, wa_id):
     if sender_phone_number_id:
         qs = qs.filter(sender_phone_number_id=sender_phone_number_id)
 
-    row = qs.order_by("-created_at").values("event_id", "event_registration_id", "flow_type").first()
+    row = qs.exclude(event_registration_id=None).order_by("-created_at").values("event_id", "event_registration_id", "flow_type").first()
+    if not row:
+        row = qs.order_by("-created_at").values("event_id", "event_registration_id", "flow_type").first()
     if not row: return JsonResponse({"ok": False, "found": False})
 
     return JsonResponse({

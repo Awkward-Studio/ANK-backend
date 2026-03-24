@@ -77,23 +77,28 @@ def _resolve_travel_reg(wa_id: str, event_id: str):
     if not wa_id or not event_id:
         return None
 
-    qs = (
-        WaSendMap.objects.filter(
-            wa_id=wa_id,
-            event_id=event_id,
-            template_wamid__isnull=True,
-            expires_at__gt=timezone.now(),
-        )
+    base_qs = WaSendMap.objects.filter(
+        wa_id=wa_id,
+        event_id=event_id,
+        template_wamid__isnull=True,
+        expires_at__gt=timezone.now(),
+    )
+    reg_pk = (
+        base_qs.exclude(event_registration=None)
         .order_by("-created_at")
+        .values_list("event_registration", flat=True)
+        .first()
+    ) or (
+        base_qs.order_by("-created_at")
         .values_list("event_registration", flat=True)
         .first()
     )
 
-    if not qs:
+    if not reg_pk:
         return None
 
     try:
-        return EventRegistration.objects.select_related("guest").get(pk=qs)
+        return EventRegistration.objects.select_related("guest").get(pk=reg_pk)
     except EventRegistration.DoesNotExist:
         return None
 
@@ -413,29 +418,19 @@ def whatsapp_travel_webhook(request):
 
             if active_regs:
                 msg_body = "👋 Welcome back! Here are your events:\n\n"
-                rows = []
-                for reg in active_regs:
-                    evt_name = reg.event.name
-                    status = reg.rsvp_status or "Pending"
-                    # We can't easily make these clickable list items without a template,
-                    # so we'll just list them as text for now, or send a generic "My Events" button.
+                for ar in active_regs:
+                    evt_name = ar.event.name
+                    status = ar.rsvp_status or "Pending"
                     msg_body += f"• *{evt_name}* (RSVP: {status})\n"
                 
                 msg_body += "\nReply with specific commands or wait for an admin to reply."
 
-                # We can also send a helper button if desired, but simple text is safe.
-                # MessageLogger is already imported at module level
-
-                # Use the first registration as a proxy for sending the message
-                # (MessageLogger requires a registration to link the log to)
                 proxy_reg = active_regs[0]
-                
-                MessageLogger.send_text(
-                    event_registration=proxy_reg,
-                    content=msg_body,
-                    message_type="bot_reply",
-                    phone_number_id=sender_id
-                )
+                from MessageTemplates.services.whatsapp import send_freeform_text as _send_text
+                try:
+                    _send_text(_norm_digits(proxy_reg.guest.phone), msg_body, phone_number_id=sender_id)
+                except Exception:
+                    pass
                 logger.info(f"[TEXT] Sent Global Menu to {wa_id} (found {len(active_regs)} events)")
                 return JsonResponse({"ok": True, "menu_sent": True})
 
