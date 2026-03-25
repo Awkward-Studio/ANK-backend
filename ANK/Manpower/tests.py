@@ -1,7 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from decimal import Decimal
-import uuid
 from Events.models.event_model import Event
 from Departments.models import Department, EventDepartment
 from .models import (
@@ -43,8 +42,7 @@ class ManpowerTestCase(TestCase):
             skill_category="Coordinator",
             city="Mumbai",
             email="john@example.com",
-            base_daily_rate=Decimal("5000.00"),
-            standard_allowance=Decimal("500.00")
+            base_daily_rate=Decimal("5000.00")
         )
 
     def test_manpower_requirement_creation(self):
@@ -73,11 +71,9 @@ class ManpowerTestCase(TestCase):
             allocation=allocation,
             negotiated_rate=Decimal("4500.00"),
             days_planned=Decimal("4.0"),
-            daily_allowance=Decimal("400.00"),
             travel_costs=Decimal("1000.00")
         )
-        # (4500 * 4) + (400 * 4) + 1000 = 18000 + 1600 + 1000 = 20600
-        self.assertEqual(cost_sheet.total_estimated_cost, Decimal("20600.00"))
+        self.assertEqual(cost_sheet.total_estimated_cost, Decimal("19000.00"))
 
     def test_allocation_overlap_validation(self):
         # First confirmed allocation
@@ -119,19 +115,16 @@ class ManpowerTestCase(TestCase):
             allocation=allocation,
             negotiated_rate=Decimal("5000.00"),
             days_planned=Decimal("2.0"),
-            daily_allowance=Decimal("500.00"),
             travel_costs=Decimal("1000.00")
         )
-        # Estimated: (5000*2) + (500*2) + 1000 = 12000
-        
-        # Adjustment
+
         adjustment = PostEventAdjustment.objects.create(
             allocation=allocation,
             actual_days_worked=Decimal("3.0"),
-            extra_allowances=Decimal("200.00")
+            total_engagement_days=Decimal("3.0"),
+            other_adjustments=Decimal("200.00")
         )
-        # Revised: (5000*3) + (500*3) + 1000 + 200 = 15000 + 1500 + 1000 + 200 = 17700
-        self.assertEqual(adjustment.revised_total, Decimal("17700.00"))
+        self.assertEqual(adjustment.revised_total, Decimal("16200.00"))
 
     def test_rating_computation(self):
         # Initial rating is 0
@@ -184,9 +177,8 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         mou.refresh_from_db()
         self.assertEqual(mou.status, "accepted")
-        # Check if PDF exists and has content
-        self.assertTrue(mou.signed_pdf)
-        self.assertTrue(mou.signed_pdf.size > 0)
+        self.assertIn("signed_pdf_url", response.data)
+        self.assertTrue(response.data["signed_pdf_url"])
 
     def test_excel_export(self):
         # Create an approved adjustment
@@ -218,3 +210,83 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         self.assertTrue(len(response.content) > 0)
+
+    def test_reissuing_adjustment_link_does_not_mutate_existing_adjustment(self):
+        from .views import issue_adjustment_secure_link
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            start_date="2026-06-01",
+            end_date="2026-06-03",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+            travel_costs=Decimal("1000.00"),
+        )
+
+        factory = APIRequestFactory()
+
+        first_request = factory.post(
+            f"/api/manpower/allocations/{allocation.id}/issue-adjustment-link/"
+        )
+        force_authenticate(first_request, user=self.user)
+        first_response = issue_adjustment_secure_link(first_request, allocation_id=allocation.id)
+
+        self.assertEqual(first_response.status_code, 200)
+
+        adjustment = PostEventAdjustment.objects.get(allocation=allocation)
+        adjustment.actual_days_worked = Decimal("4.0")
+        adjustment.total_engagement_days = Decimal("4.5")
+        adjustment.engagement_periods = [
+            {"start": "2026-06-01", "end": "2026-06-02", "days": 2.0},
+            {"start": "2026-06-05", "end": "2026-06-07", "days": 2.5},
+        ]
+        adjustment.travel_adjustments = Decimal("321.00")
+        adjustment.other_adjustments = Decimal("654.00")
+        adjustment.override_negotiated_rate = Decimal("7200.00")
+        adjustment.freelancer_comments = "Saved draft comments"
+        adjustment.save()
+
+        snapshot = {
+            "actual_days_worked": adjustment.actual_days_worked,
+            "total_engagement_days": adjustment.total_engagement_days,
+            "engagement_periods": adjustment.engagement_periods,
+            "travel_adjustments": adjustment.travel_adjustments,
+            "other_adjustments": adjustment.other_adjustments,
+            "override_negotiated_rate": adjustment.override_negotiated_rate,
+            "freelancer_comments": adjustment.freelancer_comments,
+            "revised_total": adjustment.revised_total,
+            "secure_token": adjustment.secure_token,
+            "revision_count": adjustment.revisions.count(),
+        }
+
+        second_request = factory.post(
+            f"/api/manpower/allocations/{allocation.id}/issue-adjustment-link/"
+        )
+        force_authenticate(second_request, user=self.user)
+        second_response = issue_adjustment_secure_link(second_request, allocation_id=allocation.id)
+
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(str(second_response.data["adjustment_id"]), str(adjustment.id))
+        self.assertEqual(str(second_response.data["secure_token"]), str(snapshot["secure_token"]))
+        self.assertEqual(
+            second_response.data["secure_link"],
+            f"/adjustment/{snapshot['secure_token']}",
+        )
+
+        adjustment.refresh_from_db()
+        self.assertEqual(adjustment.actual_days_worked, snapshot["actual_days_worked"])
+        self.assertEqual(adjustment.total_engagement_days, snapshot["total_engagement_days"])
+        self.assertEqual(adjustment.engagement_periods, snapshot["engagement_periods"])
+        self.assertEqual(adjustment.travel_adjustments, snapshot["travel_adjustments"])
+        self.assertEqual(adjustment.other_adjustments, snapshot["other_adjustments"])
+        self.assertEqual(adjustment.override_negotiated_rate, snapshot["override_negotiated_rate"])
+        self.assertEqual(adjustment.freelancer_comments, snapshot["freelancer_comments"])
+        self.assertEqual(adjustment.revised_total, snapshot["revised_total"])
+        self.assertEqual(adjustment.revisions.count(), snapshot["revision_count"])
