@@ -2188,7 +2188,7 @@ class ManpowerTemplateExportAPIView(APIView):
         if template_type == "requirement":
             ws.title = "Requirements"
             headers = [
-                "Department",
+                "Event Department",
                 "Skill",
                 "Location",
                 "Quantity Required",
@@ -2229,7 +2229,7 @@ class ManpowerTemplateExportAPIView(APIView):
             ws.title = "Allocations"
             headers = [
                 "Requirement (Role @ Dept)",
-                "Freelancer Name",
+                "Freelancer",
                 "Negotiated Rate",
                 "Start Date (YYYY-MM-DD)",
                 "End Date (YYYY-MM-DD)",
@@ -2238,7 +2238,12 @@ class ManpowerTemplateExportAPIView(APIView):
             
             # Legend data
             reqs = ManpowerRequirement.objects.filter(event_department__event=event).select_related("event_department__department")
-            req_strings = [f"{r.skill_category} @ {r.event_department.department.name} ({r.id})" for r in reqs]
+            req_strings = [
+                f"{r.skill_category} @ {r.event_department.department.name} "
+                f"{'[' + r.location + '] ' if r.location else ''}"
+                f"({r.id})"
+                for r in reqs
+            ]
             freelancers = Freelancer.objects.filter(is_active=True).order_by("name")
             freelancer_names = [f.name for f in freelancers]
             
@@ -2387,9 +2392,10 @@ class ManpowerBulkImportAPIView(APIView):
                             errors.append(f"Row {row_idx}: Requirement is required.")
                             continue
                         
-                        # Extract UUID from string like "Shadow @ Logistics (uuid-here)"
+                        # Extract UUID from string like "Shadow @ Logistics [Lobby] (uuid-here)"
                         import re
-                        match = re.search(r'\((.*?)\)', str(req_str))
+                        # specifically match a UUID format within parentheses at the end of the string
+                        match = re.search(r'\(([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\)', str(req_str))
                         req_id = match.group(1) if match else None
                         
                         try:
