@@ -84,6 +84,10 @@ urlpatterns = [
     path("events/<uuid:event_id>/unlock/", unlock_event_manpower, name="manpower-event-unlock"),
     path("events/<uuid:event_id>/lock-status/", event_lock_status, name="manpower-event-lock-status"),
 
+    # Export/Import Templates
+    path("events/<uuid:event_id>/template/", ManpowerTemplateExportAPIView.as_view(), name="manpower-template-export"),
+    path("events/<uuid:event_id>/import/", ManpowerBulkImportAPIView.as_view(), name="manpower-bulk-import"),
+
     # Invoices
     path("invoices/", InvoiceWorkflowList.as_view(), name="invoice-list"),
     path("invoices/<uuid:pk>/", InvoiceWorkflowDetail.as_view(), name="invoice-detail"),
@@ -102,8 +106,5 @@ urlpatterns = [
     # Public token-based endpoints for freelancers
     path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),
     path("public/mou/<uuid:token>/pdf/", public_mou_pdf_download, name="public-mou-pdf-download"),
-    path("public/invoice/<uuid:token>/pdf/", public_invoice_pdf_download, name="public-invoice-pdf-download"),
-]
-mou/<uuid:token>/pdf/", public_mou_pdf_download, name="public-mou-pdf-download"),
     path("public/invoice/<uuid:token>/pdf/", public_invoice_pdf_download, name="public-invoice-pdf-download"),
 ]
