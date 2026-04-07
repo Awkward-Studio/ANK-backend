@@ -1091,16 +1091,50 @@ class UserEventScopedDepartmentFieldAccessAPIView(APIView):
             user = get_object_or_404(User, pk=user_pk)
             get_object_or_404(Event, pk=event_pk)
 
-            assignments = list(
-                EventDepartmentStaffAssignment.objects.select_related(
-                    "event_department__event",
-                    "event_department__department",
-                ).filter(
-                    user_id=user.id,
-                    event_department__event_id=event_pk,
+            from Departments.serializers import BUDGET_FIELD_KEYS
+
+            if user.role in ['super_admin', 'admin']:
+                all_depts = EventDepartment.objects.filter(event_id=event_pk).select_related(
+                    "event", "department"
                 )
-            )
-            rows = _build_access_rows(assignments, user.id)
+                rows = []
+                for ed in all_depts:
+                    rows.append({
+                        "event_department": {
+                            "id": ed.id,
+                            "event": {"id": ed.event.id, "name": ed.event.name},
+                            "department": {"id": ed.department.id, "name": ed.department.name},
+                        },
+                        "role": user.role,
+                        "field_keys": list(BUDGET_FIELD_KEYS),
+                    })
+            elif user.role == 'department_head' and user.department:
+                dept_ed = EventDepartment.objects.filter(event_id=event_pk, department=user.department).select_related(
+                    "event", "department"
+                ).first()
+                rows = []
+                if dept_ed:
+                    rows.append({
+                        "event_department": {
+                            "id": dept_ed.id,
+                            "event": {"id": dept_ed.event.id, "name": dept_ed.event.name},
+                            "department": {"id": dept_ed.department.id, "name": dept_ed.department.name},
+                        },
+                        "role": user.role,
+                        "field_keys": list(BUDGET_FIELD_KEYS),
+                    })
+            else:
+                assignments = list(
+                    EventDepartmentStaffAssignment.objects.select_related(
+                        "event_department__event",
+                        "event_department__department",
+                    ).filter(
+                        user_id=user.id,
+                        event_department__event_id=event_pk,
+                    )
+                )
+                rows = _build_access_rows(assignments, user.id)
+
             serializer = UserEventDepartmentFieldAccessSerializer(rows, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
