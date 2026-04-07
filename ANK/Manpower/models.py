@@ -94,6 +94,7 @@ class ManpowerRequirement(models.Model):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    location = models.CharField(max_length=200, blank=True)
     is_extra = models.BooleanField(default=False)
     sessions = models.ManyToManyField(
         "Events.Session",

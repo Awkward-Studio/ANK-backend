@@ -31,6 +31,8 @@ from .views import (
     public_adjustment_interaction,
     ManpowerAuditLogList,
     ManpowerSettingsDetail,
+    ManpowerTemplateExportAPIView,
+    ManpowerBulkImportAPIView,
 )
 from .public_views import public_mou_interaction, public_mou_pdf_download, public_invoice_pdf_download
 
@@ -100,5 +102,8 @@ urlpatterns = [
     # Public token-based endpoints for freelancers
     path("public/mou/<uuid:token>/", public_mou_interaction, name="public-mou-interaction"),
     path("public/mou/<uuid:token>/pdf/", public_mou_pdf_download, name="public-mou-pdf-download"),
+    path("public/invoice/<uuid:token>/pdf/", public_invoice_pdf_download, name="public-invoice-pdf-download"),
+]
+mou/<uuid:token>/pdf/", public_mou_pdf_download, name="public-mou-pdf-download"),
     path("public/invoice/<uuid:token>/pdf/", public_invoice_pdf_download, name="public-invoice-pdf-download"),
 ]
