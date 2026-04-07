@@ -25,19 +25,24 @@ class SkillSerializer(serializers.ModelSerializer):
 
 
 class FreelancerSerializer(serializers.ModelSerializer):
-    skill_name = serializers.ReadOnlyField(source="skill.name")
+    skill_names = serializers.SerializerMethodField()
+    skills = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Skill.objects.all(), required=False
+    )
+
+    def get_skill_names(self, obj):
+        return [s.name for s in obj.skills.all()]
 
     class Meta:
         model = Freelancer
         fields = [
-            "id", "name", "skill", "skill_name", "skill_category", "city", "address", 
+            "id", "name", "skills", "skill_names", "skill_category", "city", "address",
             "parent_name", "id_type", "id_number",
             "bank_account_name", "bank_name", "bank_account_number",
             "bank_branch", "bank_ifsc", "contact_phone", "email",
             "base_daily_rate", "documents", "average_rating", "is_active",
             "created_at", "updated_at"
         ]
-
 
 class EventCostSheetSerializer(serializers.ModelSerializer):
     class Meta:

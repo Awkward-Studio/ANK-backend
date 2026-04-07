@@ -271,7 +271,12 @@ class FreelancerList(APIView):
             search = request.query_params.get("search")
             
             if skill:
-                qs = qs.filter(skill_category=skill)
+                import uuid
+                try:
+                    uuid_obj = uuid.UUID(skill)
+                    qs = qs.filter(Q(skill_category=skill) | Q(skills__id=uuid_obj)).distinct()
+                except ValueError:
+                    qs = qs.filter(Q(skill_category=skill) | Q(skills__name__iexact=skill)).distinct()
             if city:
                 qs = qs.filter(city=city)
             if search:

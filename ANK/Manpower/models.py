@@ -27,8 +27,8 @@ class Skill(models.Model):
 class Freelancer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    skill = models.ForeignKey(
-        Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="freelancers"
+    skills = models.ManyToManyField(
+        Skill, blank=True, related_name="freelancers"
     )
     skill_category = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100)
