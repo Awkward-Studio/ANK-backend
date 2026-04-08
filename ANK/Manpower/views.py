@@ -2340,117 +2340,120 @@ class ManpowerBulkImportAPIView(APIView):
             with transaction.atomic():
                 for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
                     if not any(row): continue
-                        
-                    if import_type == "requirement":
-                        (dept_name, skill_name, location, quantity, start_date, end_date, is_extra) = row[:7]
-                        
-                        if not dept_name:
-                            errors.append(f"Row {row_idx}: Department is required.")
-                            continue
-                        ed = dept_map.get(str(dept_name).lower().strip())
-                        if not ed:
-                            errors.append(f"Row {row_idx}: Invalid department '{dept_name}'.")
-                            continue
-
-                        skill = None
-                        skill_cat = ""
-                        if skill_name:
-                            skill = skill_map.get(str(skill_name).lower().strip())
-                            skill_cat = skill.name if skill else str(skill_name).strip()
-
-                        is_extra_bool = str(is_extra).strip().upper() == "TRUE"
-                        if not is_extra_bool:
-                            lock_error = _check_lock_or_override(request, event_id)
-                            if lock_error: raise Exception("Event is locked.")
-
-                        import datetime
-                        start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
-                        end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
-
-                        try: qty = int(quantity) if quantity else 1
-                        except: qty = 1
+                    
+                    try:
+                        if import_type == "requirement":
+                            (dept_name, skill_name, location, quantity, start_date, end_date, is_extra) = row[:7]
                             
-                        days = Decimal("1.0")
-                        if start and end:
-                            try:
-                                delta = (end - start).days + 1
-                                if delta > 0: days = Decimal(str(delta))
-                            except: pass
+                            if not dept_name:
+                                errors.append(f"Row {row_idx}: Department is required.")
+                                continue
+                            ed = dept_map.get(str(dept_name).lower().strip())
+                            if not ed:
+                                errors.append(f"Row {row_idx}: Invalid department '{dept_name}'.")
+                                continue
 
-                        req = ManpowerRequirement.objects.create(
-                            event_department=ed, skill=skill, skill_category=skill_cat,
-                            location=str(location).strip() if location else "",
-                            quantity_required=qty, start_date=start, end_date=end,
-                            estimated_days=days, is_extra=is_extra_bool
-                        )
-                        created_reqs += 1
-                        
-                    else: # allocation
-                        (req_str, freelancer_name, negotiated_rate, start_date, end_date, is_extra) = row[:6]
-                        
-                        if not req_str:
-                            errors.append(f"Row {row_idx}: Requirement is required.")
-                            continue
-                        
-                        # Extract UUID from string like "Shadow @ Logistics [Lobby] (uuid-here)"
-                        import re
-                        # specifically match a UUID format within parentheses at the end of the string
-                        match = re.search(r'\(([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\)', str(req_str))
-                        req_id = match.group(1) if match else None
-                        
-                        try:
-                            req = ManpowerRequirement.objects.get(pk=req_id)
-                        except:
-                            errors.append(f"Row {row_idx}: Invalid or missing requirement ID in '{req_str}'.")
-                            continue
+                            skill = None
+                            skill_cat = ""
+                            if skill_name:
+                                skill = skill_map.get(str(skill_name).lower().strip())
+                                skill_cat = skill.name if skill else str(skill_name).strip()
 
-                        if not freelancer_name:
-                            errors.append(f"Row {row_idx}: Freelancer name is required.")
-                            continue
-                        freelancer = freelancer_map.get(str(freelancer_name).lower().strip())
-                        if not freelancer:
-                            errors.append(f"Row {row_idx}: Invalid freelancer '{freelancer_name}'.")
-                            continue
+                            is_extra_bool = str(is_extra).strip().upper() == "TRUE"
+                            if not is_extra_bool:
+                                lock_error = _check_lock_or_override(request, event_id)
+                                if lock_error: raise Exception("Event is locked.")
 
-                        is_extra_bool = str(is_extra).strip().upper() == "TRUE"
-                        if not is_extra_bool:
-                            lock_error = _check_lock_or_override(request, event_id)
-                            if lock_error: raise Exception("Event is locked.")
+                            import datetime
+                            start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
+                            end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
 
-                        import datetime
-                        start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
-                        end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
-                        # Fallback to req dates if not in excel
-                        if not start: start = req.start_date
-                        if not end: end = req.end_date
+                            try: qty = int(quantity) if quantity else 1
+                            except: qty = 1
+                                
+                            days = Decimal("1.0")
+                            if start and end:
+                                try:
+                                    delta = (end - start).days + 1
+                                    if delta > 0: days = Decimal(str(delta))
+                                except: pass
 
-                        alloc = FreelancerAllocation.objects.create(
-                            freelancer=freelancer,
-                            event_department=req.event_department,
-                            requirement=req,
-                            skill=req.skill,
-                            status="soft_blocked",
-                            assigned_by=request.user,
-                            start_date=start,
-                            end_date=end,
-                            is_extra=is_extra_bool
-                        )
-                        
-                        try: rate = Decimal(str(negotiated_rate)) if negotiated_rate else Decimal("0.00")
-                        except: rate = Decimal("0.00")
+                            req = ManpowerRequirement.objects.create(
+                                event_department=ed, skill=skill, skill_category=skill_cat,
+                                location=str(location).strip() if location else "",
+                                quantity_required=qty, start_date=start, end_date=end,
+                                estimated_days=days, is_extra=is_extra_bool
+                            )
+                            created_reqs += 1
                             
-                        days = Decimal("1.0")
-                        if start and end:
+                        else: # allocation
+                            (req_str, freelancer_name, negotiated_rate, start_date, end_date, is_extra) = row[:6]
+                            
+                            if not req_str:
+                                errors.append(f"Row {row_idx}: Requirement is required.")
+                                continue
+                            
+                            # Extract UUID from string like "Shadow @ Logistics [Lobby] (uuid-here)"
+                            import re
+                            # specifically match a UUID format within parentheses at the end of the string
+                            match = re.search(r'\(([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\)', str(req_str))
+                            req_id = match.group(1) if match else None
+                            
                             try:
-                                delta = (end - start).days + 1
-                                if delta > 0: days = Decimal(str(delta))
-                            except: pass
+                                req = ManpowerRequirement.objects.get(pk=req_id)
+                            except:
+                                errors.append(f"Row {row_idx}: Invalid or missing requirement ID in '{req_str}'.")
+                                continue
 
-                        EventCostSheet.objects.create(
-                            allocation=alloc, negotiated_rate=rate,
-                            days_planned=days, travel_costs=Decimal("0.00")
-                        )
-                        created_allocs += 1
+                            if not freelancer_name:
+                                errors.append(f"Row {row_idx}: Freelancer name is required.")
+                                continue
+                            freelancer = freelancer_map.get(str(freelancer_name).lower().strip())
+                            if not freelancer:
+                                errors.append(f"Row {row_idx}: Invalid freelancer '{freelancer_name}'.")
+                                continue
+
+                            is_extra_bool = str(is_extra).strip().upper() == "TRUE"
+                            if not is_extra_bool:
+                                lock_error = _check_lock_or_override(request, event_id)
+                                if lock_error: raise Exception("Event is locked.")
+
+                            import datetime
+                            start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
+                            end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
+                            # Fallback to req dates if not in excel
+                            if not start: start = req.start_date
+                            if not end: end = req.end_date
+
+                            alloc = FreelancerAllocation.objects.create(
+                                freelancer=freelancer,
+                                event_department=req.event_department,
+                                requirement=req,
+                                skill=req.skill,
+                                status="soft_blocked",
+                                assigned_by=request.user,
+                                start_date=start,
+                                end_date=end,
+                                is_extra=is_extra_bool
+                            )
+                            
+                            try: rate = Decimal(str(negotiated_rate)) if negotiated_rate else Decimal("0.00")
+                            except: rate = Decimal("0.00")
+                                
+                            days = Decimal("1.0")
+                            if start and end:
+                                try:
+                                    delta = (end - start).days + 1
+                                    if delta > 0: days = Decimal(str(delta))
+                                except: pass
+
+                            EventCostSheet.objects.create(
+                                allocation=alloc, negotiated_rate=rate,
+                                days_planned=days, travel_costs=Decimal("0.00")
+                            )
+                            created_allocs += 1
+                    except Exception as e:
+                        errors.append(f"Row {row_idx}: {str(e)}")
 
             if errors:
                 return Response({
