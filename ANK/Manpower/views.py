@@ -429,10 +429,13 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
         try:
             qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
+            event_id = request.query_params.get("event")
             ed = request.query_params.get("event_department")
             stat = request.query_params.get("status")
             skill = request.query_params.get("skill_category")
             
+            if event_id:
+                qs = qs.filter(event_department__event_id=event_id)
             if ed:
                 qs = qs.filter(event_department_id=ed)
             if stat:
@@ -610,10 +613,13 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
         try:
             qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
+            event_id = request.query_params.get("event")
             ed = request.query_params.get("event_department")
             free = request.query_params.get("freelancer")
             stat = request.query_params.get("status")
             
+            if event_id:
+                qs = qs.filter(event_department__event_id=event_id)
             if ed:
                 qs = qs.filter(event_department_id=ed)
             if free:
@@ -2475,4 +2481,3 @@ class ManpowerBulkImportAPIView(APIView):
                 {"detail": f"Error parsing excel file: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
