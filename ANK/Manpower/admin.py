@@ -22,12 +22,14 @@ class FreelancerAdmin(admin.ModelAdmin):
 @admin.register(ManpowerRequirement)
 class ManpowerRequirementAdmin(admin.ModelAdmin):
     list_display = (
+        "name",
         "skill_category",
         "quantity_required",
         "event_department",
         "status",
     )
     list_filter = ("status", "skill_category")
+    search_fields = ("name", "skill_category", "event_department__department__name")
 
 
 class EventCostSheetInline(admin.StackedInline):
