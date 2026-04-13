@@ -85,7 +85,7 @@ class ClientViewAPIView(APIView):
         for req in requirements:
             # Count fulfilled for this specific requirement
             fulfilled = allocations.filter(
-                Q(requirement_id=req.id) | Q(skill_id=req.skill_id)
+                requirement_id=req.id
             ).filter(status="confirmed").count()
             
             manpower_data.append({
