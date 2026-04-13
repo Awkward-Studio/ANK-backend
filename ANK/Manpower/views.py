@@ -2429,7 +2429,6 @@ class ManpowerBulkImportAPIView(APIView):
                                 freelancer=freelancer,
                                 event_department=req.event_department,
                                 requirement=req,
-                                skill=req.skill,
                                 status="soft_blocked",
                                 assigned_by=request.user,
                                 start_date=start,
@@ -2476,5 +2475,4 @@ class ManpowerBulkImportAPIView(APIView):
                 {"detail": f"Error parsing excel file: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 
