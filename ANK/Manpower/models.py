@@ -80,6 +80,7 @@ class ManpowerRequirement(models.Model):
         on_delete=models.CASCADE,
         related_name="manpower_requirements",
     )
+    name = models.CharField(max_length=200)
     skill = models.ForeignKey(
         Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="requirements"
     )
@@ -107,7 +108,7 @@ class ManpowerRequirement(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.quantity_required}x {self.skill_category} for {self.event_department}"
+        return f"{self.quantity_required}x {self.name} for {self.event_department}"
 
 
 class FreelancerAllocation(models.Model):
@@ -779,4 +780,3 @@ class AllocationDailyMeal(models.Model):
             self.dinner_amount = Decimal("0.00")
 
         super().save(*args, **kwargs)
-

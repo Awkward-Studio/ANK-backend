@@ -90,7 +90,8 @@ class ClientViewAPIView(APIView):
             
             manpower_data.append({
                 "id": str(req.id),
-                "role": req.skill.name if req.skill else req.skill_category,
+                "role": req.name,
+                "skill_category": req.skill.name if req.skill else req.skill_category,
                 "required": req.quantity_required,
                 "fulfilled": fulfilled,
                 "is_extra": req.is_extra

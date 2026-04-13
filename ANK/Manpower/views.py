@@ -472,7 +472,7 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
                 "requirement_created",
                 obj,
                 event_id=event_id,
-                details={"skill_category": obj.skill_category, "quantity_required": obj.quantity_required},
+                details={"name": obj.name, "skill_category": obj.skill_category, "quantity_required": obj.quantity_required},
             )
             return Response(ser.data, status=status.HTTP_201_CREATED)
         except Http404:
@@ -2194,6 +2194,7 @@ class ManpowerTemplateExportAPIView(APIView):
         if template_type == "requirement":
             ws.title = "Requirements"
             headers = [
+                "Name",
                 "Event Department",
                 "Skill",
                 "Location",
@@ -2222,14 +2223,14 @@ class ManpowerTemplateExportAPIView(APIView):
             if dept_names:
                 dv_dept = DataValidation(type="list", formula1=f"Legend!$A$2:$A${len(dept_names)+1}", allow_blank=True)
                 ws.add_data_validation(dv_dept)
-                dv_dept.add("A2:A1000")
+                dv_dept.add("B2:B1000")
             if skill_names:
                 dv_skill = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(skill_names)+1}", allow_blank=True)
                 ws.add_data_validation(dv_skill)
-                dv_skill.add("B2:B1000")
+                dv_skill.add("C2:C1000")
             dv_bool = DataValidation(type="list", formula1="Legend!$C$2:$C$3", allow_blank=True)
             ws.add_data_validation(dv_bool)
-            dv_bool.add("G2:G1000")
+            dv_bool.add("H2:H1000")
 
         else: # allocation
             ws.title = "Allocations"
@@ -2245,7 +2246,7 @@ class ManpowerTemplateExportAPIView(APIView):
             # Legend data
             reqs = ManpowerRequirement.objects.filter(event_department__event=event).select_related("event_department__department")
             req_strings = [
-                f"{r.skill_category} @ {r.event_department.department.name} "
+                f"{r.name} - {r.skill_category} @ {r.event_department.department.name} "
                 f"{'[' + r.location + '] ' if r.location else ''}"
                 f"({r.id})"
                 for r in reqs
@@ -2349,7 +2350,11 @@ class ManpowerBulkImportAPIView(APIView):
                     
                     try:
                         if import_type == "requirement":
-                            (dept_name, skill_name, location, quantity, start_date, end_date, is_extra) = row[:7]
+                            (req_name, dept_name, skill_name, location, quantity, start_date, end_date, is_extra) = row[:8]
+
+                            if not req_name:
+                                errors.append(f"Row {row_idx}: Requirement name is required.")
+                                continue
                             
                             if not dept_name:
                                 errors.append(f"Row {row_idx}: Department is required.")
@@ -2385,6 +2390,7 @@ class ManpowerBulkImportAPIView(APIView):
                                 except: pass
 
                             req = ManpowerRequirement.objects.create(
+                                name=str(req_name).strip(),
                                 event_department=ed, skill=skill, skill_category=skill_cat,
                                 location=str(location).strip() if location else "",
                                 quantity_required=qty, start_date=start, end_date=end,
