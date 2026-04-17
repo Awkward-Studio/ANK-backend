@@ -755,26 +755,15 @@ class EventAccommodationsAPIView(DepartmentAccessMixin, APIView):
 
     def get(self, request, pk):
         try:
-            # Find all registrations and extras for this event
-            reg_ids = list(
-                EventRegistration.objects.filter(event_id=pk).values_list(
-                    "id", flat=True
-                )
+            # Filter by event directly
+            accos = Accommodation.objects.filter(event_id=pk).distinct()
+            return Response(
+                AccommodationSerializer(
+                    accos, 
+                    many=True, 
+                    context=self.get_serializer_context()
+                ).data
             )
-            extra_ids = list(
-                ExtraAttendee.objects.filter(registration__event_id=pk).values_list(
-                    "id", flat=True
-                )
-            )
-            # Find accommodations where any are assigned to these participants
-            accos = Accommodation.objects.filter(
-                models.Q(event__id=pk)
-                & (
-                    models.Q(event_registrations__id__in=reg_ids)
-                    | models.Q(extra_attendees__id__in=extra_ids)
-                )
-            ).distinct()
-            return Response(AccommodationSerializer(accos, many=True).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing accommodations for event", "error": str(e)},
@@ -802,24 +791,15 @@ class EventTravelDetailsAPIView(DepartmentAccessMixin, APIView):
 
     def get(self, request, pk):
         try:
-            reg_ids = list(
-                EventRegistration.objects.filter(event_id=pk).values_list(
-                    "id", flat=True
-                )
+            # Filter by event directly
+            travels = TravelDetail.objects.filter(event_id=pk).distinct()
+            return Response(
+                TravelDetailSerializer(
+                    travels, 
+                    many=True, 
+                    context=self.get_serializer_context()
+                ).data
             )
-            extra_ids = list(
-                ExtraAttendee.objects.filter(registration__event_id=pk).values_list(
-                    "id", flat=True
-                )
-            )
-            travels = TravelDetail.objects.filter(
-                models.Q(event__id=pk)
-                & (
-                    models.Q(event_registrations__id__in=reg_ids)
-                    | models.Q(extra_attendees__id__in=extra_ids)
-                )
-            ).distinct()
-            return Response(TravelDetailSerializer(travels, many=True).data)
         except Exception as e:
             return Response(
                 {"detail": "Error listing travel details for event", "error": str(e)},
