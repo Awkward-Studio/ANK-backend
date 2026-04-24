@@ -414,6 +414,7 @@ def public_mou_interaction(request, token):
             "status": mou.status, 
             "template_data": mou.template_data,
             "freelancer_name": mou.allocation.freelancer.name, 
+            "requirement_name": mou.allocation.requirement.name if mou.allocation.requirement else None,
             "skill_category": mou.allocation.freelancer.skill_category,
             "event_name": mou.allocation.event_department.event.name, 
             "department_name": mou.allocation.event_department.department.name,

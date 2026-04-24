@@ -64,6 +64,13 @@ class Accommodation(models.Model):
                 "Accommodation must have at least one EventRegistration or ExtraAttendee assigned."
             )
 
+    def delete(self, *args, **kwargs):
+        if self.event_room_type:
+            # Increment available_count back
+            self.event_room_type.available_count += self.room_count
+            self.event_room_type.save(update_fields=["available_count"])
+        return super().delete(*args, **kwargs)
+
     def __str__(self):
         assigned = list(self.event_registrations.all()) + list(
             self.extra_attendees.all()
