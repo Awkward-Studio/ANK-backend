@@ -38,6 +38,9 @@ KNOWN_CSV_COLUMNS = {
     "Pincode",
     "Country",
     "unique_strings",
+    "Family Salutation",
+    "Hamper Count",
+    "RSVP Status",
 }
 from utils.swagger import (
     doc_create,
@@ -445,6 +448,23 @@ class BulkGuestUploadAPIView(APIView):
                         city = row.get("City", "").strip()
                         pincode = row.get("Pincode", "").strip()
                         country = row.get("Country", "").strip()
+                        family_salutation = row.get("Family Salutation", "").strip()
+                        hamper_count_raw = row.get("Hamper Count", "0").strip()
+                        try:
+                            hamper_count = int(hamper_count_raw) if hamper_count_raw else 0
+                        except ValueError:
+                            hamper_count = 0
+                        
+                        rsvp_status_raw = row.get("RSVP Status", "").strip().lower()
+                        rsvp_mapping = {
+                            "not sent": "not_sent",
+                            "pending response": "pending",
+                            "pending": "pending",
+                            "yes": "yes",
+                            "no": "no",
+                            "maybe": "maybe",
+                        }
+                        rsvp_status = rsvp_mapping.get(rsvp_status_raw, "not_sent")
 
                         # === VALIDATION ===
                         if not uid:
@@ -552,6 +572,9 @@ class BulkGuestUploadAPIView(APIView):
                                 existing_reg.guest_group = group
                                 existing_reg.sub_guest_group = subgroup
                                 existing_reg.title = salutation
+                                existing_reg.family_salutation = family_salutation
+                                existing_reg.hamper_count = hamper_count
+                                existing_reg.rsvp_status = rsvp_status
                                 existing_reg.name_on_message = full_name
                                 existing_reg.estimated_pax = pax
                                 existing_reg.save()
@@ -566,6 +589,9 @@ class BulkGuestUploadAPIView(APIView):
                                     guest_group=group,
                                     sub_guest_group=subgroup,
                                     title=salutation,
+                                    family_salutation=family_salutation,
+                                    hamper_count=hamper_count,
+                                    rsvp_status=rsvp_status,
                                     name_on_message=full_name,
                                     estimated_pax=pax,
                                 )

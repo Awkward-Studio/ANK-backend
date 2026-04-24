@@ -27,8 +27,8 @@ class Skill(models.Model):
 class Freelancer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    skill = models.ForeignKey(
-        Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="freelancers"
+    skills = models.ManyToManyField(
+        Skill, blank=True, related_name="freelancers"
     )
     skill_category = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100)
@@ -80,6 +80,7 @@ class ManpowerRequirement(models.Model):
         on_delete=models.CASCADE,
         related_name="manpower_requirements",
     )
+    name = models.CharField(max_length=200)
     skill = models.ForeignKey(
         Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="requirements"
     )
@@ -94,6 +95,7 @@ class ManpowerRequirement(models.Model):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    location = models.CharField(max_length=200, blank=True)
     is_extra = models.BooleanField(default=False)
     sessions = models.ManyToManyField(
         "Events.Session",
@@ -106,7 +108,7 @@ class ManpowerRequirement(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.quantity_required}x {self.skill_category} for {self.event_department}"
+        return f"{self.quantity_required}x {self.name} for {self.event_department}"
 
 
 class FreelancerAllocation(models.Model):
@@ -147,7 +149,7 @@ class FreelancerAllocation(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("freelancer", "event_department")
+        unique_together = ("freelancer", "event_department", "requirement")
 
     def __str__(self):
         return f"{self.freelancer.name} -> {self.event_department} ({self.status})"
@@ -155,16 +157,6 @@ class FreelancerAllocation(models.Model):
     def clean(self):
         from django.core.exceptions import ValidationError
         if self.status in ["confirmed", "soft_blocked"]:
-            # Check if already has ANY allocation in this event (excluding itself)
-            event_id = self.event_department.event_id
-            exists = FreelancerAllocation.objects.filter(
-                freelancer=self.freelancer,
-                event_department__event_id=event_id
-            ).exclude(pk=self.pk).exists()
-            
-            if exists:
-                raise ValidationError(f"Freelancer is already allocated to this event.")
-
             # Use allocation dates if set, otherwise fallback to event dates
             current_start = self.start_date or self.event_department.event.start_date
             current_end = self.end_date or self.event_department.event.end_date
@@ -185,18 +177,13 @@ class FreelancerAllocation(models.Model):
                         if other_start <= current_end and other_end >= current_start:
                             conflicts.append(other)
 
-                # Gracefully handle based on status
-                confirmed_conflicts = [c for c in conflicts if c.status == "confirmed"]
-                
-                if self.status == "confirmed" and confirmed_conflicts:
-                    events = ", ".join([str(c.event_department.event) for c in confirmed_conflicts])
+                # Prevent any overlap for confirmed/soft_blocked allocations
+                if conflicts:
+                    events = ", ".join([f"{c.event_department.event.name} ({c.status})" for c in conflicts])
                     raise ValidationError(
-                        f"Freelancer is already CONFIRMED for overlapping dates in: {events}"
+                        f"Freelancer is already allocated for overlapping dates in: {events}. "
+                        f"A freelancer can only be allocated to one role at a time."
                     )
-                
-                # If we are soft blocking, we just warn or allow, but the backend clean 
-                # should probably prevent double CONFIRMED. 
-                # For now, let's keep it strict for confirmed status.
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -793,4 +780,3 @@ class AllocationDailyMeal(models.Model):
             self.dinner_amount = Decimal("0.00")
 
         super().save(*args, **kwargs)
-

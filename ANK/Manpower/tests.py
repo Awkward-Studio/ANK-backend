@@ -48,13 +48,14 @@ class ManpowerTestCase(TestCase):
     def test_manpower_requirement_creation(self):
         requirement = ManpowerRequirement.objects.create(
             event_department=self.event_department,
+            name="Coordinator Lead",
             skill_category="Coordinator",
             quantity_required=2,
             estimated_days=Decimal("3.0"),
             max_unit_rate=Decimal("6000.00")
         )
         self.assertEqual(requirement.status, "pending")
-        self.assertEqual(str(requirement), "2x Coordinator for " + str(self.event_department))
+        self.assertEqual(str(requirement), "2x Coordinator Lead for " + str(self.event_department))
 
     def test_freelancer_allocation_and_cost_sheet(self):
         # Test Allocation

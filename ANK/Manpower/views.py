@@ -271,7 +271,12 @@ class FreelancerList(APIView):
             search = request.query_params.get("search")
             
             if skill:
-                qs = qs.filter(skill_category=skill)
+                import uuid
+                try:
+                    uuid_obj = uuid.UUID(skill)
+                    qs = qs.filter(Q(skill_category=skill) | Q(skills__id=uuid_obj)).distinct()
+                except ValueError:
+                    qs = qs.filter(Q(skill_category=skill) | Q(skills__name__iexact=skill)).distinct()
             if city:
                 qs = qs.filter(city=city)
             if search:
@@ -424,10 +429,13 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
         try:
             qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
+            event_id = request.query_params.get("event")
             ed = request.query_params.get("event_department")
             stat = request.query_params.get("status")
             skill = request.query_params.get("skill_category")
             
+            if event_id:
+                qs = qs.filter(event_department__event_id=event_id)
             if ed:
                 qs = qs.filter(event_department_id=ed)
             if stat:
@@ -464,7 +472,7 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
                 "requirement_created",
                 obj,
                 event_id=event_id,
-                details={"skill_category": obj.skill_category, "quantity_required": obj.quantity_required},
+                details={"name": obj.name, "skill_category": obj.skill_category, "quantity_required": obj.quantity_required},
             )
             return Response(ser.data, status=status.HTTP_201_CREATED)
         except Http404:
@@ -605,10 +613,13 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
         try:
             qs = _filter_to_accounts_scope(request, self.get_queryset(), "event_department__event_id")
             
+            event_id = request.query_params.get("event")
             ed = request.query_params.get("event_department")
             free = request.query_params.get("freelancer")
             stat = request.query_params.get("status")
             
+            if event_id:
+                qs = qs.filter(event_department__event_id=event_id)
             if ed:
                 qs = qs.filter(event_department_id=ed)
             if free:
@@ -2152,3 +2163,327 @@ class ManpowerSettingsDetail(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+from django.http import HttpResponse
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter
+
+class ManpowerTemplateExportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, event_id):
+        from Events.models.event_model import Event
+        from Departments.models import EventDepartment
+        
+        template_type = request.query_params.get("type", "requirement") # 'requirement' or 'allocation'
+
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({"detail": "Event not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        denied = _require_manpower_event_access(request, event_id)
+        if denied:
+            return denied
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        # Legend Sheet
+        ws_legend = wb.create_sheet(title="Legend")
+        
+        if template_type == "requirement":
+            ws.title = "Requirements"
+            headers = [
+                "Name",
+                "Event Department",
+                "Skill",
+                "Location",
+                "Quantity Required",
+                "Start Date (YYYY-MM-DD)",
+                "End Date (YYYY-MM-DD)",
+                "Mark as Extra (TRUE/FALSE)"
+            ]
+            
+            # Legend data
+            depts = EventDepartment.objects.filter(event=event).select_related("department")
+            dept_names = [d.department.name for d in depts]
+            skills = Skill.objects.all().order_by("name")
+            skill_names = [s.name for s in skills]
+            
+            ws_legend.append(["Departments", "Skills", "Booleans"])
+            max_rows = max(len(dept_names), len(skill_names), 2)
+            for i in range(max_rows):
+                ws_legend.append([
+                    dept_names[i] if i < len(dept_names) else "",
+                    skill_names[i] if i < len(skill_names) else "",
+                    ["TRUE", "FALSE"][i] if i < 2 else "",
+                ])
+            
+            # Data Validations
+            if dept_names:
+                dv_dept = DataValidation(type="list", formula1=f"Legend!$A$2:$A${len(dept_names)+1}", allow_blank=True)
+                ws.add_data_validation(dv_dept)
+                dv_dept.add("B2:B1000")
+            if skill_names:
+                dv_skill = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(skill_names)+1}", allow_blank=True)
+                ws.add_data_validation(dv_skill)
+                dv_skill.add("C2:C1000")
+            dv_bool = DataValidation(type="list", formula1="Legend!$C$2:$C$3", allow_blank=True)
+            ws.add_data_validation(dv_bool)
+            dv_bool.add("H2:H1000")
+
+        else: # allocation
+            ws.title = "Allocations"
+            headers = [
+                "Requirement (Role @ Dept)",
+                "Freelancer",
+                "Negotiated Rate",
+                "Start Date (YYYY-MM-DD)",
+                "End Date (YYYY-MM-DD)",
+                "Mark as Extra (TRUE/FALSE)"
+            ]
+            
+            # Legend data
+            reqs = ManpowerRequirement.objects.filter(event_department__event=event).select_related("event_department__department")
+            req_strings = [
+                f"{r.name} - {r.skill_category} @ {r.event_department.department.name} "
+                f"{'[' + r.location + '] ' if r.location else ''}"
+                f"({r.id})"
+                for r in reqs
+            ]
+            freelancers = Freelancer.objects.filter(is_active=True).order_by("name")
+            freelancer_names = [f.name for f in freelancers]
+            
+            ws_legend.append(["Requirements", "Freelancers", "Booleans"])
+            max_rows = max(len(req_strings), len(freelancer_names), 2)
+            for i in range(max_rows):
+                ws_legend.append([
+                    req_strings[i] if i < len(req_strings) else "",
+                    freelancer_names[i] if i < len(freelancer_names) else "",
+                    ["TRUE", "FALSE"][i] if i < 2 else "",
+                ])
+                
+            # Data Validations
+            if req_strings:
+                dv_req = DataValidation(type="list", formula1=f"Legend!$A$2:$A${len(req_strings)+1}", allow_blank=True)
+                ws.add_data_validation(dv_req)
+                dv_req.add("A2:A1000")
+            if freelancer_names:
+                dv_free = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(freelancer_names)+1}", allow_blank=True)
+                ws.add_data_validation(dv_free)
+                dv_free.add("B2:B1000")
+            dv_bool = DataValidation(type="list", formula1="Legend!$C$2:$C$3", allow_blank=True)
+            ws.add_data_validation(dv_bool)
+            dv_bool.add("F2:F1000")
+
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            
+        ws_legend.sheet_state = "hidden"
+
+        # Adjust column widths
+        for i, column_cells in enumerate(ws.columns):
+            length = max(len(str(cell.value)) for cell in column_cells)
+            ws.column_dimensions[get_column_letter(i+1)].width = min(length + 2, 50)
+
+        response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        filename = f"{template_type.capitalize()}_Template_{event.name.replace(' ', '_')}.xlsx"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
+
+
+class ManpowerBulkImportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, event_id):
+        from Events.models.event_model import Event
+        from Departments.models import EventDepartment
+        
+        import_type = request.query_params.get("type") # 'requirement' or 'allocation'
+
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({"detail": "Event not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        denied = _require_manpower_event_access(request, event_id)
+        if denied:
+            return denied
+
+        excel_file = request.FILES.get("file")
+        if not excel_file or not excel_file.name.endswith(".xlsx"):
+            return Response({"detail": "Please upload a valid .xlsx file."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            wb = openpyxl.load_workbook(excel_file, data_only=True)
+            
+            # Determine type if not provided in query params
+            if not import_type:
+                if "Requirements" in wb.sheetnames:
+                    import_type = "requirement"
+                elif "Allocations" in wb.sheetnames:
+                    import_type = "allocation"
+                else:
+                    return Response({"detail": "Invalid template. Could not determine import type from sheet names."}, status=status.HTTP_400_BAD_REQUEST)
+
+            ws_name = "Requirements" if import_type == "requirement" else "Allocations"
+            if ws_name not in wb.sheetnames:
+                return Response({"detail": f"Invalid template. Sheet '{ws_name}' not found."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            ws = wb[ws_name]
+            
+            # Create lookup dictionaries
+            depts = EventDepartment.objects.filter(event=event).select_related("department")
+            dept_map = {d.department.name.lower().strip(): d for d in depts}
+            skill_map = {s.name.lower().strip(): s for s in Skill.objects.all()}
+            freelancer_map = {f.name.lower().strip(): f for f in Freelancer.objects.filter(is_active=True)}
+            
+            created_reqs = 0
+            created_allocs = 0
+            errors = []
+
+            with transaction.atomic():
+                for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                    if not any(row): continue
+                    
+                    try:
+                        if import_type == "requirement":
+                            (req_name, dept_name, skill_name, location, quantity, start_date, end_date, is_extra) = row[:8]
+
+                            if not req_name:
+                                errors.append(f"Row {row_idx}: Requirement name is required.")
+                                continue
+                            
+                            if not dept_name:
+                                errors.append(f"Row {row_idx}: Department is required.")
+                                continue
+                            ed = dept_map.get(str(dept_name).lower().strip())
+                            if not ed:
+                                errors.append(f"Row {row_idx}: Invalid department '{dept_name}'.")
+                                continue
+
+                            skill = None
+                            skill_cat = ""
+                            if skill_name:
+                                skill = skill_map.get(str(skill_name).lower().strip())
+                                skill_cat = skill.name if skill else str(skill_name).strip()
+
+                            is_extra_bool = str(is_extra).strip().upper() == "TRUE"
+                            if not is_extra_bool:
+                                lock_error = _check_lock_or_override(request, event_id)
+                                if lock_error: raise Exception("Event is locked.")
+
+                            import datetime
+                            start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
+                            end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
+
+                            try: qty = int(quantity) if quantity else 1
+                            except: qty = 1
+                                
+                            days = Decimal("1.0")
+                            if start and end:
+                                try:
+                                    delta = (end - start).days + 1
+                                    if delta > 0: days = Decimal(str(delta))
+                                except: pass
+
+                            req = ManpowerRequirement.objects.create(
+                                name=str(req_name).strip(),
+                                event_department=ed, skill=skill, skill_category=skill_cat,
+                                location=str(location).strip() if location else "",
+                                quantity_required=qty, start_date=start, end_date=end,
+                                estimated_days=days, is_extra=is_extra_bool
+                            )
+                            created_reqs += 1
+                            
+                        else: # allocation
+                            (req_str, freelancer_name, negotiated_rate, start_date, end_date, is_extra) = row[:6]
+                            
+                            if not req_str:
+                                errors.append(f"Row {row_idx}: Requirement is required.")
+                                continue
+                            
+                            # Extract UUID from string like "Shadow @ Logistics [Lobby] (uuid-here)"
+                            import re
+                            # specifically match a UUID format within parentheses at the end of the string
+                            match = re.search(r'\(([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\)', str(req_str))
+                            req_id = match.group(1) if match else None
+                            
+                            try:
+                                req = ManpowerRequirement.objects.get(pk=req_id)
+                            except:
+                                errors.append(f"Row {row_idx}: Invalid or missing requirement ID in '{req_str}'.")
+                                continue
+
+                            if not freelancer_name:
+                                errors.append(f"Row {row_idx}: Freelancer name is required.")
+                                continue
+                            freelancer = freelancer_map.get(str(freelancer_name).lower().strip())
+                            if not freelancer:
+                                errors.append(f"Row {row_idx}: Invalid freelancer '{freelancer_name}'.")
+                                continue
+
+                            is_extra_bool = str(is_extra).strip().upper() == "TRUE"
+                            if not is_extra_bool:
+                                lock_error = _check_lock_or_override(request, event_id)
+                                if lock_error: raise Exception("Event is locked.")
+
+                            import datetime
+                            start = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
+                            end = end_date.date() if isinstance(end_date, datetime.datetime) else end_date
+                            # Fallback to req dates if not in excel
+                            if not start: start = req.start_date
+                            if not end: end = req.end_date
+
+                            alloc = FreelancerAllocation.objects.create(
+                                freelancer=freelancer,
+                                event_department=req.event_department,
+                                requirement=req,
+                                status="soft_blocked",
+                                assigned_by=request.user,
+                                start_date=start,
+                                end_date=end,
+                                is_extra=is_extra_bool
+                            )
+                            
+                            try: rate = Decimal(str(negotiated_rate)) if negotiated_rate else Decimal("0.00")
+                            except: rate = Decimal("0.00")
+                                
+                            days = Decimal("1.0")
+                            if start and end:
+                                try:
+                                    delta = (end - start).days + 1
+                                    if delta > 0: days = Decimal(str(delta))
+                                except: pass
+
+                            EventCostSheet.objects.create(
+                                allocation=alloc, negotiated_rate=rate,
+                                days_planned=days, travel_costs=Decimal("0.00")
+                            )
+                            created_allocs += 1
+                    except Exception as e:
+                        errors.append(f"Row {row_idx}: {str(e)}")
+
+            if errors:
+                return Response({
+                    "detail": "Import completed with errors.",
+                    "created_requirements": created_reqs,
+                    "created_allocations": created_allocs,
+                    "errors": errors
+                }, status=status.HTTP_207_MULTI_STATUS)
+                
+            return Response({
+                "detail": "Import successful.",
+                "created_requirements": created_reqs,
+                "created_allocations": created_allocs
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return Response(
+                {"detail": f"Error parsing excel file: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
