@@ -351,7 +351,7 @@ def generate_mou_pdf(mou):
     
     # Left Column
     pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text("For ANK ENTERTAINMENT LLP\nName: Sahitya Shetty\nDesignation: Assistant Manager - HR\nSignature: [Digitally Signed]\nDate: " + mou.created_at.strftime("%d/%m/%Y")))
+    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text("For ANK ENTERTAINMENT LLP\nName: Divya Jain - Manager\nDesignation: Assistant Manager - HR\nSignature: [Digitally Signed]\nDate: " + mou.created_at.strftime("%d/%m/%Y")))
     
     # Right Column
     pdf.set_xy(pdf.l_margin + epw/2 + 5, y_before)
