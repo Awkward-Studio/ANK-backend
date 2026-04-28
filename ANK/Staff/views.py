@@ -78,9 +78,15 @@ def is_jwt_mode():
 )
 class RegisterView(GenericAPIView):
     permission_classes = (AllowAny,)
+    throttle_scope = "auth"
     serializer_class = RegisterSerializer
 
     def post(self, request):
+        if not getattr(settings, "ALLOW_PUBLIC_REGISTRATION", False):
+            return Response(
+                {"detail": "Public registration is disabled."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             ser = RegisterSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
@@ -113,7 +119,7 @@ class RegisterView(GenericAPIView):
             return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response(
-                {"detail": "Registration failed", "error": str(e)},
+                {"detail": "Registration failed"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -143,26 +149,19 @@ class SessionLoginResponseSerializer(serializers.Serializer):
 class LoginView(GenericAPIView):
     permission_classes = (AllowAny,)
     authentication_classes = []
+    throttle_scope = "auth"
     serializer_class = EmailSessionLoginSerializer
 
     def post(self, request, *args, **kwargs):
-        print(f"====== HITTING CUSTOM LOGIN VIEW ====== Method: {request.method}, Path: {request.path}")
-
-        print(f"USE_JWT: {settings.USE_JWT}")
-
-        # print("***** Custom LoginView CALLED *****")
         ser = self.serializer_class(data=request.data)
         if not ser.is_valid():
-            print(f"Login Serializer Errors: {ser.errors}")
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
         email = ser.validated_data["email"].lower().strip()
         password = ser.validated_data["password"]
 
-        print(f"Attempting login for email: {email}")
         user = authenticate(request, email=email, password=password)
         if user is not None:
-            print(f"Login successful for: {email}")
             user_data = UserSerializer(user).data
             if settings.USE_JWT:
                 refresh = RefreshToken.for_user(user)
@@ -187,7 +186,6 @@ class LoginView(GenericAPIView):
                     status=status.HTTP_200_OK,
                 )
         else:
-            print(f"Login failed for: {email} - Invalid credentials")
             return Response(
                 {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -204,6 +202,7 @@ class LoginView(GenericAPIView):
 )
 class RefreshView(TokenRefreshView):
     permission_classes = (AllowAny,)
+    throttle_scope = "auth"
 
     def post(self, request, *args, **kwargs):
         if not getattr(settings, "USE_JWT", False):
@@ -230,19 +229,15 @@ class LogoutView(GenericAPIView):
     serializer_class = LogoutRequestSerializer
 
     def post(self, request):
-        print(f"====== HITTING CUSTOM LOGOUT VIEW ====== Method: {request.method}, Path: {request.path}")
         try:
             # JWT mode: blacklist refresh token if provided
             if getattr(settings, "USE_JWT", False):
                 refresh_token = request.data.get("refresh")
-                print(f"Logout Attempt - Refresh token provided: {bool(refresh_token)}")
                 if refresh_token:
                     try:
                         token = RefreshToken(refresh_token)
                         token.blacklist()
-                        print("Refresh token blacklisted.")
                     except (TokenError, InvalidToken) as jwt_error:
-                        print(f"Refresh token blacklisting failed: {jwt_error}")
                         return Response(
                             {"detail": "Invalid token", "error": str(jwt_error)},
                             status=status.HTTP_400_BAD_REQUEST,
@@ -250,7 +245,6 @@ class LogoutView(GenericAPIView):
             # Always try to logout session
             try:
                 logout(request)
-                print("Session logged out.")
             except Exception:
                 pass
 
@@ -259,7 +253,6 @@ class LogoutView(GenericAPIView):
                 status=status.HTTP_205_RESET_CONTENT,
             )
         except Exception as e:
-            print(f"Logout unexpected error: {e}")
             return Response(
                 {"detail": "Logout failed", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

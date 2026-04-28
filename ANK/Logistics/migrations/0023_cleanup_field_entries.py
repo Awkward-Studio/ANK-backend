@@ -36,6 +36,7 @@ def cleanup_and_update_fields(apps, schema_editor):
         ("flight_number", "Arrival Flight Number"),
         ("airline", "Arrival Airline"),
         ("pnr", "Arrival PNR"),
+        ("terminal", "Terminal"),
         ("arrival_time", "Arrival Time"),
         ("arrival_details", "Arrival Details"),
         ("hotel_arrival_time", "Hotel Arrival Time"),

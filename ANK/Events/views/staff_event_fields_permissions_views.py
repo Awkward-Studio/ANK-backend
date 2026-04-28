@@ -1105,14 +1105,19 @@ class UserEventAllAllowedFieldsAPIView(LegacyEventFieldPermissionAPIView):
             
             response_data = {key: [] for key in model_map.values()}
             response_data['model_access'] = {}
+            response_data['is_event_head'] = PermissionChecker.is_event_head(user, event)
             
             from Departments.models import ModelPermission, EventDepartment, DepartmentModelAccess
             
-            # Find all event departments the user is assigned to for this event
-            event_depts = EventDepartment.objects.filter(
-                event=event,
-                staff_assignments__user=user
-            )
+            # Find all event departments the user is assigned to for this event.
+            # Event heads bypass department scoping and receive full model access.
+            if response_data['is_event_head']:
+                event_depts = EventDepartment.objects.filter(event=event)
+            else:
+                event_depts = EventDepartment.objects.filter(
+                    event=event,
+                    staff_assignments__user=user
+                )
             
             # For department_head: if no assignments, use their department from user model
             if user.role == 'department_head' and not event_depts.exists() and user.department:
@@ -1146,8 +1151,10 @@ class UserEventAllAllowedFieldsAPIView(LegacyEventFieldPermissionAPIView):
                         "can_delete": any(da.can_delete for da in dept_access),
                     }
                     
-                    # Special Case: Super admin / Admin bypass
-                    if user.role in ['super_admin', 'admin']:
+                    # Special Case: Super admin / Admin / Department head bypass.
+                    # Department heads operate one tier below admins and are not
+                    # blocked by missing DepartmentModelAccess rows.
+                    if user.role in ['super_admin', 'admin', 'department_head'] or response_data['is_event_head']:
                         access = {k: True for k in access}
                         
                     response_data['model_access'][model_name] = access

@@ -32,6 +32,8 @@ class DepartmentAccessMixin:
             event = obj.event
             # For staff: get from staff assignments
             if user.role == 'staff':
+                if PermissionChecker.is_event_head(user, event):
+                    return EventDepartment.objects.filter(event=event).first()
                 event_dept = EventDepartment.objects.filter(
                     event=event,
                     staff_assignments__user=user
@@ -53,6 +55,8 @@ class DepartmentAccessMixin:
                 event = Event.objects.get(id=event_id)
                 # For staff: get from staff assignments
                 if user.role == 'staff':
+                    if PermissionChecker.is_event_head(user, event):
+                        return EventDepartment.objects.filter(event=event).first()
                     event_dept = EventDepartment.objects.filter(
                         event=event,
                         staff_assignments__user=user
@@ -78,6 +82,8 @@ class DepartmentAccessMixin:
                 event = reg.event
                 # For staff: get from staff assignments
                 if user.role == 'staff':
+                    if PermissionChecker.is_event_head(user, event):
+                        return EventDepartment.objects.filter(event=event).first()
                     event_dept = EventDepartment.objects.filter(
                         event=event,
                         staff_assignments__user=user
@@ -123,35 +129,15 @@ class DepartmentAccessMixin:
                 )
         
         user = self.request.user
-        if user.role in ['super_admin', 'admin']:
+        if user.role in ['super_admin', 'admin', 'department_head']:
+            # Department heads are scoped managers and see the same data as
+            # admins by default. Granular department-model restrictions are
+            # only enforced for staff.
             return qs  # No filtering
         
-        # Everyone sees the full event list if it's the Event model, 
-        # BUT staff only see assigned events (as per user instruction).
+        # Staff: only see assigned events (as per user instruction).
         if qs.model.__name__ == 'Event':
-            if user.role == 'staff':
-                return PermissionChecker.get_user_accessible_events(user)
-            # Admin, super_admin, and department_head see all events
-            return qs
-        
-        if user.role == 'department_head':
-            # Dept heads see all instances of models their department has access to.
-            # "events are not associated with departments" - filtering is purely model-based.
-            dept = user.department
-            if dept:
-                from django.contrib.contenttypes.models import ContentType
-                model_type = ContentType.objects.get_for_model(qs.model)
-                has_access = DepartmentModelAccess.objects.filter(
-                    department=dept,
-                    content_type=model_type,
-                    can_read=True
-                ).exists()
-                
-                if has_access:
-                    return qs
-                else:
-                    return qs.none()
-            return qs.none()
+            return PermissionChecker.get_user_accessible_events(user)
         
         # Staff: Filter models by the events they are assigned to.
         # Check if the model has an 'event' field

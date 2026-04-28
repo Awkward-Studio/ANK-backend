@@ -5,6 +5,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
+from django.db import IntegrityError
 from Events.models.event_model import Event
 from Departments.mixins import DepartmentAccessMixin
 from Departments.permissions import PermissionChecker
@@ -12,6 +13,7 @@ from Departments.models import (
     Department,
     EventDepartment,
     EventDepartmentStaffAssignment,
+    EventHeadAssignment,
     BudgetLineItem,
     BudgetFieldPermission,
     ModelPermission,
@@ -22,6 +24,7 @@ from Departments.serializers import (
     DepartmentSerializer,
     EventDepartmentSerializer,
     EventDepartmentStaffAssignmentSerializer,
+    EventHeadAssignmentSerializer,
     BudgetLineItemSerializer,
     BudgetFieldPermissionSerializer,
     UserEventDepartmentFieldAccessSerializer,
@@ -39,9 +42,125 @@ from utils.swagger import (
 )
 from Departments.serializers import BUDGET_FIELD_KEYS
 
+
+EVENT_HEAD_MANAGER_ROLES = {"admin", "super_admin"}
+
+
+def _require_event_head_manager(request):
+    if getattr(request.user, "role", None) not in EVENT_HEAD_MANAGER_ROLES:
+        return Response(
+            {"detail": "Only admins can manage event heads."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
 # ─────────────────────────────────────────────────────────────
 # Department (global master)
 # ─────────────────────────────────────────────────────────────
+
+
+@document_api_view(
+    {
+        "get": doc_list(
+            response=EventHeadAssignmentSerializer(many=True),
+            parameters=[
+                query_param("event", "uuid", False, "Filter by event ID"),
+                query_param("user", "uuid", False, "Filter by user ID"),
+            ],
+            description="List event-scoped event head assignments",
+            tags=["Event Heads"],
+        ),
+        "post": doc_create(
+            request=EventHeadAssignmentSerializer,
+            response=EventHeadAssignmentSerializer,
+            description="Assign a user as an event head",
+            tags=["Event Heads"],
+        ),
+    }
+)
+class EventHeadAssignmentList(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            qs = EventHeadAssignment.objects.select_related("event", "user").all()
+            event_id = request.query_params.get("event")
+            user_id = request.query_params.get("user")
+            if event_id:
+                qs = qs.filter(event_id=event_id)
+            if user_id:
+                qs = qs.filter(user_id=user_id)
+            return Response(EventHeadAssignmentSerializer(qs, many=True).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching event heads", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        denied = _require_event_head_manager(request)
+        if denied:
+            return denied
+
+        try:
+            ser = EventHeadAssignmentSerializer(data=request.data)
+            ser.is_valid(raise_exception=True)
+            ser.save()
+            return Response(ser.data, status=status.HTTP_201_CREATED)
+        except ValidationError as ve:
+            return Response(ve.detail, status=status.HTTP_400_BAD_REQUEST)
+        except IntegrityError:
+            return Response(
+                {"detail": "This user is already an event head for this event."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            return Response(
+                {"detail": "Error creating event head", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@document_api_view(
+    {
+        "get": doc_retrieve(
+            response=EventHeadAssignmentSerializer,
+            description="Retrieve an event head assignment",
+            tags=["Event Heads"],
+        ),
+        "delete": doc_destroy(
+            description="Remove an event head assignment",
+            tags=["Event Heads"],
+        ),
+    }
+)
+class EventHeadAssignmentDetail(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            obj = get_object_or_404(EventHeadAssignment, pk=pk)
+            return Response(EventHeadAssignmentSerializer(obj).data)
+        except Exception as e:
+            return Response(
+                {"detail": "Error fetching event head", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request, pk):
+        denied = _require_event_head_manager(request)
+        if denied:
+            return denied
+
+        try:
+            obj = get_object_or_404(EventHeadAssignment, pk=pk)
+            obj.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"detail": "Error removing event head", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 @document_api_view(
@@ -1089,11 +1208,11 @@ class UserEventScopedDepartmentFieldAccessAPIView(APIView):
     def get(self, request, user_pk, event_pk):
         try:
             user = get_object_or_404(User, pk=user_pk)
-            get_object_or_404(Event, pk=event_pk)
+            event = get_object_or_404(Event, pk=event_pk)
 
             from Departments.serializers import BUDGET_FIELD_KEYS
 
-            if user.role in ['super_admin', 'admin']:
+            if user.role in ['super_admin', 'admin'] or PermissionChecker.is_event_head(user, event):
                 all_depts = EventDepartment.objects.filter(event_id=event_pk).select_related(
                     "event", "department"
                 )

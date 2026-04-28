@@ -6,6 +6,7 @@ from Departments.models import (
     Department,
     EventDepartment,
     EventDepartmentStaffAssignment,
+    EventHeadAssignment,
     BudgetLineItem,
     BudgetFieldPermission,
     ModelPermission,
@@ -87,6 +88,20 @@ class EventDepartmentStaffAssignmentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class EventHeadAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventHeadAssignment
+        fields = [
+            "id",
+            "event",
+            "user",
+            "assigned_on",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "assigned_on", "created_at", "updated_at"]
 
 
 from Departments.serializers_permissions import PermissionAwareSerializer

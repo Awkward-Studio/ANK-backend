@@ -26,7 +26,10 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
             
         user = request.user
         
-        if user.role in ['super_admin', 'admin'] or getattr(user, 'is_superuser', False):
+        if (
+            user.role in ['super_admin', 'admin', 'department_head']
+            or getattr(user, 'is_superuser', False)
+        ):
             return ret
             
         # Get allowed fields
@@ -183,7 +186,11 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
                             department=user.department
                         ).first()
             
-            if user and user.role not in ['super_admin', 'admin'] and event_department:
+            if (
+                user
+                and user.role not in ['super_admin', 'admin', 'department_head']
+                and event_department
+            ):
                 model_type = ContentType.objects.get_for_model(self.Meta.model)
                 # Check write permissions for each field being updated
                 for field_name in attrs.keys():
@@ -211,7 +218,11 @@ class PermissionAwareSerializer(serializers.ModelSerializer):
                             raise serializers.ValidationError(
                                 {field_name: "You don't have permission to access this field"}
                             )
-            elif user and user.role not in ['super_admin', 'admin'] and not event_department:
+            elif (
+                user
+                and user.role not in ['super_admin', 'admin', 'department_head']
+                and not event_department
+            ):
                 # User doesn't have event_department context - block all writes for staff
                 if user.role == 'staff':
                     raise serializers.ValidationError(
