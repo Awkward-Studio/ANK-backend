@@ -2,7 +2,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 from rest_framework.exceptions import ValidationError, PermissionDenied
 from django.contrib.contenttypes.models import ContentType
 from Departments.models import (
@@ -58,9 +58,9 @@ class ModelPermissionList(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin and department_head can manage permissions."""
-        if request.user.role not in ['super_admin', 'department_head']:
-            raise PermissionDenied("Only super admins and department heads can manage permissions.")
+        """Only super_admin, admin, and department_head can manage permissions."""
+        if request.user.role not in ['super_admin', 'admin', 'department_head']:
+            raise PermissionDenied("Only super admins, admins, and department heads can manage permissions.")
 
     def get(self, request):
         self.check_permissions(request)
@@ -133,9 +133,9 @@ class ModelPermissionDetail(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin and department_head can manage permissions."""
-        if request.user.role not in ['super_admin', 'department_head']:
-            raise PermissionDenied("Only super admins and department heads can manage permissions.")
+        """Only super_admin, admin, and department_head can manage permissions."""
+        if request.user.role not in ['super_admin', 'admin', 'department_head']:
+            raise PermissionDenied("Only super admins, admins, and department heads can manage permissions.")
 
     def get(self, request, pk):
         self.check_permissions(request)
@@ -190,9 +190,9 @@ class ModelPermissionsByEventDepartmentAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin and department_head can view permissions."""
-        if request.user.role not in ['super_admin', 'department_head']:
-            raise PermissionDenied("Only super admins and department heads can view permissions.")
+        """Only super_admin, admin, and department_head can view permissions."""
+        if request.user.role not in ['super_admin', 'admin', 'department_head']:
+            raise PermissionDenied("Only super admins, admins, and department heads can view permissions.")
 
     def get(self, request, pk):
         self.check_permissions(request)
@@ -222,9 +222,9 @@ class ModelPermissionsByUserAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Users can view their own permissions, super_admin and department_head can view any."""
+        """Users can view their own permissions; elevated roles can view any."""
         user_pk = request.resolver_match.kwargs.get('pk')
-        if request.user.role not in ['super_admin', 'department_head'] and str(request.user.id) != str(user_pk):
+        if request.user.role not in ['super_admin', 'admin', 'department_head'] and str(request.user.id) != str(user_pk):
             raise PermissionDenied("You can only view your own permissions.")
 
     def get(self, request, pk):
@@ -266,7 +266,9 @@ class DepartmentModelAccessList(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin can manage department-model access."""
+        """Only super_admin can manage; elevated roles may read department-model access."""
+        if request.method in SAFE_METHODS and request.user.role in ['super_admin', 'admin', 'department_head']:
+            return
         if request.user.role != 'super_admin':
             raise PermissionDenied("Only super admins can manage department-model access.")
 
@@ -334,7 +336,9 @@ class DepartmentModelAccessDetail(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin can manage department-model access."""
+        """Only super_admin can manage; elevated roles may read department-model access."""
+        if request.method in SAFE_METHODS and request.user.role in ['super_admin', 'admin', 'department_head']:
+            return
         if request.user.role != 'super_admin':
             raise PermissionDenied("Only super admins can manage department-model access.")
 
@@ -391,9 +395,9 @@ class DepartmentModelAccessByDepartmentAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin can view department-model access."""
-        if request.user.role != 'super_admin':
-            raise PermissionDenied("Only super admins can view department-model access.")
+        """Only super_admin, admin, and department_head can view department-model access."""
+        if request.user.role not in ['super_admin', 'admin', 'department_head']:
+            raise PermissionDenied("Only elevated users can view department-model access.")
 
     def get(self, request, pk):
         self.check_permissions(request)

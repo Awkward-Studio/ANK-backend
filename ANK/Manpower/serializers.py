@@ -25,6 +25,11 @@ class SkillSerializer(serializers.ModelSerializer):
 
 
 class FreelancerSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
     skill_names = serializers.SerializerMethodField()
     skills = serializers.PrimaryKeyRelatedField(
         many=True, queryset=Skill.objects.all(), required=False
@@ -32,6 +37,11 @@ class FreelancerSerializer(serializers.ModelSerializer):
 
     def get_skill_names(self, obj):
         return [s.name for s in obj.skills.all()]
+
+    def validate_email(self, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     class Meta:
         model = Freelancer

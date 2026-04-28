@@ -12,6 +12,7 @@ from .models import (
     PostEventAdjustment,
     FreelancerRating
 )
+from .serializers import FreelancerSerializer
 
 User = get_user_model()
 
@@ -56,6 +57,65 @@ class ManpowerTestCase(TestCase):
         )
         self.assertEqual(requirement.status, "pending")
         self.assertEqual(str(requirement), "2x Coordinator Lead for " + str(self.event_department))
+
+    def test_freelancer_serializer_allows_missing_email(self):
+        serializer = FreelancerSerializer(data={
+            "name": "No Email Freelancer",
+            "skill_category": "Crew",
+            "city": "Mumbai",
+        })
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        freelancer = serializer.save()
+
+        self.assertIsNone(freelancer.email)
+
+    def test_freelancer_serializer_normalizes_blank_email_to_null(self):
+        serializer = FreelancerSerializer(data={
+            "name": "Blank Email Freelancer",
+            "skill_category": "Crew",
+            "city": "Delhi",
+            "email": "   ",
+        })
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        freelancer = serializer.save()
+
+        self.assertIsNone(freelancer.email)
+
+    def test_multiple_freelancers_without_email_do_not_conflict(self):
+        first = FreelancerSerializer(data={
+            "name": "No Email One",
+            "skill_category": "Crew",
+            "city": "Mumbai",
+            "email": "",
+        })
+        second = FreelancerSerializer(data={
+            "name": "No Email Two",
+            "skill_category": "Crew",
+            "city": "Delhi",
+        })
+
+        self.assertTrue(first.is_valid(), first.errors)
+        self.assertTrue(second.is_valid(), second.errors)
+        first.save()
+        second.save()
+
+        self.assertEqual(
+            Freelancer.objects.filter(name__startswith="No Email").count(),
+            2,
+        )
+
+    def test_freelancer_serializer_rejects_invalid_non_empty_email(self):
+        serializer = FreelancerSerializer(data={
+            "name": "Invalid Email Freelancer",
+            "skill_category": "Crew",
+            "city": "Mumbai",
+            "email": "not-an-email",
+        })
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("email", serializer.errors)
 
     def test_freelancer_allocation_and_cost_sheet(self):
         # Test Allocation

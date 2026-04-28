@@ -201,9 +201,9 @@ class BulkAssignPermissionsAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
     def check_permissions(self, request):
-        """Only super_admin and department_head can assign permissions."""
-        if request.user.role not in ['super_admin', 'department_head']:
-            raise PermissionDenied("Only super admins and department heads can assign permissions.")
+        """Only super_admin, admin, and department_head can assign permissions."""
+        if request.user.role not in ['super_admin', 'admin', 'department_head']:
+            raise PermissionDenied("Only super admins, admins, and department heads can assign permissions.")
 
     def post(self, request, event_dept_id, user_id):
         self.check_permissions(request)

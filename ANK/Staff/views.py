@@ -3,6 +3,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
 from django.conf import settings
@@ -42,6 +43,23 @@ from drf_spectacular.utils import (
     OpenApiResponse,
 )
 from django.contrib.auth import login, logout
+
+
+ADMIN_ROLES = {"admin", "super_admin"}
+USER_VIEW_ROLES = {"admin", "super_admin", "department_head"}
+
+
+def require_user_view_access(request, target_user_id=None):
+    if request.user.role in USER_VIEW_ROLES:
+        return
+    if target_user_id and str(request.user.id) == str(target_user_id):
+        return
+    raise PermissionDenied("You don't have permission to view user records.")
+
+
+def require_user_manage_access(request):
+    if request.user.role not in ADMIN_ROLES:
+        raise PermissionDenied("Only admins can manage users.")
 
 
 def is_jwt_mode():
@@ -272,6 +290,7 @@ class UserList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        require_user_view_access(request)
         try:
             qs = User.objects.all()
             return Response(UserSerializer(qs, many=True).data)
@@ -282,6 +301,7 @@ class UserList(APIView):
             )
 
     def post(self, request):
+        require_user_manage_access(request)
         try:
             ser = UserSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
@@ -320,6 +340,7 @@ class UserDetail(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
+        require_user_view_access(request, pk)
         try:
             obj = get_object_or_404(User, pk=pk)
             return Response(UserSerializer(obj).data)
@@ -330,6 +351,7 @@ class UserDetail(APIView):
             )
 
     def put(self, request, pk):
+        require_user_manage_access(request)
         try:
             user = get_object_or_404(User, pk=pk)
             ser = UserSerializer(user, data=request.data, partial=True)
@@ -345,6 +367,7 @@ class UserDetail(APIView):
             )
 
     def patch(self, request, pk):
+        require_user_manage_access(request)
         try:
             user = get_object_or_404(User, pk=pk)
             ser = UserSerializer(user, data=request.data, partial=True)
@@ -360,6 +383,7 @@ class UserDetail(APIView):
             )
 
     def delete(self, request, pk):
+        require_user_manage_access(request)
         try:
             user = get_object_or_404(User, pk=pk)
             user.delete()
@@ -384,6 +408,7 @@ class UserAssignedEventsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
+        require_user_view_access(request, pk)
         user = get_object_or_404(User, pk=pk)
         try:
             # Use EventDepartmentStaffAssignment (new RBAC system)
@@ -410,6 +435,7 @@ class UserAssignedSessionsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
+        require_user_view_access(request, pk)
         user = get_object_or_404(User, pk=pk)
         try:
             # Use EventDepartmentStaffAssignment (new RBAC system)
