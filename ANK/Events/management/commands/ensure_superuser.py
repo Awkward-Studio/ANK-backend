@@ -11,8 +11,7 @@ class Command(BaseCommand):
         email = getattr(settings, "DJANGO_SUPERUSER_EMAIL", "admin@example.com")
         password = getattr(settings, "DJANGO_SUPERUSER_PASSWORD", "changeme")
 
-        # If you want to set role explicitly:
-        extra_fields = {"role": "admin"}
+        extra_fields = {"role": "super_admin"}
 
         if not User.objects.filter(email=email).exists():
             User.objects.create_superuser(

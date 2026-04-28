@@ -1,7 +1,8 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
+from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 
 from Events.models.event_registration_model import EventRegistrationField
@@ -37,6 +38,32 @@ from utils.swagger import (
     query_param,
 )
 
+
+FIELD_PERMISSION_MANAGER_ROLES = {"admin", "super_admin", "department_head"}
+
+
+class LegacyEventFieldPermissionAPIView(APIView):
+    """
+    Guards legacy event-field permission endpoints.
+
+    Users may read their own allowed-fields data. Admin, super admin, and
+    department head users may read or mutate permission grants.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+
+        if request.user.role in FIELD_PERMISSION_MANAGER_ROLES:
+            return
+
+        target_user_id = kwargs.get("user_pk")
+        if request.method in SAFE_METHODS and target_user_id and str(request.user.id) == str(target_user_id):
+            return
+
+        raise PermissionDenied("You don't have permission to manage field permissions.")
+
 # ─── EventField permissions ────────────────────────────────────────────
 
 
@@ -59,8 +86,7 @@ from utils.swagger import (
         ),
     }
 )
-class UserEventEventFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventEventFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -115,8 +141,7 @@ class UserEventEventFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventEventFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventEventFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -181,8 +206,7 @@ class UserEventEventFieldPermAddRemoveAPIView(APIView):
         ),
     }
 )
-class UserEventGuestFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventGuestFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -239,8 +263,7 @@ class UserEventGuestFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventGuestFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventGuestFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -305,8 +328,7 @@ class UserEventGuestFieldPermAddRemoveAPIView(APIView):
         ),
     }
 )
-class UserEventSessionFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventSessionFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -368,8 +390,7 @@ class UserEventSessionFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventSessionFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventSessionFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -436,8 +457,7 @@ class UserEventSessionFieldPermAddRemoveAPIView(APIView):
         ),
     }
 )
-class UserEventTravelDetailFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventTravelDetailFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -507,8 +527,7 @@ class UserEventTravelDetailFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventTravelDetailFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventTravelDetailFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -584,8 +603,7 @@ class UserEventTravelDetailFieldPermAddRemoveAPIView(APIView):
         ),
     }
 )
-class UserEventEventRegistrationFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventEventRegistrationFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -654,8 +672,7 @@ class UserEventEventRegistrationFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventEventRegistrationFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventEventRegistrationFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -731,8 +748,7 @@ class UserEventEventRegistrationFieldPermAddRemoveAPIView(APIView):
         ),
     }
 )
-class UserEventAccommodationFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventAccommodationFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     def get(self, request, event_pk, user_pk):
         try:
@@ -801,8 +817,7 @@ class UserEventAccommodationFieldPermsAPIView(APIView):
         ),
     }
 )
-class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventAccommodationFieldPermAddRemoveAPIView(LegacyEventFieldPermissionAPIView):
 
     def post(self, request, event_pk, user_pk):
         try:
@@ -869,8 +884,7 @@ class UserEventAccommodationFieldPermAddRemoveAPIView(APIView):
         )
     }
 )
-class UserEventAssignAllFieldPermsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventAssignAllFieldPermsAPIView(LegacyEventFieldPermissionAPIView):
 
     """
     POST /events/{event_pk}/users/{user_pk}/set-all-field-perms/
@@ -1063,8 +1077,7 @@ class UserEventAssignAllFieldPermsAPIView(APIView):
         )
     }
 )
-class UserEventAllAllowedFieldsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class UserEventAllAllowedFieldsAPIView(LegacyEventFieldPermissionAPIView):
 
     """
     GET /events/<event_pk>/users/<user_pk>/allowed-fields/

@@ -12,8 +12,8 @@ class Command(BaseCommand):
         email = os.getenv("DJANGO_SUPERUSER_EMAIL")
         password = os.getenv("DJANGO_SUPERUSER_PASSWORD")
         role = os.getenv(
-            "DJANGO_SUPERUSER_ROLE", "staff"
-        )  # Default to 'staff' if not set
+            "DJANGO_SUPERUSER_ROLE", "super_admin"
+        )
         name = os.getenv("DJANGO_SUPERUSER_NAME", "")
         phone = os.getenv("DJANGO_SUPERUSER_PHONE", "")
 
