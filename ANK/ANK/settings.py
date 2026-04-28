@@ -113,6 +113,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "ANK.middleware.ApiSlashMiddleware",
     "ANK.middleware.JsonErrorMiddleware",
+    "ANK.rate_limit.RateLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -147,10 +148,36 @@ if USE_JWT:
             "rest_framework.permissions.IsAuthenticated",
         ],
         "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.AnonRateThrottle",
+            "rest_framework.throttling.UserRateThrottle",
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "anon": os.getenv("DRF_THROTTLE_ANON", "120/min"),
+            "user": os.getenv("DRF_THROTTLE_USER", "1200/min"),
+            "auth": os.getenv("DRF_THROTTLE_AUTH", "10/min"),
+            "public": os.getenv("DRF_THROTTLE_PUBLIC", "100/hour"),
+            "download": os.getenv("DRF_THROTTLE_DOWNLOAD", "30/min"),
+            "import": os.getenv("DRF_THROTTLE_IMPORT", "10/hour"),
+        },
     }
 else:
     REST_FRAMEWORK = {
         "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.AnonRateThrottle",
+            "rest_framework.throttling.UserRateThrottle",
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "anon": os.getenv("DRF_THROTTLE_ANON", "120/min"),
+            "user": os.getenv("DRF_THROTTLE_USER", "1200/min"),
+            "auth": os.getenv("DRF_THROTTLE_AUTH", "10/min"),
+            "public": os.getenv("DRF_THROTTLE_PUBLIC", "100/hour"),
+            "download": os.getenv("DRF_THROTTLE_DOWNLOAD", "30/min"),
+            "import": os.getenv("DRF_THROTTLE_IMPORT", "10/hour"),
+        },
     }
 
 SIMPLE_JWT = {
@@ -245,7 +272,7 @@ ALLOWED_HOSTS = hosts_env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,192.168.1
 if "*" in ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["*"]
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = get_bool_env("DJANGO_CORS_ALLOW_ALL_ORIGINS", DEBUG)
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = csv_env(
     "DJANGO_CORS_ALLOWED_ORIGINS",
@@ -313,6 +340,8 @@ else:
     CSRF_COOKIE_SECURE = True
     CSRF_COOKIE_DOMAIN = ".anewknot.com"
     SECURE_SSL_REDIRECT = False
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 7
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
@@ -337,3 +366,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ---------------------------
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024))
+FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("FILE_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024))
+RATE_LIMIT_ENABLED = get_bool_env("RATE_LIMIT_ENABLED", True)
+ALLOW_PUBLIC_REGISTRATION = get_bool_env("ALLOW_PUBLIC_REGISTRATION", DEBUG)

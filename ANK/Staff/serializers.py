@@ -30,6 +30,21 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
+    def validate(self, attrs):
+        role = attrs.get("role", getattr(self.instance, "role", "staff"))
+
+        if role == "department_head":
+            department = attrs.get(
+                "department",
+                getattr(self.instance, "department", None),
+            )
+            if department is None:
+                raise serializers.ValidationError(
+                    {"department": "Department is required for department heads."}
+                )
+
+        return attrs
+
     def create(self, validated_data):
         pwd = validated_data.pop("password", None)
         role = validated_data.pop("role", "staff")

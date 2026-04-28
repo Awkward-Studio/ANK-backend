@@ -320,6 +320,7 @@ class GuestDetail(DepartmentAccessMixin, APIView):
 
 class BulkGuestUploadAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "import"
 
     """
     POST /api/guest-list/{event_id}/upload-guests-csv/
@@ -333,8 +334,10 @@ class BulkGuestUploadAPIView(APIView):
         try:
             event = Event.objects.get(pk=event_id)
             csv_file = request.FILES["file"]
-            if not csv_file.name.endswith(".csv"):
+            if not csv_file.name.lower().endswith(".csv"):
                 return Response({"detail": "Please upload a CSV file."}, status=400)
+            if csv_file.size > 5 * 1024 * 1024:
+                return Response({"detail": "CSV file is too large. Maximum size is 5 MB."}, status=400)
 
             # Parse booleans from form data or query params
             def parse_bool(val, default=False):

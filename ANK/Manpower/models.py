@@ -1,9 +1,12 @@
 import uuid
+import logging
 from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 class Skill(models.Model):
@@ -402,8 +405,8 @@ class PostEventAdjustment(models.Model):
                     
                     if date_changed:
                         alloc.save(update_fields=['start_date', 'end_date'])
-            except Exception as e:
-                print(f"Error syncing allocation dates: {e}")
+            except Exception:
+                logger.exception("Error syncing allocation dates for adjustment %s", self.pk)
 
         # 3. Sync worked status for meals BEFORE calculating total
         if is_new or self.actual_days_worked != old_actual_days_worked or self.engagement_periods != old_engagement_periods:

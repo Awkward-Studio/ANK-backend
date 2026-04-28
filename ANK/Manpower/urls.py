@@ -27,6 +27,7 @@ from .views import (
     InvoiceWorkflowList,
     InvoiceWorkflowDetail,
     invoice_transition,
+    download_invoices_zip,
     issue_adjustment_secure_link,
     public_adjustment_interaction,
     ManpowerAuditLogList,
@@ -90,6 +91,7 @@ urlpatterns = [
 
     # Invoices
     path("invoices/", InvoiceWorkflowList.as_view(), name="invoice-list"),
+    path("invoices/download/", download_invoices_zip, name="invoice-bulk-download"),
     path("invoices/<uuid:pk>/", InvoiceWorkflowDetail.as_view(), name="invoice-detail"),
     path("invoices/<uuid:pk>/status/", invoice_transition, name="invoice-transition"),
 

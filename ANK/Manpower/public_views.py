@@ -1,11 +1,9 @@
 import uuid
 import io
-import os
 import logging
 from django.utils import timezone
 from django.core.files.base import ContentFile
 from django.http import HttpResponse
-from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -63,11 +61,6 @@ def num2words_indian(number):
 
 class INVOICE_PDF(FPDF):
     def header(self):
-        # Logo
-        logo_path = os.path.join(settings.BASE_DIR, "static", "ank_logo_orange.png")
-        if os.path.exists(logo_path):
-            self.image(logo_path, x=self.l_margin, y=10, w=40)
-
         self.set_font("helvetica", "B", 10)
         self.set_text_color(150)
         self.set_x(self.l_margin)

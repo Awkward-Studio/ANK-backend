@@ -12,7 +12,7 @@ from django.conf import settings
 
 # 1. Update/Create Business Account
 waba_id = "910991641872001"
-system_token = "EAAWufBTFZADEBQUZB1xh1JKtKEPNx8rMko4P2FabP5mXVJT9or5Jw430mm5oqYuoDhCPasFqd1TsDP0VEWNlE4YZB5z63iFNq83vyDkKA8ngqUgBTwBiTQ9FnsU1Uu6WzkrDWl01ApwPeTgmrsZBMhQBIOciTHS12bwtjHf00nWu1vKca34zNikJi5nCkYMLSwZDZD"
+system_token = os.getenv("WHATSAPP_SYSTEM_TOKEN", "")
 
 waba, created = WhatsAppBusinessAccount.objects.update_or_create(
     waba_id=waba_id,
@@ -24,9 +24,12 @@ waba, created = WhatsAppBusinessAccount.objects.update_or_create(
 
 # Store the token (Note: Requires WHATSAPP_ENCRYPTION_KEY in settings)
 try:
-    waba.set_token(system_token)
-    waba.save()
-    print(f"✅ WABA {waba_id} updated with token.")
+    if system_token:
+        waba.set_token(system_token)
+        waba.save()
+        print(f"✅ WABA {waba_id} updated with token.")
+    else:
+        print("WHATSAPP_SYSTEM_TOKEN not set; skipping token storage.")
 except Exception as e:
     print(f"⚠️ Could not encrypt token (check WHATSAPP_ENCRYPTION_KEY): {e}")
 

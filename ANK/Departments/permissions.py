@@ -3,13 +3,28 @@ Permission checking utilities for RBAC system.
 """
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
-from Departments.models import DepartmentModelAccess, ModelPermission, EventDepartment
+from django.db.models import Q
+from Departments.models import (
+    DepartmentModelAccess,
+    ModelPermission,
+    EventDepartment,
+    EventHeadAssignment,
+)
 
 
 class PermissionChecker:
     """
     Utility class for checking permissions.
     """
+
+    @staticmethod
+    def is_event_head(user, event):
+        """
+        Return True when the user has full access for one specific event.
+        """
+        if not user or not event or not getattr(user, "is_authenticated", False):
+            return False
+        return EventHeadAssignment.objects.filter(user=user, event=event).exists()
     
     @staticmethod
     def can_access_model(user, event_department, model_class):
@@ -24,7 +39,10 @@ class PermissionChecker:
         Returns:
             bool: True if user can access the model, False otherwise
         """
-        if user.role in ['super_admin', 'admin']:
+        if user.role in ['super_admin', 'admin', 'department_head']:
+            return True
+
+        if PermissionChecker.is_event_head(user, event_department.event):
             return True
         
         dept = event_department.department
@@ -51,7 +69,10 @@ class PermissionChecker:
         Returns:
             bool: True if user has the required permission, False otherwise
         """
-        if user.role in ['super_admin', 'admin']:
+        if user.role in ['super_admin', 'admin', 'department_head']:
+            return True
+
+        if PermissionChecker.is_event_head(user, event_department.event):
             return True
         
         model_type = ContentType.objects.get_for_model(model_class)
@@ -84,52 +105,14 @@ class PermissionChecker:
         Returns:
             set: Set of allowed field names, or None if super_admin/admin (all fields)
         """
-        if user.role in ['super_admin', 'admin']:
+        if user.role in ['super_admin', 'admin', 'department_head']:
+            # Department heads are scoped managers and see all fields by default.
+            # Granular field-level restrictions for department heads are not
+            # currently enforced; only staff use the configured field permissions.
             return None  # All fields
-        
-        # For department heads: check their department's model access
-        if user.role == 'department_head' and user.department:
-            # Get event departments for this department
-            event_departments = EventDepartment.objects.filter(
-                event=event,
-                department=user.department
-            )
-            
-            if not event_departments.exists():
-                # Check if department has model-level access (but no event_department yet)
-                model_type = ContentType.objects.get_for_model(model_class)
-                has_model_access = DepartmentModelAccess.objects.filter(
-                    department=user.department,
-                    content_type=model_type,
-                    can_read=True
-                ).exists()
-                
-                if has_model_access:
-                    # Department has model access, return None to show all fields
-                    # (field-level permissions will be checked separately if they exist)
-                    return None
-                else:
-                    return set()  # No access
-            
-            # Get field-level permissions if they exist
-            model_type = ContentType.objects.get_for_model(model_class)
-            permissions = ModelPermission.objects.filter(
-                user=user,
-                event_department__in=event_departments,
-                content_type=model_type
-            ).values_list('field_name', flat=True).distinct()
-            
-            # If no field-level permissions, check model access
-            if not permissions.exists():
-                has_model_access = DepartmentModelAccess.objects.filter(
-                    department=user.department,
-                    content_type=model_type,
-                    can_read=True
-                ).exists()
-                if has_model_access:
-                    return None  # All fields accessible at model level
-            
-            return set(permissions)
+
+        if PermissionChecker.is_event_head(user, event):
+            return None
         
         # For staff: only from event_departments they're assigned to
         event_departments = EventDepartment.objects.filter(
@@ -166,9 +149,10 @@ class PermissionChecker:
             # Admin and Dept Head see all events
             return Event.objects.all()
         
-        # Staff: Only events via EventDepartmentStaffAssignment
+        # Staff: events via department assignment or event-head assignment.
         return Event.objects.filter(
-            event_departments__staff_assignments__user=user
+            Q(event_departments__staff_assignments__user=user)
+            | Q(event_head_assignments__user=user)
         ).distinct()
     
     @staticmethod
@@ -191,9 +175,9 @@ class PermissionChecker:
             # Department heads see all sessions
             return Session.objects.all()
         
-        # Staff: Sessions belong to events, so event access = session access
+        # Staff: Sessions belong to events, so event access = session access.
         return Session.objects.filter(
-            event__event_departments__staff_assignments__user=user
+            event__in=PermissionChecker.get_user_accessible_events(user)
         ).distinct()
 
 

@@ -40,6 +40,7 @@ class TravelDetailSerializer(PermissionAwareSerializer, CustomFieldMixin, serial
             "flight_number",
             "airline",
             "pnr",
+            "terminal",
             "custom_fields",
         ]
 

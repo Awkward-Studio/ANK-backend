@@ -8,7 +8,10 @@ from Events.views.staff_event_fields_permissions_views import (
     UserEventAllAllowedFieldsAPIView,
     UserEventEventFieldPermsAPIView,
 )
+from Staff.serializers import UserSerializer
 from Staff.views import UserDetail, UserList
+from Departments.models import Department
+from Departments.permissions import PermissionChecker
 
 User = get_user_model()
 
@@ -54,6 +57,10 @@ class RoleAuthorizationTestCase(TestCase):
         self.event_field, _ = EventField.objects.get_or_create(
             name="venue",
             defaults={"label": "Venue"},
+        )
+        self.department = Department.objects.create(
+            name="Hospitality",
+            slug="hospitality",
         )
 
     def test_staff_cannot_list_users(self):
@@ -108,6 +115,112 @@ class RoleAuthorizationTestCase(TestCase):
 
         self.assertEqual(admin_response.status_code, 201)
         self.assertEqual(staff_response.status_code, 403)
+
+    def test_department_head_requires_department_on_create(self):
+        serializer = UserSerializer(data={
+            "email": "new-head@example.com",
+            "password": "password123",
+            "name": "New Department Head",
+            "role": "department_head",
+        })
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("department", serializer.errors)
+
+    def test_department_head_accepts_department_on_create(self):
+        serializer = UserSerializer(data={
+            "email": "valid-head@example.com",
+            "password": "password123",
+            "name": "Valid Department Head",
+            "role": "department_head",
+            "department": str(self.department.id),
+        })
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_staff_cannot_be_promoted_to_department_head_without_department(self):
+        serializer = UserSerializer(
+            self.staff,
+            data={"role": "department_head", "department": None},
+            partial=True,
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("department", serializer.errors)
+
+    def test_department_head_allowed_fields_returns_full_model_access(self):
+        """A department_head must get full model_access from the
+        allowed-fields endpoint even without DepartmentModelAccess rows,
+        so the frontend can render every event tab."""
+        head = User.objects.create_user(
+            email="dept-head-perms@example.com",
+            password="password",
+            name="Dept Head Perms",
+            role="department_head",
+            department=self.department,
+        )
+
+        request = self.factory.get(
+            f"/api/events/{self.event.id}/users/{head.id}/allowed-fields/"
+        )
+        force_authenticate(request, user=head)
+        response = UserEventAllAllowedFieldsAPIView.as_view()(
+            request, event_pk=self.event.id, user_pk=head.id
+        )
+
+        self.assertEqual(response.status_code, 200)
+        model_access = response.data.get("model_access", {})
+        self.assertTrue(model_access, "model_access should not be empty for dept head")
+        for model_name in [
+            "event",
+            "guest",
+            "session",
+            "traveldetail",
+            "accommodation",
+            "eventregistration",
+        ]:
+            access = model_access.get(model_name, {})
+            self.assertTrue(
+                access.get("can_read"),
+                f"department_head should be able to read {model_name}",
+            )
+            self.assertTrue(
+                access.get("can_write"),
+                f"department_head should be able to write {model_name}",
+            )
+
+    def test_department_head_permission_checker_returns_all_fields(self):
+        """PermissionChecker.get_user_allowed_fields must treat
+        department_head as full-field access without per-field config."""
+        head = User.objects.create_user(
+            email="dept-head-checker@example.com",
+            password="password",
+            name="Dept Head Checker",
+            role="department_head",
+            department=self.department,
+        )
+
+        from Events.models.event_model import Event as EventModel
+
+        allowed = PermissionChecker.get_user_allowed_fields(
+            head, self.event, EventModel
+        )
+        self.assertIsNone(
+            allowed,
+            "Department heads should not be restricted to a subset of fields",
+        )
+
+    def test_department_head_sees_all_events(self):
+        head = User.objects.create_user(
+            email="dept-head-events@example.com",
+            password="password",
+            name="Dept Head Events",
+            role="department_head",
+            department=self.department,
+        )
+
+        accessible = PermissionChecker.get_user_accessible_events(head)
+        self.assertTrue(accessible.filter(id=self.event.id).exists())
 
     def test_staff_can_read_only_their_own_legacy_allowed_fields(self):
         view = UserEventAllAllowedFieldsAPIView.as_view()

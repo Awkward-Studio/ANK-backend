@@ -1,11 +1,14 @@
 import uuid
+import io
+import zipfile
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import status, filters, generics
 from rest_framework.views import APIView
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from django.shortcuts import get_object_or_404
 from django.db.models import Sum, Count, F, Avg, Q
 from django.db import transaction
@@ -55,8 +58,13 @@ from .serializers import (
     ManpowerSettingsSerializer,
     SkillSerializer,
 )
+from .public_views import generate_invoice_pdf
 
 ADMIN_ROLES = {"admin", "super_admin"}
+
+
+class DownloadRateThrottle(ScopedRateThrottle):
+    scope = "download"
 
 
 def _has_any_role(request, allowed_roles):
@@ -73,7 +81,7 @@ def _require_role(request, allowed_roles):
 
 
 def _get_accounts_event_ids_for_user(user):
-    from Departments.models import EventDepartment
+    from Departments.models import EventDepartment, EventHeadAssignment
 
     if user.role in ADMIN_ROLES:
         return None  # Global access
@@ -86,13 +94,17 @@ def _get_accounts_event_ids_for_user(user):
             )
         )
 
-    # Staff get access via explicit event-department assignment in Accounts department.
-    return set(
+    # Staff get access via explicit Accounts assignment or event-head assignment.
+    accounts_event_ids = set(
         EventDepartment.objects.filter(
             department__slug="accounts",
             staff_assignments__user=user,
         ).values_list("event_id", flat=True)
     )
+    event_head_ids = set(
+        EventHeadAssignment.objects.filter(user=user).values_list("event_id", flat=True)
+    )
+    return accounts_event_ids | event_head_ids
 
 
 def _filter_to_accounts_scope(request, qs, event_field):
@@ -117,9 +129,12 @@ def _require_accounts_access(request):
 
 
 def _can_manage_manpower_event(user, event_id):
-    from Departments.models import EventDepartment
+    from Departments.models import EventDepartment, EventHeadAssignment
 
     if user.role in ADMIN_ROLES:
+        return True
+
+    if EventHeadAssignment.objects.filter(user=user, event_id=event_id).exists():
         return True
 
     if user.role == "department_head" and user.department and user.department.slug == "accounts":
@@ -1985,6 +2000,58 @@ def invoice_transition(request, pk):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([DownloadRateThrottle])
+def download_invoices_zip(request):
+    denied = _require_accounts_access(request)
+    if denied:
+        return denied
+
+    ids = request.data.get("ids") or []
+    status_filter = request.data.get("status")
+
+    qs = InvoiceWorkflow.objects.select_related(
+        "freelancer",
+        "event",
+        "event_department__department",
+        "adjustment__allocation__cost_sheet",
+    )
+    qs = _filter_to_accounts_scope(request, qs, "event_id")
+
+    if ids:
+        qs = qs.filter(id__in=ids)
+    if status_filter:
+        if status_filter not in dict(InvoiceWorkflow.STATUS_CHOICES):
+            return Response({"detail": "Invalid invoice status."}, status=status.HTTP_400_BAD_REQUEST)
+        qs = qs.filter(status=status_filter)
+
+    invoices = list(qs.order_by("event__name", "invoice_number"))
+    if not invoices:
+        return Response({"detail": "No invoices found for download."}, status=status.HTTP_404_NOT_FOUND)
+
+    archive = io.BytesIO()
+    skipped = []
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for invoice in invoices:
+            try:
+                pdf_content = generate_invoice_pdf(invoice)
+                event_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in (invoice.event.name or "Event")).strip()
+                invoice_no = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in invoice.invoice_number)
+                zf.writestr(f"{event_name}/{invoice_no}.pdf", pdf_content)
+            except Exception as exc:
+                skipped.append(f"{invoice.invoice_number}: {exc}")
+
+        if skipped:
+            zf.writestr("skipped-invoices.txt", "\n".join(skipped))
+
+    archive.seek(0)
+    suffix = status_filter or "selected"
+    response = HttpResponse(archive.getvalue(), content_type="application/zip")
+    response["Content-Disposition"] = f'attachment; filename="manpower-invoices-{suffix}.zip"'
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def issue_adjustment_secure_link(request, allocation_id):
     allocation = get_object_or_404(FreelancerAllocation, pk=allocation_id)
     denied = _require_manpower_event_access(request, allocation.event_department.event_id)
@@ -2296,6 +2363,7 @@ class ManpowerTemplateExportAPIView(APIView):
 
 class ManpowerBulkImportAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = "import"
 
     def post(self, request, event_id):
         from Events.models.event_model import Event
@@ -2313,8 +2381,10 @@ class ManpowerBulkImportAPIView(APIView):
             return denied
 
         excel_file = request.FILES.get("file")
-        if not excel_file or not excel_file.name.endswith(".xlsx"):
+        if not excel_file or not excel_file.name.lower().endswith(".xlsx"):
             return Response({"detail": "Please upload a valid .xlsx file."}, status=status.HTTP_400_BAD_REQUEST)
+        if excel_file.size > 5 * 1024 * 1024:
+            return Response({"detail": "Excel file is too large. Maximum size is 5 MB."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             wb = openpyxl.load_workbook(excel_file, data_only=True)
@@ -2481,8 +2551,7 @@ class ManpowerBulkImportAPIView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            import traceback
-            print(traceback.format_exc())
+            logger.exception("Manpower bulk import failed")
             return Response(
                 {"detail": f"Error parsing excel file: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST

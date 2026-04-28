@@ -109,8 +109,8 @@ urlpatterns = [
 ]
 
 
-# Serve media files in all environments for now to fix the 404
-urlpatterns += [
-    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
-]
+if settings.DEBUG or getattr(settings, "SERVE_MEDIA_FILES", False):
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    ]
 

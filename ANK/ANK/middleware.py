@@ -2,6 +2,9 @@ from django.http import JsonResponse
 from django.conf import settings
 from django.urls import resolve, Resolver404
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ApiSlashMiddleware:
     """
@@ -20,7 +23,7 @@ class ApiSlashMiddleware:
                 # Internally update the path if it resolves with a slash
                 resolve(path_with_slash)
                 request.path_info = path_with_slash
-                print(f"INTERNAL URL REWRITE: {request.method} {original_path} -> {path_with_slash} (No Redirect)")
+                logger.debug("Internal API URL rewrite: %s %s -> %s", request.method, original_path, path_with_slash)
             except:
                 pass
         
@@ -39,7 +42,13 @@ class JsonErrorMiddleware:
         
         # Log redirects for /api/ paths to help debug remaining issues
         if request.path.startswith('/api/') and 300 <= response.status_code < 400:
-            print(f"REDIRECT STILL OCCURRING: {request.method} {request.path} -> {response.get('Location', 'Unknown')} (Status: {response.status_code})")
+            logger.warning(
+                "API redirect still occurring: %s %s -> %s (status=%s)",
+                request.method,
+                request.path,
+                response.get('Location', 'Unknown'),
+                response.status_code,
+            )
 
         # Force JSON for errors on /api/ paths
         if request.path.startswith('/api/') and response.status_code >= 400:

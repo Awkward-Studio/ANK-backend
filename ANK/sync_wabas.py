@@ -18,7 +18,7 @@ data = [
     {"name": "Aashreen & Shaurya", "phone_id": "403963616127926", "waba_id": "337583966111129", "number": "+919769600802"},
 ]
 
-system_token = "EAAWufBTFZADEBQUZB1xh1JKtKEPNx8rMko4P2FabP5mXVJT9or5Jw430mm5oqYuoDhCPasFqd1TsDP0VEWNlE4YZB5z63iFNq83vyDkKA8ngqUgBTwBiTQ9FnsU1Uu6WzkrDWl01ApwPeTgmrsZBMhQBIOciTHS12bwtjHf00nWu1vKca34zNikJi5nCkYMLSwZDZD"
+system_token = os.getenv("WHATSAPP_SYSTEM_TOKEN", "")
 
 print("--- Syncing WhatsApp Business Accounts ---")
 

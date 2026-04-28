@@ -445,7 +445,11 @@ def message_logs(request):
     log.info(f"[API-LOGS] Fetching logs. Rid: {rid}, Eid: {eid}, Recipient: {recipient_id}, Sender: {sender_id}. Total matches: {queryset.count()}")
 
     paginator = PageNumberPagination()
-    paginator.page_size = int(request.GET.get("limit", 20))
+    try:
+        requested_limit = int(request.GET.get("limit", 20))
+    except (TypeError, ValueError):
+        requested_limit = 20
+    paginator.page_size = max(1, min(requested_limit, 100))
     result_page = paginator.paginate_queryset(queryset, request)
     serializer = WhatsAppMessageLogSerializer(result_page, many=True)
     return paginator.get_paginated_response(serializer.data)

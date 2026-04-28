@@ -140,6 +140,39 @@ class EventDepartmentStaffAssignment(models.Model):
         return f"{self.user_id} -> {self.event_department_id} ({self.role})"
 
 
+class EventHeadAssignment(models.Model):
+    """
+    Event-scoped full-access assignment.
+
+    This is intentionally separate from User.role so a person can be the head
+    of one event without receiving broader access elsewhere.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="event_head_assignments"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="event_head_assignments"
+    )
+
+    assigned_on = models.DateTimeField(auto_now_add=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("event", "user")]
+        indexes = [
+            models.Index(fields=["event", "user"]),
+            models.Index(fields=["user", "event"]),
+        ]
+        ordering = ["event_id", "user_id"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} -> {self.event_id} (event head)"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Budget sheet line item (attached ONLY to EventDepartment)
 # Tax is always percent: keep ONLY tax_rate_pct

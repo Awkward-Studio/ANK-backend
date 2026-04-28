@@ -8,6 +8,8 @@ from Departments.views import (
     EventDepartmentStaffAssignmentList,
     EventDepartmentStaffAssignmentDetail,
     StaffAssignmentsByEventDepartmentAPIView,
+    EventHeadAssignmentList,
+    EventHeadAssignmentDetail,
     BudgetLineItemList,
     BudgetLineItemDetail,
     BudgetItemsByEventDepartmentAPIView,
@@ -75,6 +77,12 @@ urlpatterns = [
         "event-departments/<uuid:pk>/staff/",
         StaffAssignmentsByEventDepartmentAPIView.as_view(),
         name="eventdepartment-staff-list",
+    ),
+    path("event-heads/", EventHeadAssignmentList.as_view(), name="eventheads-list"),
+    path(
+        "event-heads/<uuid:pk>/",
+        EventHeadAssignmentDetail.as_view(),
+        name="eventheads-detail",
     ),
     # ─── Budget Line Items ──────────────────────────────────────────────────
     path("budget-items/", BudgetLineItemList.as_view(), name="budgetitems-list"),
