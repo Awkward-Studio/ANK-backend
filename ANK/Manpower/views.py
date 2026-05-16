@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from django.shortcuts import get_object_or_404
 from django.db.models import Sum, Count, F, Avg, Q
-from django.db import transaction
+from django.db import models, transaction
 from django.http import HttpResponse, Http404
 from decimal import Decimal
 import openpyxl
@@ -2241,7 +2241,7 @@ class ManpowerTemplateExportAPIView(APIView):
         from Events.models.event_model import Event
         from Departments.models import EventDepartment
         
-        template_type = request.query_params.get("type", "requirement") # 'requirement' or 'allocation'
+        template_type = request.query_params.get("type", "requirement") # 'requirement', 'allocation', or 'manpower'
 
         try:
             event = Event.objects.get(pk=event_id)
@@ -2258,7 +2258,101 @@ class ManpowerTemplateExportAPIView(APIView):
         # Legend Sheet
         ws_legend = wb.create_sheet(title="Legend")
         
-        if template_type == "requirement":
+        if template_type in ("manpower", "combined"):
+            ws.title = "Manpower"
+            headers = [
+                "Requirement ID",
+                "Allocation ID",
+                "Name",
+                "Event Department",
+                "Skill",
+                "Location",
+                "Quantity Required",
+                "Requirement Start Date (YYYY-MM-DD)",
+                "Requirement End Date (YYYY-MM-DD)",
+                "Requirement Extra (TRUE/FALSE)",
+                "Freelancer",
+                "Negotiated Rate",
+                "Allocation Start Date (YYYY-MM-DD)",
+                "Allocation End Date (YYYY-MM-DD)",
+                "Allocation Extra (TRUE/FALSE)",
+            ]
+            ws.append(headers)
+
+            depts = EventDepartment.objects.filter(event=event).select_related("department")
+            dept_names = [d.department.name for d in depts]
+            skills = Skill.objects.all().order_by("name")
+            skill_names = [s.name for s in skills]
+            freelancers = Freelancer.objects.filter(is_active=True).order_by("name")
+            freelancer_names = [f.name for f in freelancers]
+
+            ws_legend.append(["Departments", "Skills", "Freelancers", "Booleans"])
+            max_rows = max(len(dept_names), len(skill_names), len(freelancer_names), 2)
+            for i in range(max_rows):
+                ws_legend.append([
+                    dept_names[i] if i < len(dept_names) else "",
+                    skill_names[i] if i < len(skill_names) else "",
+                    freelancer_names[i] if i < len(freelancer_names) else "",
+                    ["TRUE", "FALSE"][i] if i < 2 else "",
+                ])
+
+            if dept_names:
+                dv_dept = DataValidation(type="list", formula1=f"Legend!$A$2:$A${len(dept_names)+1}", allow_blank=False)
+                ws.add_data_validation(dv_dept)
+                dv_dept.add("D2:D1000")
+            if skill_names:
+                dv_skill = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(skill_names)+1}", allow_blank=True)
+                ws.add_data_validation(dv_skill)
+                dv_skill.add("E2:E1000")
+            if freelancer_names:
+                dv_free = DataValidation(type="list", formula1=f"Legend!$C$2:$C${len(freelancer_names)+1}", allow_blank=True)
+                ws.add_data_validation(dv_free)
+                dv_free.add("K2:K1000")
+            dv_bool = DataValidation(type="list", formula1="Legend!$D$2:$D$3", allow_blank=True)
+            ws.add_data_validation(dv_bool)
+            dv_bool.add("J2:J1000")
+            dv_bool.add("O2:O1000")
+
+            requirements = (
+                ManpowerRequirement.objects
+                .filter(event_department__event=event)
+                .select_related("event_department__department", "skill")
+                .prefetch_related("allocations__freelancer", "allocations__cost_sheet")
+                .order_by("event_department__department__name", "name", "created_at")
+            )
+            for req in requirements:
+                req_values = [
+                    str(req.id),
+                    "",
+                    req.name,
+                    req.event_department.department.name,
+                    req.skill.name if req.skill else req.skill_category,
+                    req.location,
+                    req.quantity_required,
+                    req.start_date,
+                    req.end_date,
+                    "TRUE" if req.is_extra else "FALSE",
+                ]
+                allocations = list(req.allocations.exclude(status="released").select_related("freelancer", "cost_sheet").order_by("created_at"))
+                if not allocations:
+                    ws.append(req_values + ["", "", "", "", ""])
+                    continue
+
+                for allocation in allocations:
+                    cost_sheet = getattr(allocation, "cost_sheet", None) if hasattr(allocation, "cost_sheet") else None
+                    ws.append(req_values + [
+                        allocation.freelancer.name,
+                        cost_sheet.negotiated_rate if cost_sheet else "",
+                        allocation.start_date,
+                        allocation.end_date,
+                        "TRUE" if allocation.is_extra else "FALSE",
+                    ])
+                    ws.cell(row=ws.max_row, column=2).value = str(allocation.id)
+
+            ws.column_dimensions["A"].hidden = True
+            ws.column_dimensions["B"].hidden = True
+
+        elif template_type == "requirement":
             ws.title = "Requirements"
             headers = [
                 "Name",
@@ -2343,7 +2437,8 @@ class ManpowerTemplateExportAPIView(APIView):
             ws.add_data_validation(dv_bool)
             dv_bool.add("F2:F1000")
 
-        ws.append(headers)
+        if template_type not in ("manpower", "combined"):
+            ws.append(headers)
         for cell in ws[1]:
             cell.font = Font(bold=True)
             
@@ -2355,7 +2450,8 @@ class ManpowerTemplateExportAPIView(APIView):
             ws.column_dimensions[get_column_letter(i+1)].width = min(length + 2, 50)
 
         response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        filename = f"{template_type.capitalize()}_Template_{event.name.replace(' ', '_')}.xlsx"
+        filename_prefix = "Manpower" if template_type in ("manpower", "combined") else template_type.capitalize()
+        filename = f"{filename_prefix}_Template_{event.name.replace(' ', '_')}.xlsx"
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         wb.save(response)
         return response
@@ -2364,6 +2460,238 @@ class ManpowerTemplateExportAPIView(APIView):
 class ManpowerBulkImportAPIView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_scope = "import"
+
+    @staticmethod
+    def _normalize_header(value):
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _date_value(value):
+        import datetime
+        if isinstance(value, datetime.datetime):
+            return value.date()
+        if isinstance(value, datetime.date):
+            return value
+        if value in (None, ""):
+            return None
+        return models.DateField().to_python(value)
+
+    @staticmethod
+    def _decimal_value(value, default="0.00"):
+        if value in (None, ""):
+            return Decimal(default)
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal(default)
+
+    @staticmethod
+    def _bool_value(value):
+        return str(value or "").strip().upper() == "TRUE"
+
+    @staticmethod
+    def _planned_days(start, end):
+        if not start or not end:
+            return Decimal("1.0")
+        try:
+            delta = (end - start).days + 1
+            return Decimal(str(delta if delta > 0 else 1))
+        except Exception:
+            return Decimal("1.0")
+
+    @staticmethod
+    def _allocation_is_protected(allocation):
+        latest_mou = allocation.mous.order_by("-created_at").first()
+        if latest_mou and latest_mou.status == "accepted":
+            return True
+        adjustment = allocation.adjustment if hasattr(allocation, "adjustment") else None
+        if adjustment:
+            if adjustment.freelancer_submitted_at:
+                return True
+            if adjustment.admin_approval_status == "approved":
+                return True
+            if hasattr(adjustment, "invoice_workflow"):
+                return True
+        return False
+
+    def _import_combined_manpower(
+        self,
+        ws,
+        request,
+        event,
+        event_id,
+        dept_map,
+        skill_map,
+        freelancer_map,
+    ):
+        headers = [self._normalize_header(cell.value) for cell in ws[1]]
+        column = {header: index for index, header in enumerate(headers) if header}
+
+        def value(row, name):
+            index = column.get(self._normalize_header(name))
+            if index is None or index >= len(row):
+                return None
+            return row[index]
+
+        created_reqs = 0
+        updated_reqs = 0
+        created_allocs = 0
+        updated_allocs = 0
+        errors = []
+
+        with transaction.atomic():
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                if not any(row):
+                    continue
+
+                try:
+                    req_id = value(row, "Requirement ID")
+                    allocation_id = value(row, "Allocation ID")
+                    req_name = value(row, "Name")
+                    dept_name = value(row, "Event Department")
+                    skill_name = value(row, "Skill")
+                    location = value(row, "Location")
+                    quantity = value(row, "Quantity Required")
+                    req_start = self._date_value(value(row, "Requirement Start Date (YYYY-MM-DD)"))
+                    req_end = self._date_value(value(row, "Requirement End Date (YYYY-MM-DD)"))
+                    req_is_extra = self._bool_value(value(row, "Requirement Extra (TRUE/FALSE)"))
+                    freelancer_name = value(row, "Freelancer")
+                    negotiated_rate = value(row, "Negotiated Rate")
+                    alloc_start = self._date_value(value(row, "Allocation Start Date (YYYY-MM-DD)"))
+                    alloc_end = self._date_value(value(row, "Allocation End Date (YYYY-MM-DD)"))
+                    alloc_is_extra = self._bool_value(value(row, "Allocation Extra (TRUE/FALSE)"))
+
+                    if not req_name:
+                        errors.append(f"Row {row_idx}: Requirement name is required.")
+                        continue
+                    if not dept_name:
+                        errors.append(f"Row {row_idx}: Department is required.")
+                        continue
+
+                    event_department = dept_map.get(str(dept_name).lower().strip())
+                    if not event_department:
+                        errors.append(f"Row {row_idx}: Invalid department '{dept_name}'.")
+                        continue
+
+                    skill = None
+                    skill_category = ""
+                    if skill_name:
+                        skill = skill_map.get(str(skill_name).lower().strip())
+                        skill_category = skill.name if skill else str(skill_name).strip()
+
+                    if not req_is_extra:
+                        lock_error = _check_lock_or_override(request, event_id)
+                        if lock_error:
+                            errors.append(f"Row {row_idx}: Event is locked.")
+                            continue
+
+                    quantity_required = int(quantity) if quantity else 1
+                    requirement_defaults = {
+                        "name": str(req_name).strip(),
+                        "event_department": event_department,
+                        "skill": skill,
+                        "skill_category": skill_category,
+                        "location": str(location).strip() if location else "",
+                        "quantity_required": quantity_required,
+                        "start_date": req_start,
+                        "end_date": req_end,
+                        "estimated_days": self._planned_days(req_start, req_end),
+                        "is_extra": req_is_extra,
+                    }
+
+                    if req_id:
+                        try:
+                            requirement = ManpowerRequirement.objects.get(pk=req_id, event_department__event=event)
+                        except ManpowerRequirement.DoesNotExist:
+                            errors.append(f"Row {row_idx}: Requirement ID '{req_id}' was not found for this event.")
+                            continue
+                        for field, field_value in requirement_defaults.items():
+                            setattr(requirement, field, field_value)
+                        requirement.save()
+                        updated_reqs += 1
+                    else:
+                        requirement = ManpowerRequirement.objects.create(**requirement_defaults)
+                        created_reqs += 1
+
+                    if not freelancer_name:
+                        continue
+
+                    freelancer = freelancer_map.get(str(freelancer_name).lower().strip())
+                    if not freelancer:
+                        errors.append(f"Row {row_idx}: Invalid freelancer '{freelancer_name}'. Requirement was imported, but allocation was not.")
+                        continue
+
+                    allocation = None
+                    if allocation_id:
+                        try:
+                            allocation = FreelancerAllocation.objects.get(pk=allocation_id, event_department__event=event)
+                        except FreelancerAllocation.DoesNotExist:
+                            errors.append(f"Row {row_idx}: Allocation ID '{allocation_id}' was not found for this event.")
+                            continue
+                    else:
+                        allocation = (
+                            FreelancerAllocation.objects
+                            .filter(requirement=requirement, freelancer=freelancer)
+                            .exclude(status="released")
+                            .first()
+                        )
+
+                    if allocation and self._allocation_is_protected(allocation):
+                        errors.append(
+                            f"Row {row_idx}: Allocation for '{freelancer_name}' is protected by accepted MoU/actuals/invoice workflow. Requirement updates were applied, allocation fields were skipped."
+                        )
+                        continue
+
+                    effective_start = alloc_start or requirement.start_date
+                    effective_end = alloc_end or requirement.end_date
+                    effective_is_extra = alloc_is_extra or req_is_extra
+
+                    if allocation:
+                        allocation.freelancer = freelancer
+                        allocation.event_department = requirement.event_department
+                        allocation.requirement = requirement
+                        allocation.start_date = effective_start
+                        allocation.end_date = effective_end
+                        allocation.is_extra = effective_is_extra
+                        allocation.save()
+                        updated_allocs += 1
+                    else:
+                        allocation = FreelancerAllocation.objects.create(
+                            freelancer=freelancer,
+                            event_department=requirement.event_department,
+                            requirement=requirement,
+                            status="soft_blocked",
+                            assigned_by=request.user,
+                            start_date=effective_start,
+                            end_date=effective_end,
+                            is_extra=effective_is_extra,
+                        )
+                        created_allocs += 1
+
+                    rate = self._decimal_value(negotiated_rate)
+                    days = self._planned_days(effective_start, effective_end)
+                    cost_sheet, _ = EventCostSheet.objects.get_or_create(
+                        allocation=allocation,
+                        defaults={
+                            "negotiated_rate": rate,
+                            "days_planned": days,
+                            "travel_costs": Decimal("0.00"),
+                        },
+                    )
+                    cost_sheet.negotiated_rate = rate
+                    cost_sheet.days_planned = days
+                    cost_sheet.save()
+
+                except Exception as e:
+                    errors.append(f"Row {row_idx}: {str(e)}")
+
+        return {
+            "created_requirements": created_reqs,
+            "updated_requirements": updated_reqs,
+            "created_allocations": created_allocs,
+            "updated_allocations": updated_allocs,
+            "errors": errors,
+        }
 
     def post(self, request, event_id):
         from Events.models.event_model import Event
@@ -2389,8 +2717,10 @@ class ManpowerBulkImportAPIView(APIView):
         try:
             wb = openpyxl.load_workbook(excel_file, data_only=True)
             
-            # Determine type if not provided in query params
-            if not import_type:
+            # Prefer the workbook shape over stale query params from older UI buttons.
+            if "Manpower" in wb.sheetnames:
+                import_type = "manpower"
+            elif not import_type:
                 if "Requirements" in wb.sheetnames:
                     import_type = "requirement"
                 elif "Allocations" in wb.sheetnames:
@@ -2398,7 +2728,10 @@ class ManpowerBulkImportAPIView(APIView):
                 else:
                     return Response({"detail": "Invalid template. Could not determine import type from sheet names."}, status=status.HTTP_400_BAD_REQUEST)
 
-            ws_name = "Requirements" if import_type == "requirement" else "Allocations"
+            if import_type in ("manpower", "combined"):
+                ws_name = "Manpower"
+            else:
+                ws_name = "Requirements" if import_type == "requirement" else "Allocations"
             if ws_name not in wb.sheetnames:
                 return Response({"detail": f"Invalid template. Sheet '{ws_name}' not found."}, status=status.HTTP_400_BAD_REQUEST)
                 
@@ -2411,8 +2744,44 @@ class ManpowerBulkImportAPIView(APIView):
             freelancer_map = {f.name.lower().strip(): f for f in Freelancer.objects.filter(is_active=True)}
             
             created_reqs = 0
+            updated_reqs = 0
             created_allocs = 0
+            updated_allocs = 0
             errors = []
+
+            if import_type in ("manpower", "combined"):
+                result = self._import_combined_manpower(
+                    ws=ws,
+                    request=request,
+                    event=event,
+                    event_id=event_id,
+                    dept_map=dept_map,
+                    skill_map=skill_map,
+                    freelancer_map=freelancer_map,
+                )
+                created_reqs = result["created_requirements"]
+                updated_reqs = result["updated_requirements"]
+                created_allocs = result["created_allocations"]
+                updated_allocs = result["updated_allocations"]
+                errors = result["errors"]
+
+                if errors:
+                    return Response({
+                        "detail": "Import completed with errors.",
+                        "created_requirements": created_reqs,
+                        "updated_requirements": updated_reqs,
+                        "created_allocations": created_allocs,
+                        "updated_allocations": updated_allocs,
+                        "errors": errors
+                    }, status=status.HTTP_207_MULTI_STATUS)
+
+                return Response({
+                    "detail": "Import successful.",
+                    "created_requirements": created_reqs,
+                    "updated_requirements": updated_reqs,
+                    "created_allocations": created_allocs,
+                    "updated_allocations": updated_allocs,
+                }, status=status.HTTP_200_OK)
 
             with transaction.atomic():
                 for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
@@ -2480,6 +2849,13 @@ class ManpowerBulkImportAPIView(APIView):
                             # specifically match a UUID format within parentheses at the end of the string
                             match = re.search(r'\(([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\)', str(req_str))
                             req_id = match.group(1) if match else None
+
+                            if not req_id:
+                                errors.append(
+                                    f"Row {row_idx}: Allocation-only imports require the requirement dropdown value with an ID. "
+                                    "For new requirement rows, use the Manpower single-sheet template instead."
+                                )
+                                continue
                             
                             try:
                                 req = ManpowerRequirement.objects.get(pk=req_id)
@@ -2540,14 +2916,18 @@ class ManpowerBulkImportAPIView(APIView):
                 return Response({
                     "detail": "Import completed with errors.",
                     "created_requirements": created_reqs,
+                    "updated_requirements": updated_reqs,
                     "created_allocations": created_allocs,
+                    "updated_allocations": updated_allocs,
                     "errors": errors
                 }, status=status.HTTP_207_MULTI_STATUS)
                 
             return Response({
                 "detail": "Import successful.",
                 "created_requirements": created_reqs,
-                "created_allocations": created_allocs
+                "updated_requirements": updated_reqs,
+                "created_allocations": created_allocs,
+                "updated_allocations": updated_allocs
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
