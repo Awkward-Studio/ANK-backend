@@ -394,6 +394,7 @@ def public_mou_interaction(request, token):
         # Fallback to requirement dates if allocation dates are missing
         start_date = mou.allocation.start_date
         end_date = mou.allocation.end_date
+        freelancer = mou.allocation.freelancer
         
         if (not start_date or not end_date) and mou.allocation.requirement:
             req = mou.allocation.requirement
@@ -407,6 +408,13 @@ def public_mou_interaction(request, token):
             "status": mou.status, 
             "template_data": mou.template_data,
             "freelancer_name": mou.allocation.freelancer.name, 
+            "id_type": freelancer.id_type,
+            "id_number": freelancer.id_number,
+            "bank_account_name": freelancer.bank_account_name,
+            "bank_name": freelancer.bank_name,
+            "bank_account_number": freelancer.bank_account_number,
+            "bank_branch": freelancer.bank_branch,
+            "bank_ifsc": freelancer.bank_ifsc,
             "requirement_name": mou.allocation.requirement.name if mou.allocation.requirement else None,
             "skill_category": mou.allocation.freelancer.skill_category,
             "event_name": mou.allocation.event_department.event.name, 
@@ -429,6 +437,20 @@ def public_mou_interaction(request, token):
         if action not in ["accept", "reject"]:
             return Response({"error": "Invalid action. Use 'accept' or 'reject'"}, status=status.HTTP_400_BAD_REQUEST)
         try:
+            freelancer = mou.allocation.freelancer
+            if action == "accept":
+                id_type = request.data.get("id_type")
+                id_number = request.data.get("id_number")
+                update_fields = []
+                if id_type in ["PAN", "AADHAR"]:
+                    freelancer.id_type = id_type
+                    update_fields.append("id_type")
+                if id_number is not None:
+                    freelancer.id_number = str(id_number).strip()
+                    update_fields.append("id_number")
+                if update_fields:
+                    freelancer.save(update_fields=update_fields)
+
             if action == "accept":
                 mou.status = "accepted"
                 mou.accepted_at = timezone.now()

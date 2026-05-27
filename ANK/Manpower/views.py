@@ -2107,6 +2107,7 @@ def public_adjustment_interaction(request, token):
     if request.method == "GET":
         from .serializers import AllocationDailyMealSerializer
         from Events.serializers.session_serializers import SessionSerializer
+        freelancer = adjustment.allocation.freelancer
         
         # Get sessions from requirement
         sessions_data = []
@@ -2118,6 +2119,10 @@ def public_adjustment_interaction(request, token):
                 "id": adjustment.id,
                 "event_name": adjustment.allocation.event_department.event.name,
                 "freelancer_name": adjustment.allocation.freelancer.name,
+                "bank_name": freelancer.bank_name,
+                "bank_account_number": freelancer.bank_account_number,
+                "bank_branch": freelancer.bank_branch,
+                "bank_ifsc": freelancer.bank_ifsc,
                 "is_editable": adjustment.allocation.is_adjustment_editable,
                 "planned_days": adjustment.allocation.cost_sheet.days_planned,
                 "planned_rate": adjustment.allocation.cost_sheet.negotiated_rate,
@@ -2151,12 +2156,24 @@ def public_adjustment_interaction(request, token):
         "other_adjustments",
         "override_negotiated_rate",
         "freelancer_comments",
+        "bank_name",
+        "bank_account_number",
+        "bank_branch",
+        "bank_ifsc",
     }
 
     updates = {k: v for k, v in request.data.items() if k in allowed_fields}
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
     ser.save(freelancer_submitted_at=timezone.now())
+    freelancer = adjustment.allocation.freelancer
+    freelancer_update_fields = []
+    for field in ["bank_name", "bank_account_number", "bank_branch", "bank_ifsc"]:
+        if field in updates:
+          setattr(freelancer, field, str(updates[field]).strip())
+          freelancer_update_fields.append(field)
+    if freelancer_update_fields:
+        freelancer.save(update_fields=freelancer_update_fields)
     _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 
