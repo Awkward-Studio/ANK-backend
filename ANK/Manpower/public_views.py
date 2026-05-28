@@ -18,6 +18,37 @@ from utils.swagger import (
 
 logger = logging.getLogger(__name__)
 
+SENSITIVE_PUBLIC_TEMPLATE_FIELDS = {
+    "id_number",
+    "bank_account_name",
+    "bank_name",
+    "bank_account_number",
+    "bank_branch",
+    "bank_ifsc",
+}
+
+
+def mask_public_value(value, visible=4):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if len(value) <= visible:
+        return "*" * len(value)
+    return f"{'*' * (len(value) - visible)}{value[-visible:]}"
+
+
+def safe_public_template_data(template_data):
+    if isinstance(template_data, list):
+        return [safe_public_template_data(item) for item in template_data]
+    if not isinstance(template_data, dict):
+        return template_data
+    return {
+        key: safe_public_template_data(value)
+        for key, value in template_data.items()
+        if key not in SENSITIVE_PUBLIC_TEMPLATE_FIELDS
+    }
+
+
 def num2words_indian(number):
     """
     Convert a number to Indian system words (Lakhs, Crores)
@@ -362,6 +393,8 @@ def public_mou_pdf_download(request, token):
         mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet", "allocation__requirement").get(secure_token=token)
     except (MoU.DoesNotExist, ValueError):
         return HttpResponse("Invalid or expired token", status=404)
+    if mou.status != "accepted":
+        return HttpResponse("MoU PDF is available after acceptance", status=403)
     try:
         pdf_content = generate_mou_pdf(mou)
         filename = f"MoU_{mou.allocation.freelancer.name.replace(' ', '_')}.pdf"
@@ -406,15 +439,20 @@ def public_mou_interaction(request, token):
         data = {
             "id": mou.id, 
             "status": mou.status, 
-            "template_data": mou.template_data,
+            "template_data": safe_public_template_data(mou.template_data),
             "freelancer_name": mou.allocation.freelancer.name, 
             "id_type": freelancer.id_type,
-            "id_number": freelancer.id_number,
-            "bank_account_name": freelancer.bank_account_name,
-            "bank_name": freelancer.bank_name,
-            "bank_account_number": freelancer.bank_account_number,
-            "bank_branch": freelancer.bank_branch,
-            "bank_ifsc": freelancer.bank_ifsc,
+            "has_id_number": bool((freelancer.id_number or "").strip()),
+            "masked_id_number": mask_public_value(freelancer.id_number),
+            "banking_details": {
+                "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
+                "has_bank_name": bool((freelancer.bank_name or "").strip()),
+                "has_bank_account_number": bool((freelancer.bank_account_number or "").strip()),
+                "masked_bank_account_number": mask_public_value(freelancer.bank_account_number),
+                "has_bank_branch": bool((freelancer.bank_branch or "").strip()),
+                "has_bank_ifsc": bool((freelancer.bank_ifsc or "").strip()),
+                "masked_bank_ifsc": mask_public_value(freelancer.bank_ifsc),
+            },
             "requirement_name": mou.allocation.requirement.name if mou.allocation.requirement else None,
             "skill_category": mou.allocation.freelancer.skill_category,
             "event_name": mou.allocation.event_department.event.name, 
@@ -427,7 +465,7 @@ def public_mou_interaction(request, token):
             "expires_at": mou.expires_at, 
             "requires_access_code": bool(expected_code),
             "signed_pdf_url": f"/api/manpower/public/mou/{token}/pdf/" if mou.status == "accepted" else None,
-            "download_url": f"/api/manpower/public/mou/{token}/pdf/",
+            "download_url": f"/api/manpower/public/mou/{token}/pdf/" if mou.status == "accepted" else None,
         }
         return Response(data)
     elif request.method == "POST":
@@ -440,14 +478,16 @@ def public_mou_interaction(request, token):
             freelancer = mou.allocation.freelancer
             if action == "accept":
                 id_type = request.data.get("id_type")
-                id_number = request.data.get("id_number")
+                id_number = str(request.data.get("id_number") or "").strip()
+                if id_type not in ["PAN", "AADHAR"]:
+                    return Response({"error": "Valid ID type is required"}, status=status.HTTP_400_BAD_REQUEST)
+                if not id_number:
+                    return Response({"error": "ID number is required"}, status=status.HTTP_400_BAD_REQUEST)
                 update_fields = []
-                if id_type in ["PAN", "AADHAR"]:
-                    freelancer.id_type = id_type
-                    update_fields.append("id_type")
-                if id_number is not None:
-                    freelancer.id_number = str(id_number).strip()
-                    update_fields.append("id_number")
+                freelancer.id_type = id_type
+                update_fields.append("id_type")
+                freelancer.id_number = id_number
+                update_fields.append("id_number")
                 if update_fields:
                     freelancer.save(update_fields=update_fields)
 
