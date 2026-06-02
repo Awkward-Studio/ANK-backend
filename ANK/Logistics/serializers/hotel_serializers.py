@@ -15,7 +15,16 @@ class HotelRoomTypeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HotelRoomType
-        fields = ["id", "name", "total_count", "hotel_id"]
+        fields = [
+            "id",
+            "name",
+            "total_count",
+            "hotel_id",
+            "is_twin_sharing",
+            "is_smoking",
+            "is_interconnecting",
+            "has_disabled_access",
+        ]
 
     def validate(self, attrs):
         hotel = attrs.get("hotel") or getattr(self.instance, "hotel", None)
@@ -33,7 +42,14 @@ class HotelRoomTypeNestedCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HotelRoomType
-        fields = ["name", "total_count"]
+        fields = [
+            "name",
+            "total_count",
+            "is_twin_sharing",
+            "is_smoking",
+            "is_interconnecting",
+            "has_disabled_access",
+        ]
 
 
 class HotelSerializer(serializers.ModelSerializer):
@@ -80,7 +96,14 @@ class HotelSerializer(serializers.ModelSerializer):
                     if name is None:
                         continue
                     room_types_data.append(
-                        {"name": str(name), "total_count": int(total or 0)}
+                        {
+                            "name": str(name),
+                            "total_count": int(total or 0),
+                            "is_twin_sharing": bool(item.get("is_twin_sharing", False)),
+                            "is_smoking": bool(item.get("is_smoking", False)),
+                            "is_interconnecting": bool(item.get("is_interconnecting", False)),
+                            "has_disabled_access": bool(item.get("has_disabled_access", False)),
+                        }
                     )
             else:
                 room_types_data = []
