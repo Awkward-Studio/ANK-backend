@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from Departments.models import EventDepartment
 from .models import (
     Freelancer,
     ManpowerRequirement,
@@ -16,6 +17,26 @@ from .models import (
     Skill,
 )
 from Staff.serializers import UserSerializer
+
+
+class EventDepartmentField(serializers.PrimaryKeyRelatedField):
+    def use_pk_only_optimization(self):
+        return False
+
+    def to_representation(self, value):
+        department = value.department
+        return {
+            "id": str(value.id),
+            "event": str(value.event_id),
+            "department": str(value.department_id),
+            "display_name": value.display_name or department.name,
+            "department_name": department.name,
+            "name": department.name,
+        }
+
+
+class EventDepartmentModelSerializer(serializers.ModelSerializer):
+    event_department = EventDepartmentField(queryset=EventDepartment.objects.all())
 
 
 class SkillSerializer(serializers.ModelSerializer):
@@ -46,7 +67,7 @@ class FreelancerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Freelancer
         fields = [
-            "id", "name", "skills", "skill_names", "skill_category", "city", "address",
+            "id", "name", "first_name", "title", "skills", "skill_names", "skill_category", "city", "address",
             "parent_name", "id_type", "id_number",
             "bank_account_name", "bank_name", "bank_account_number",
             "bank_branch", "bank_ifsc", "contact_phone", "email",
@@ -61,8 +82,9 @@ class EventCostSheetSerializer(serializers.ModelSerializer):
         read_only_fields = ["total_estimated_cost"]
 
 
-class ManpowerRequirementSerializer(serializers.ModelSerializer):
+class ManpowerRequirementSerializer(EventDepartmentModelSerializer):
     skill_name = serializers.ReadOnlyField(source="skill.name")
+    team = serializers.CharField(source="teams", read_only=True)
 
     class Meta:
         model = ManpowerRequirement
@@ -109,8 +131,9 @@ class PostEventAdjustmentSerializer(serializers.ModelSerializer):
         read_only_fields = ["revised_total", "actual_meal_allowance"]
 
 
-class FreelancerAllocationSerializer(serializers.ModelSerializer):
+class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
     freelancer_name = serializers.ReadOnlyField(source="freelancer.name")
+    team = serializers.CharField(source="teams", read_only=True)
     rating_score = serializers.SerializerMethodField()
 
     def get_rating_score(self, obj):
@@ -133,6 +156,12 @@ class FreelancerAllocationSerializer(serializers.ModelSerializer):
             "id",
             "freelancer",
             "freelancer_name",
+            "teams",
+            "team",
+            "profile",
+            "location",
+            "title",
+            "first_name",
             "skill_category",
             "event_department",
             "requirement",

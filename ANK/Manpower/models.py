@@ -30,6 +30,8 @@ class Skill(models.Model):
 class Freelancer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
+    title = models.CharField(max_length=50, blank=True, null=True)
+    first_name = models.CharField(max_length=100, blank=True, null=True)
     skills = models.ManyToManyField(
         Skill, blank=True, related_name="freelancers"
     )
@@ -84,6 +86,8 @@ class ManpowerRequirement(models.Model):
         related_name="manpower_requirements",
     )
     name = models.CharField(max_length=200)
+    teams = models.CharField(max_length=200, blank=True, null=True)
+    profile = models.CharField(max_length=100, blank=True, null=True)
     skill = models.ForeignKey(
         Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="requirements"
     )
@@ -137,6 +141,11 @@ class FreelancerAllocation(models.Model):
         blank=True,
         related_name="allocations",
     )
+    teams = models.CharField(max_length=200, blank=True, null=True)
+    profile = models.CharField(max_length=100, blank=True, null=True)
+    location = models.CharField(max_length=200, blank=True, null=True)
+    title = models.CharField(max_length=50, blank=True, null=True)
+    first_name = models.CharField(max_length=100, blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="soft_blocked")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)

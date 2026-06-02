@@ -6,6 +6,7 @@ cd /app/ANK
 export DJANGO_SETTINGS_MODULE=ANK.settings
 
 # Migrate + collect static
+python manage.py makemigrations --noinput
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 
