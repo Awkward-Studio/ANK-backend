@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy code
 COPY . .
 
+# Generate model migrations during image build so ECS startup only applies them.
+RUN cd ANK && python manage.py makemigrations --noinput
+
 # Healthcheck is handled by App Runner; we just expose the port
 EXPOSE 8000
 
