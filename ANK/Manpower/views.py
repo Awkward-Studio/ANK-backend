@@ -61,6 +61,7 @@ from .serializers import (
 from .public_views import generate_invoice_pdf
 
 ADMIN_ROLES = {"admin", "super_admin"}
+MANPOWER_MANAGER_ROLES = {"admin", "super_admin", "department_head"}
 
 
 class DownloadRateThrottle(ScopedRateThrottle):
@@ -83,16 +84,8 @@ def _require_role(request, allowed_roles):
 def _get_accounts_event_ids_for_user(user):
     from Departments.models import EventDepartment, EventHeadAssignment
 
-    if user.role in ADMIN_ROLES:
+    if user.role in MANPOWER_MANAGER_ROLES:
         return None  # Global access
-
-    # Department heads of Accounts get access across all Accounts event-departments.
-    if user.role == "department_head" and user.department and user.department.slug == "accounts":
-        return set(
-            EventDepartment.objects.filter(department__slug="accounts").values_list(
-                "event_id", flat=True
-            )
-        )
 
     # Staff get access via explicit Accounts assignment or event-head assignment.
     accounts_event_ids = set(
@@ -117,7 +110,7 @@ def _filter_to_accounts_scope(request, qs, event_field):
 
 
 def _require_accounts_access(request):
-    if request.user.role in ADMIN_ROLES:
+    if request.user.role in MANPOWER_MANAGER_ROLES:
         return None
     event_ids = _get_accounts_event_ids_for_user(request.user)
     if event_ids:
@@ -131,16 +124,11 @@ def _require_accounts_access(request):
 def _can_manage_manpower_event(user, event_id):
     from Departments.models import EventDepartment, EventHeadAssignment
 
-    if user.role in ADMIN_ROLES:
+    if user.role in MANPOWER_MANAGER_ROLES:
         return True
 
     if EventHeadAssignment.objects.filter(user=user, event_id=event_id).exists():
         return True
-
-    if user.role == "department_head" and user.department and user.department.slug == "accounts":
-        return EventDepartment.objects.filter(
-            event_id=event_id, department__slug="accounts"
-        ).exists()
 
     if user.role == "staff":
         return EventDepartment.objects.filter(
@@ -183,7 +171,7 @@ def _check_lock_or_override(request, event_id):
     if not _is_event_locked(event_id):
         return None
 
-    is_admin = _has_any_role(request, ADMIN_ROLES)
+    is_admin = _has_any_role(request, MANPOWER_MANAGER_ROLES)
     override = bool(request.data.get("admin_override")) if hasattr(request, "data") else False
     
     # Bypass lock for Extra Manpower
@@ -274,7 +262,7 @@ class FreelancerList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         try:
@@ -318,7 +306,7 @@ class FreelancerList(APIView):
             )
 
     def post(self, request):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         try:
@@ -359,7 +347,7 @@ class FreelancerDetail(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         try:
@@ -374,7 +362,7 @@ class FreelancerDetail(APIView):
             )
 
     def put(self, request, pk):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         try:
@@ -393,7 +381,7 @@ class FreelancerDetail(APIView):
             )
 
     def delete(self, request, pk):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         try:
@@ -435,7 +423,14 @@ class ManpowerRequirementList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_base_queryset(self):
-        return ManpowerRequirement.objects.all()
+        return (
+            ManpowerRequirement.objects.select_related(
+                "event_department__department",
+                "event_department__event",
+                "skill",
+            )
+            .prefetch_related("sessions")
+        )
 
     def get_queryset(self):
         return self.get_base_queryset()
@@ -619,7 +614,19 @@ class FreelancerAllocationList(DepartmentAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get_base_queryset(self):
-        return FreelancerAllocation.objects.all()
+        return (
+            FreelancerAllocation.objects.select_related(
+                "freelancer",
+                "event_department__department",
+                "event_department__event",
+                "requirement__event_department__department",
+                "requirement__event_department__event",
+                "requirement__skill",
+                "cost_sheet",
+                "adjustment",
+            )
+            .prefetch_related("requirement__sessions", "daily_meals")
+        )
 
     def get_queryset(self):
         return self.get_base_queryset()
@@ -1855,7 +1862,7 @@ def export_accounts_excel(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def lock_event_manpower(request, event_id):
-    denied = _require_role(request, ADMIN_ROLES)
+    denied = _require_role(request, MANPOWER_MANAGER_ROLES)
     if denied:
         return denied
 
@@ -1868,7 +1875,7 @@ def lock_event_manpower(request, event_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def unlock_event_manpower(request, event_id):
-    denied = _require_role(request, ADMIN_ROLES)
+    denied = _require_role(request, MANPOWER_MANAGER_ROLES)
     if denied:
         return denied
 
@@ -2165,7 +2172,7 @@ class ManpowerAuditLogList(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        denied = _require_role(request, ADMIN_ROLES)
+        denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
             return denied
         qs = ManpowerAuditLog.objects.select_related("actor", "event")
@@ -2194,7 +2201,7 @@ class ManpowerSettingsDetail(APIView):
 
     def get(self, request):
         try:
-            denied = _require_role(request, ADMIN_ROLES)
+            denied = _require_role(request, MANPOWER_MANAGER_ROLES)
             if denied:
                 return denied
             obj = ManpowerSettings.get_settings()
@@ -2209,7 +2216,7 @@ class ManpowerSettingsDetail(APIView):
 
     def put(self, request):
         try:
-            denied = _require_role(request, ADMIN_ROLES)
+            denied = _require_role(request, MANPOWER_MANAGER_ROLES)
             if denied:
                 return denied
             obj = ManpowerSettings.get_settings()

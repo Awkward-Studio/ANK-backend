@@ -12,7 +12,11 @@ from .models import (
     PostEventAdjustment,
     FreelancerRating
 )
-from .serializers import FreelancerSerializer
+from .serializers import (
+    FreelancerSerializer,
+    FreelancerAllocationSerializer,
+    ManpowerRequirementSerializer,
+)
 
 User = get_user_model()
 
@@ -25,7 +29,8 @@ class ManpowerTestCase(TestCase):
         self.event = Event.objects.create(
             name="Test Wedding",
             start_date="2026-06-01",
-            end_date="2026-06-05"
+            end_date="2026-06-05",
+            location="Goa",
         )
         
         # Create a department
@@ -34,12 +39,15 @@ class ManpowerTestCase(TestCase):
         # Create an EventDepartment
         self.event_department = EventDepartment.objects.create(
             event=self.event,
-            department=self.department
+            department=self.department,
+            display_name="Event Hospitality",
         )
         
         # Create a freelancer
         self.freelancer = Freelancer.objects.create(
             name="John Doe",
+            title="Mr",
+            first_name="John",
             skill_category="Coordinator",
             city="Mumbai",
             email="john@example.com",
@@ -57,6 +65,64 @@ class ManpowerTestCase(TestCase):
         )
         self.assertEqual(requirement.status, "pending")
         self.assertEqual(str(requirement), "2x Coordinator Lead for " + str(self.event_department))
+
+    def test_requirement_serializer_includes_frontend_fulfillment_columns(self):
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department,
+            name="Hospitality Team",
+            teams="Hospitality Team",
+            profile="Coordinator",
+            skill_category="Coordinator",
+            location="Beach Lawn",
+            quantity_required=2,
+            estimated_days=Decimal("3.0"),
+            max_unit_rate=Decimal("6000.00"),
+        )
+
+        data = ManpowerRequirementSerializer(requirement).data
+
+        self.assertEqual(data["teams"], "Hospitality Team")
+        self.assertEqual(data["team"], "Hospitality Team")
+        self.assertEqual(data["profile"], "Coordinator")
+        self.assertEqual(data["location"], "Beach Lawn")
+        self.assertEqual(data["event_department"]["display_name"], "Event Hospitality")
+        self.assertEqual(data["event_department"]["department_name"], "Hospitality")
+
+    def test_allocation_serializer_includes_flat_fulfillment_columns(self):
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department,
+            name="Hospitality Team",
+            teams="Hospitality Team",
+            profile="Coordinator",
+            skill_category="Coordinator",
+            location="Poolside",
+            quantity_required=1,
+            estimated_days=Decimal("2.0"),
+            max_unit_rate=Decimal("6000.00"),
+        )
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            requirement=requirement,
+            teams="Hospitality Team",
+            profile="Coordinator",
+            location="Poolside",
+            title="Mr",
+            first_name="John",
+            status="soft_blocked",
+            assigned_by=self.user,
+        )
+
+        data = FreelancerAllocationSerializer(allocation).data
+
+        self.assertEqual(data["teams"], "Hospitality Team")
+        self.assertEqual(data["team"], "Hospitality Team")
+        self.assertEqual(data["profile"], "Coordinator")
+        self.assertEqual(data["location"], "Poolside")
+        self.assertEqual(data["title"], "Mr")
+        self.assertEqual(data["first_name"], "John")
+        self.assertEqual(data["event_department"]["display_name"], "Event Hospitality")
+        self.assertEqual(data["event_department"]["department_name"], "Hospitality")
 
     def test_freelancer_serializer_allows_missing_email(self):
         serializer = FreelancerSerializer(data={
