@@ -45,6 +45,10 @@ class HotelRoomType(models.Model):
     )
     name = models.CharField(max_length=100)
     total_count = models.PositiveIntegerField(default=0)
+    is_twin_sharing = models.BooleanField(default=False)
+    is_smoking = models.BooleanField(default=False)
+    is_interconnecting = models.BooleanField(default=False)
+    has_disabled_access = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ("hotel", "name")

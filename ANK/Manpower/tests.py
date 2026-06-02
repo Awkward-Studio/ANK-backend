@@ -298,7 +298,7 @@ class ManpowerTestCase(TestCase):
         from rest_framework.test import APIRequestFactory, force_authenticate
         
         factory = APIRequestFactory()
-        request = factory.post(f'/api/manpower/public/mou/{mou.secure_token}/respond/', {'action': 'accept'}, format='json')
+        request = factory.post(f'/api/manpower/public/mou/{mou.secure_token}/respond/', {'action': 'accept', 'id_type': 'PAN', 'id_number': 'ABCDE1234F'}, format='json')
         response = public_mou_interaction(request, token=mou.secure_token)
         
         self.assertEqual(response.status_code, 200)

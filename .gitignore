@@ -9,6 +9,7 @@ media
 # Environments
 # .env
 # *.env
+.env
 env/
 myEnv/
 myenv/
