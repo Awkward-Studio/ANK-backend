@@ -71,7 +71,7 @@ class RoleAuthorizationTestCase(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_department_head_can_list_users_for_assignment_workflows(self):
+    def test_department_head_can_list_users_for_access_management(self):
         request = self.factory.get("/api/users/")
         force_authenticate(request, user=self.dept_head)
 
@@ -148,10 +148,8 @@ class RoleAuthorizationTestCase(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("department", serializer.errors)
 
-    def test_department_head_allowed_fields_returns_full_model_access(self):
-        """A department_head must get full model_access from the
-        allowed-fields endpoint even without DepartmentModelAccess rows,
-        so the frontend can render every event tab."""
+    def test_department_head_allowed_fields_uses_department_model_access(self):
+        """Department heads should use department model access, not admin bypass."""
         head = User.objects.create_user(
             email="dept-head-perms@example.com",
             password="password",
@@ -170,7 +168,6 @@ class RoleAuthorizationTestCase(TestCase):
 
         self.assertEqual(response.status_code, 200)
         model_access = response.data.get("model_access", {})
-        self.assertTrue(model_access, "model_access should not be empty for dept head")
         for model_name in [
             "event",
             "guest",
@@ -180,18 +177,11 @@ class RoleAuthorizationTestCase(TestCase):
             "eventregistration",
         ]:
             access = model_access.get(model_name, {})
-            self.assertTrue(
-                access.get("can_read"),
-                f"department_head should be able to read {model_name}",
-            )
-            self.assertTrue(
-                access.get("can_write"),
-                f"department_head should be able to write {model_name}",
-            )
+            self.assertFalse(access.get("can_read", False))
+            self.assertFalse(access.get("can_write", False))
 
-    def test_department_head_permission_checker_returns_all_fields(self):
-        """PermissionChecker.get_user_allowed_fields must treat
-        department_head as full-field access without per-field config."""
+    def test_department_head_permission_checker_requires_model_access(self):
+        """Department heads need DepartmentModelAccess for full field access."""
         head = User.objects.create_user(
             email="dept-head-checker@example.com",
             password="password",
@@ -205,10 +195,7 @@ class RoleAuthorizationTestCase(TestCase):
         allowed = PermissionChecker.get_user_allowed_fields(
             head, self.event, EventModel
         )
-        self.assertIsNone(
-            allowed,
-            "Department heads should not be restricted to a subset of fields",
-        )
+        self.assertEqual(allowed, set())
 
     def test_department_head_sees_all_events(self):
         head = User.objects.create_user(
