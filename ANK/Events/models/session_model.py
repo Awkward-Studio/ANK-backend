@@ -51,7 +51,9 @@ class Session(models.Model):
         ordering = ("start_time",)
 
     def __str__(self):
-        return f"{self.title} @ {self.start_time:%H:%M}"
+        if self.start_time:
+            return f"{self.title} @ {self.start_time:%H:%M}"
+        return self.title
 
 
 class SessionField(models.Model):
