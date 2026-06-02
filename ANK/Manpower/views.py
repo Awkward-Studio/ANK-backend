@@ -58,7 +58,7 @@ from .serializers import (
     ManpowerSettingsSerializer,
     SkillSerializer,
 )
-from .public_views import generate_invoice_pdf
+from .public_views import generate_invoice_pdf, mask_public_value
 
 ADMIN_ROLES = {"admin", "super_admin"}
 MANPOWER_MANAGER_ROLES = {"admin", "super_admin", "department_head"}
@@ -2114,6 +2114,7 @@ def public_adjustment_interaction(request, token):
     if request.method == "GET":
         from .serializers import AllocationDailyMealSerializer
         from Events.serializers.session_serializers import SessionSerializer
+        freelancer = adjustment.allocation.freelancer
         
         # Get sessions from requirement
         sessions_data = []
@@ -2125,6 +2126,15 @@ def public_adjustment_interaction(request, token):
                 "id": adjustment.id,
                 "event_name": adjustment.allocation.event_department.event.name,
                 "freelancer_name": adjustment.allocation.freelancer.name,
+                "banking_details": {
+                    "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
+                    "has_bank_name": bool((freelancer.bank_name or "").strip()),
+                    "has_bank_account_number": bool((freelancer.bank_account_number or "").strip()),
+                    "masked_bank_account_number": mask_public_value(freelancer.bank_account_number),
+                    "has_bank_branch": bool((freelancer.bank_branch or "").strip()),
+                    "has_bank_ifsc": bool((freelancer.bank_ifsc or "").strip()),
+                    "masked_bank_ifsc": mask_public_value(freelancer.bank_ifsc),
+                },
                 "is_editable": adjustment.allocation.is_adjustment_editable,
                 "planned_days": adjustment.allocation.cost_sheet.days_planned,
                 "planned_rate": adjustment.allocation.cost_sheet.negotiated_rate,
@@ -2150,7 +2160,7 @@ def public_adjustment_interaction(request, token):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    allowed_fields = {
+    adjustment_fields = {
         "actual_days_worked",
         "total_engagement_days",
         "engagement_periods",
@@ -2159,12 +2169,40 @@ def public_adjustment_interaction(request, token):
         "override_negotiated_rate",
         "freelancer_comments",
     }
+    bank_fields = (
+        "bank_account_name",
+        "bank_name",
+        "bank_account_number",
+        "bank_branch",
+        "bank_ifsc",
+    )
 
-    updates = {k: v for k, v in request.data.items() if k in allowed_fields}
+    bank_updates = {
+        field: str(request.data.get(field) or "").strip()
+        for field in bank_fields
+    }
+    missing_bank_fields = [
+        field for field, value in bank_updates.items() if not value
+    ]
+    if missing_bank_fields:
+        return Response(
+            {
+                "error": "Bank account details are required",
+                "missing_fields": missing_bank_fields,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    updates = {k: v for k, v in request.data.items() if k in adjustment_fields}
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
-    ser.save(freelancer_submitted_at=timezone.now())
-    _create_revision(adjustment, "submission")
+    with transaction.atomic():
+        ser.save(freelancer_submitted_at=timezone.now())
+        freelancer = adjustment.allocation.freelancer
+        for field, value in bank_updates.items():
+            setattr(freelancer, field, value)
+        freelancer.save(update_fields=bank_fields)
+        _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 
 
