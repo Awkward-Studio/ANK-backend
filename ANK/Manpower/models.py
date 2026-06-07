@@ -146,6 +146,8 @@ class FreelancerAllocation(models.Model):
     location = models.CharField(max_length=200, blank=True, null=True)
     title = models.CharField(max_length=50, blank=True, null=True)
     first_name = models.CharField(max_length=100, blank=True, null=True)
+    last_name = models.CharField(max_length=100, blank=True, null=True)
+    contact_number = models.CharField(max_length=20, blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="soft_blocked")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)

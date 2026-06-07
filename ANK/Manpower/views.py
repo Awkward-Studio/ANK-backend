@@ -2306,21 +2306,32 @@ class ManpowerTemplateExportAPIView(APIView):
         if template_type in ("manpower", "combined"):
             ws.title = "Manpower"
             headers = [
-                "Requirement ID",
-                "Allocation ID",
-                "Name",
-                "Event Department",
-                "Skill",
+                "Teams",
+                "Department",
+                "Profile",
                 "Location",
-                "Quantity Required",
-                "Requirement Start Date (YYYY-MM-DD)",
-                "Requirement End Date (YYYY-MM-DD)",
+                "Title",
+                "First Name",
+                "Last Name",
+                "Contact Number",
+                "Start Date",
+                "End Date",
                 "Requirement Extra (TRUE/FALSE)",
                 "Freelancer",
                 "Negotiated Rate",
                 "Allocation Start Date (YYYY-MM-DD)",
                 "Allocation End Date (YYYY-MM-DD)",
                 "Allocation Extra (TRUE/FALSE)",
+                "Period",
+                "Total Commercial",
+                "Rate / Day",
+                "Pipeline",
+                "Status",
+                "Extra",
+                "Has Allocation",
+                "Commercials Locked",
+                "Requirement ID",
+                "Allocation ID",
             ]
             ws.append(headers)
 
@@ -2331,32 +2342,31 @@ class ManpowerTemplateExportAPIView(APIView):
             freelancers = Freelancer.objects.filter(is_active=True).order_by("name")
             freelancer_names = [f.name for f in freelancers]
 
-            ws_legend.append(["Departments", "Skills", "Freelancers", "Booleans"])
-            max_rows = max(len(dept_names), len(skill_names), len(freelancer_names), 2)
+            ws_legend.append(["Departments", "Freelancers", "Team Types", "Booleans"])
+            max_rows = max(len(dept_names), len(freelancer_names), 2)
             for i in range(max_rows):
                 ws_legend.append([
                     dept_names[i] if i < len(dept_names) else "",
-                    skill_names[i] if i < len(skill_names) else "",
                     freelancer_names[i] if i < len(freelancer_names) else "",
+                    ["Internal", "External"][i] if i < 2 else "",
                     ["TRUE", "FALSE"][i] if i < 2 else "",
                 ])
 
             if dept_names:
                 dv_dept = DataValidation(type="list", formula1=f"Legend!$A$2:$A${len(dept_names)+1}", allow_blank=False)
                 ws.add_data_validation(dv_dept)
-                dv_dept.add("D2:D1000")
-            if skill_names:
-                dv_skill = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(skill_names)+1}", allow_blank=True)
-                ws.add_data_validation(dv_skill)
-                dv_skill.add("E2:E1000")
+                dv_dept.add("B2:B1000")
             if freelancer_names:
-                dv_free = DataValidation(type="list", formula1=f"Legend!$C$2:$C${len(freelancer_names)+1}", allow_blank=True)
+                dv_free = DataValidation(type="list", formula1=f"Legend!$B$2:$B${len(freelancer_names)+1}", allow_blank=True)
                 ws.add_data_validation(dv_free)
-                dv_free.add("K2:K1000")
+                dv_free.add("L2:L1000")
             dv_bool = DataValidation(type="list", formula1="Legend!$D$2:$D$3", allow_blank=True)
             ws.add_data_validation(dv_bool)
-            dv_bool.add("J2:J1000")
-            dv_bool.add("O2:O1000")
+            dv_bool.add("K2:K1000")
+            dv_bool.add("P2:P1000")
+            dv_team = DataValidation(type="list", formula1="Legend!$C$2:$C$3", allow_blank=True)
+            ws.add_data_validation(dv_team)
+            dv_team.add("A2:A1000")
 
             requirements = (
                 ManpowerRequirement.objects
@@ -2367,36 +2377,49 @@ class ManpowerTemplateExportAPIView(APIView):
             )
             for req in requirements:
                 req_values = [
-                    str(req.id),
-                    "",
-                    req.name,
+                    req.teams or "Internal",
                     req.event_department.department.name,
-                    req.skill.name if req.skill else req.skill_category,
+                    req.profile or req.name,
                     req.location,
-                    req.quantity_required,
+                    "",
+                    "",
+                    "",
+                    "",
                     req.start_date,
                     req.end_date,
                     "TRUE" if req.is_extra else "FALSE",
                 ]
                 allocations = list(req.allocations.exclude(status="released").select_related("freelancer", "cost_sheet").order_by("created_at"))
                 if not allocations:
-                    ws.append(req_values + ["", "", "", "", ""])
+                    ws.append(req_values + ["", "", "", "", "", "", "", "", "", "", "", "", "", str(req.id), ""])
                     continue
 
                 for allocation in allocations:
                     cost_sheet = getattr(allocation, "cost_sheet", None) if hasattr(allocation, "cost_sheet") else None
-                    ws.append(req_values + [
+                    total_commercial = cost_sheet.total_estimated_cost if cost_sheet else ""
+                    rate = cost_sheet.negotiated_rate if cost_sheet else ""
+                    ws.append(req_values[:4] + [
+                        allocation.title or allocation.freelancer.title or "",
+                        allocation.first_name or allocation.freelancer.first_name or allocation.freelancer.name.split()[0],
+                        allocation.last_name or " ".join(allocation.freelancer.name.split()[1:]),
+                        allocation.contact_number or allocation.freelancer.contact_phone,
+                    ] + req_values[8:] + [
                         allocation.freelancer.name,
-                        cost_sheet.negotiated_rate if cost_sheet else "",
+                        rate,
                         allocation.start_date,
                         allocation.end_date,
                         "TRUE" if allocation.is_extra else "FALSE",
+                        f"{allocation.start_date or ''} - {allocation.end_date or ''}" if allocation.start_date or allocation.end_date else "",
+                        total_commercial,
+                        rate,
+                        "Open" if allocation.status == "soft_blocked" else "Pending",
+                        allocation.status.replace("_", " "),
+                        "Yes" if allocation.is_extra else "No",
+                        "Yes",
+                        "Yes" if allocation.mous.filter(status="accepted").exists() else "No",
+                        str(req.id),
+                        str(allocation.id),
                     ])
-                    ws.cell(row=ws.max_row, column=2).value = str(allocation.id)
-
-            ws.column_dimensions["A"].hidden = True
-            ws.column_dimensions["B"].hidden = True
-
         elif template_type == "requirement":
             ws.title = "Requirements"
             headers = [
@@ -2592,14 +2615,20 @@ class ManpowerBulkImportAPIView(APIView):
                 try:
                     req_id = value(row, "Requirement ID")
                     allocation_id = value(row, "Allocation ID")
-                    req_name = value(row, "Name")
-                    dept_name = value(row, "Event Department")
-                    skill_name = value(row, "Skill")
+                    req_name = value(row, "Name") or value(row, "Profile")
+                    dept_name = value(row, "Event Department") or value(row, "Department")
+                    skill_name = value(row, "Skill") or value(row, "Profile")
                     location = value(row, "Location")
                     quantity = value(row, "Quantity Required")
-                    req_start = self._date_value(value(row, "Requirement Start Date (YYYY-MM-DD)"))
-                    req_end = self._date_value(value(row, "Requirement End Date (YYYY-MM-DD)"))
+                    req_start = self._date_value(value(row, "Requirement Start Date (YYYY-MM-DD)") or value(row, "Start Date"))
+                    req_end = self._date_value(value(row, "Requirement End Date (YYYY-MM-DD)") or value(row, "End Date"))
                     req_is_extra = self._bool_value(value(row, "Requirement Extra (TRUE/FALSE)"))
+                    teams = value(row, "Teams") or value(row, "Team Type")
+                    profile = value(row, "Profile")
+                    title = value(row, "Title")
+                    first_name = value(row, "First Name")
+                    last_name = value(row, "Last Name")
+                    contact_number = value(row, "Contact Number")
                     freelancer_name = value(row, "Freelancer")
                     negotiated_rate = value(row, "Negotiated Rate")
                     alloc_start = self._date_value(value(row, "Allocation Start Date (YYYY-MM-DD)"))
@@ -2636,6 +2665,8 @@ class ManpowerBulkImportAPIView(APIView):
                         "event_department": event_department,
                         "skill": skill,
                         "skill_category": skill_category,
+                        "teams": str(teams).strip() if teams else "Internal",
+                        "profile": str(profile).strip() if profile else skill_category,
                         "location": str(location).strip() if location else "",
                         "quantity_required": quantity_required,
                         "start_date": req_start,
@@ -2697,6 +2728,10 @@ class ManpowerBulkImportAPIView(APIView):
                         allocation.requirement = requirement
                         allocation.start_date = effective_start
                         allocation.end_date = effective_end
+                        allocation.title = str(title).strip() if title else ""
+                        allocation.first_name = str(first_name).strip() if first_name else ""
+                        allocation.last_name = str(last_name).strip() if last_name else ""
+                        allocation.contact_number = str(contact_number).strip() if contact_number else ""
                         allocation.is_extra = effective_is_extra
                         allocation.save()
                         updated_allocs += 1
@@ -2709,6 +2744,10 @@ class ManpowerBulkImportAPIView(APIView):
                             assigned_by=request.user,
                             start_date=effective_start,
                             end_date=effective_end,
+                            title=str(title).strip() if title else "",
+                            first_name=str(first_name).strip() if first_name else "",
+                            last_name=str(last_name).strip() if last_name else "",
+                            contact_number=str(contact_number).strip() if contact_number else "",
                             is_extra=effective_is_extra,
                         )
                         created_allocs += 1
