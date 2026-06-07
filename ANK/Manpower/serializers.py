@@ -162,6 +162,8 @@ class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
             "location",
             "title",
             "first_name",
+            "last_name",
+            "contact_number",
             "skill_category",
             "event_department",
             "requirement",
