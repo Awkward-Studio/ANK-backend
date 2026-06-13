@@ -380,6 +380,9 @@ class FreelancerDetail(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    def patch(self, request, pk):
+        return self.put(request, pk)
+
     def delete(self, request, pk):
         denied = _require_role(request, MANPOWER_MANAGER_ROLES)
         if denied:
