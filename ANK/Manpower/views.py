@@ -792,10 +792,16 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             
             if "breakfast_type" in request.data:
                 meal.breakfast_type = request.data["breakfast_type"]
+            if "breakfast_amount" in request.data:
+                meal.breakfast_amount = request.data["breakfast_amount"]
             if "lunch_type" in request.data:
                 meal.lunch_type = request.data["lunch_type"]
+            if "lunch_amount" in request.data:
+                meal.lunch_amount = request.data["lunch_amount"]
             if "dinner_type" in request.data:
                 meal.dinner_type = request.data["dinner_type"]
+            if "dinner_amount" in request.data:
+                meal.dinner_amount = request.data["dinner_amount"]
                 
             meal.save()
             
@@ -814,7 +820,7 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
     def bulk_update_meals(self, request, pk=None):
         """
         Bulk updates meal types for an allocation.
-        Expects: { "meal_type": "breakfast"|"lunch"|"dinner", "action_type": "crew_meal"|"allowance" }
+        Expects: { "meal_type": "breakfast"|"lunch"|"dinner", "action_type": "crew_meal"|"allowance"|"cash" }
         """
         try:
             allocation = get_object_or_404(FreelancerAllocation, pk=pk)
@@ -829,12 +835,12 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
                     return lock_error
             
             meal_type = request.data.get("meal_type")  # breakfast, lunch, dinner
-            action_type = request.data.get("action_type")  # crew_meal, allowance
+            action_type = request.data.get("action_type")  # crew_meal, allowance, cash
             
             if meal_type not in ["breakfast", "lunch", "dinner"]:
                 return Response({"detail": "Invalid meal_type. Must be 'breakfast', 'lunch', or 'dinner'."}, status=status.HTTP_400_BAD_REQUEST)
-            if action_type not in ["crew_meal", "allowance"]:
-                return Response({"detail": "Invalid action_type. Must be 'crew_meal' or 'allowance'."}, status=status.HTTP_400_BAD_REQUEST)
+            if action_type not in ["crew_meal", "allowance", "cash"]:
+                return Response({"detail": "Invalid action_type. Must be 'crew_meal', 'allowance', or 'cash'."}, status=status.HTTP_400_BAD_REQUEST)
                 
             meals = AllocationDailyMeal.objects.filter(allocation=allocation)
             updated_count = 0
@@ -2289,7 +2295,7 @@ class ManpowerTemplateExportAPIView(APIView):
         from Events.models.event_model import Event
         from Departments.models import EventDepartment
         
-        template_type = request.query_params.get("type", "requirement") # 'requirement', 'allocation', or 'manpower'
+        template_type = request.query_params.get("type", "requirement") # 'requirement', 'allocation', 'manpower', or 'meals'
 
         try:
             event = Event.objects.get(pk=event_id)
@@ -2306,7 +2312,85 @@ class ManpowerTemplateExportAPIView(APIView):
         # Legend Sheet
         ws_legend = wb.create_sheet(title="Legend")
         
-        if template_type in ("manpower", "combined"):
+        if template_type == "meals":
+            ws.title = "Meal Logistics"
+            headers = [
+                "Allocation ID",
+                "Meal ID",
+                "Freelancer",
+                "Department",
+                "Role",
+                "Date (YYYY-MM-DD)",
+                "Worked (TRUE/FALSE)",
+                "Breakfast Type",
+                "Lunch Type",
+                "Dinner Type",
+                "Breakfast Amount",
+                "Lunch Amount",
+                "Dinner Amount",
+                "Daily Total",
+                "Notes",
+            ]
+            ws.append(headers)
+
+            ws_legend.append(["Meal Types", "Booleans"])
+            legend_rows = [
+                ["allowance", "TRUE"],
+                ["crew_meal", "FALSE"],
+                ["cash", ""],
+            ]
+            for row in legend_rows:
+                ws_legend.append(row)
+
+            dv_meal_type = DataValidation(type="list", formula1="Legend!$A$2:$A$4", allow_blank=False)
+            ws.add_data_validation(dv_meal_type)
+            dv_meal_type.add("H2:J1000")
+
+            dv_bool = DataValidation(type="list", formula1="Legend!$B$2:$B$3", allow_blank=False)
+            ws.add_data_validation(dv_bool)
+            dv_bool.add("G2:G1000")
+
+            meals = (
+                AllocationDailyMeal.objects
+                .filter(allocation__event_department__event=event)
+                .exclude(allocation__status="released")
+                .select_related(
+                    "allocation__freelancer",
+                    "allocation__requirement",
+                    "allocation__event_department__department",
+                )
+                .order_by(
+                    "allocation__freelancer__name",
+                    "allocation__requirement__name",
+                    "allocation__created_at",
+                    "date",
+                )
+            )
+            for meal in meals:
+                allocation = meal.allocation
+                daily_total = meal.breakfast_amount + meal.lunch_amount + meal.dinner_amount
+                ws.append([
+                    str(allocation.id),
+                    str(meal.id),
+                    allocation.freelancer.name,
+                    allocation.event_department.department.name,
+                    allocation.requirement.name if allocation.requirement else "",
+                    meal.date,
+                    "TRUE" if meal.is_worked else "FALSE",
+                    meal.breakfast_type,
+                    meal.lunch_type,
+                    meal.dinner_type,
+                    meal.breakfast_amount,
+                    meal.lunch_amount,
+                    meal.dinner_amount,
+                    daily_total,
+                    "",
+                ])
+
+            ws.column_dimensions["A"].hidden = True
+            ws.column_dimensions["B"].hidden = True
+
+        elif template_type in ("manpower", "combined"):
             ws.title = "Manpower"
             headers = [
                 "Teams",
@@ -2508,7 +2592,7 @@ class ManpowerTemplateExportAPIView(APIView):
             ws.add_data_validation(dv_bool)
             dv_bool.add("F2:F1000")
 
-        if template_type not in ("manpower", "combined"):
+        if template_type not in ("manpower", "combined", "meals"):
             ws.append(headers)
         for cell in ws[1]:
             cell.font = Font(bold=True)
@@ -2559,6 +2643,34 @@ class ManpowerBulkImportAPIView(APIView):
     @staticmethod
     def _bool_value(value):
         return str(value or "").strip().upper() == "TRUE"
+
+    @staticmethod
+    def _optional_bool_value(value):
+        normalized = str(value or "").strip().upper()
+        if not normalized:
+            return None
+        if normalized in ("TRUE", "YES", "Y", "1"):
+            return True
+        if normalized in ("FALSE", "NO", "N", "0"):
+            return False
+        raise ValueError(f"Invalid boolean value '{value}'. Use TRUE or FALSE.")
+
+    @staticmethod
+    def _meal_type_value(value):
+        normalized = str(value or "").strip().lower().replace(" ", "_")
+        aliases = {
+            "allowance": "allowance",
+            "crew_meal": "crew_meal",
+            "crew": "crew_meal",
+            "cash": "cash",
+            "cash_spot": "cash",
+            "cash_paid_on_spot": "cash",
+        }
+        if not normalized:
+            return None
+        if normalized not in aliases:
+            raise ValueError(f"Invalid meal type '{value}'. Use allowance, crew_meal, or cash.")
+        return aliases[normalized]
 
     @staticmethod
     def _planned_days(start, end):
@@ -2780,11 +2892,123 @@ class ManpowerBulkImportAPIView(APIView):
             "errors": errors,
         }
 
+    def _import_meal_logistics(self, ws, request, event_id):
+        headers = [self._normalize_header(cell.value) for cell in ws[1]]
+        column = {header: index for index, header in enumerate(headers) if header}
+
+        def value(row, name):
+            index = column.get(self._normalize_header(name))
+            if index is None or index >= len(row):
+                return None
+            return row[index]
+
+        def decimal_value(val):
+            if val is None or val == "":
+                return None
+            try:
+                return Decimal(str(val))
+            except:
+                return None
+
+        updated_meals = 0
+        errors = []
+        touched_allocation_ids = set()
+
+        with transaction.atomic():
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                if not any(row):
+                    continue
+
+                try:
+                    allocation_id = value(row, "Allocation ID")
+                    meal_id = value(row, "Meal ID")
+                    if not allocation_id or not meal_id:
+                        errors.append(f"Row {row_idx}: Allocation ID and Meal ID are required. Use the downloaded Meal Logistics template.")
+                        continue
+
+                    try:
+                        meal = (
+                            AllocationDailyMeal.objects
+                            .select_related("allocation__event_department")
+                            .get(
+                                pk=meal_id,
+                                allocation_id=allocation_id,
+                                allocation__event_department__event_id=event_id,
+                            )
+                        )
+                    except AllocationDailyMeal.DoesNotExist:
+                        errors.append(f"Row {row_idx}: Meal row was not found for this event.")
+                        continue
+
+                    row_date = self._date_value(value(row, "Date (YYYY-MM-DD)"))
+                    if row_date and row_date != meal.date:
+                        errors.append(f"Row {row_idx}: Date does not match the meal record.")
+                        continue
+
+                    allocation = meal.allocation
+                    if self._allocation_is_protected(allocation):
+                        errors.append(f"Row {row_idx}: Allocation is protected by accepted MoU/actuals/invoice workflow.")
+                        continue
+
+                    if not allocation.is_extra:
+                        lock_error = _check_lock_or_override(request, event_id)
+                        if lock_error:
+                            errors.append(f"Row {row_idx}: Event is locked.")
+                            continue
+
+                    worked = self._optional_bool_value(value(row, "Worked (TRUE/FALSE)"))
+                    breakfast_type = self._meal_type_value(value(row, "Breakfast Type"))
+                    lunch_type = self._meal_type_value(value(row, "Lunch Type"))
+                    dinner_type = self._meal_type_value(value(row, "Dinner Type"))
+                    breakfast_amount = decimal_value(value(row, "Breakfast Amount"))
+                    lunch_amount = decimal_value(value(row, "Lunch Amount"))
+                    dinner_amount = decimal_value(value(row, "Dinner Amount"))
+
+                    changed = False
+                    if worked is not None and meal.is_worked != worked:
+                        meal.is_worked = worked
+                        changed = True
+                    if breakfast_type and meal.breakfast_type != breakfast_type:
+                        meal.breakfast_type = breakfast_type
+                        changed = True
+                    if lunch_type and meal.lunch_type != lunch_type:
+                        meal.lunch_type = lunch_type
+                        changed = True
+                    if dinner_type and meal.dinner_type != dinner_type:
+                        meal.dinner_type = dinner_type
+                        changed = True
+                    if breakfast_amount is not None and meal.breakfast_amount != breakfast_amount:
+                        meal.breakfast_amount = breakfast_amount
+                        changed = True
+                    if lunch_amount is not None and meal.lunch_amount != lunch_amount:
+                        meal.lunch_amount = lunch_amount
+                        changed = True
+                    if dinner_amount is not None and meal.dinner_amount != dinner_amount:
+                        meal.dinner_amount = dinner_amount
+                        changed = True
+
+                    if changed:
+                        meal.save()
+                        touched_allocation_ids.add(str(allocation.id))
+                        updated_meals += 1
+
+                except Exception as e:
+                    errors.append(f"Row {row_idx}: {str(e)}")
+
+            if touched_allocation_ids:
+                for cost_sheet in EventCostSheet.objects.filter(allocation_id__in=touched_allocation_ids):
+                    cost_sheet.save()
+
+        return {
+            "updated_meals": updated_meals,
+            "errors": errors,
+        }
+
     def post(self, request, event_id):
         from Events.models.event_model import Event
         from Departments.models import EventDepartment
         
-        import_type = request.query_params.get("type") # 'requirement' or 'allocation'
+        import_type = request.query_params.get("type") # 'requirement', 'allocation', 'manpower', or 'meals'
 
         try:
             event = Event.objects.get(pk=event_id)
@@ -2807,6 +3031,8 @@ class ManpowerBulkImportAPIView(APIView):
             # Prefer the workbook shape over stale query params from older UI buttons.
             if "Manpower" in wb.sheetnames:
                 import_type = "manpower"
+            elif "Meal Logistics" in wb.sheetnames:
+                import_type = "meals"
             elif not import_type:
                 if "Requirements" in wb.sheetnames:
                     import_type = "requirement"
@@ -2817,6 +3043,8 @@ class ManpowerBulkImportAPIView(APIView):
 
             if import_type in ("manpower", "combined"):
                 ws_name = "Manpower"
+            elif import_type == "meals":
+                ws_name = "Meal Logistics"
             else:
                 ws_name = "Requirements" if import_type == "requirement" else "Allocations"
             if ws_name not in wb.sheetnames:
@@ -2868,6 +3096,23 @@ class ManpowerBulkImportAPIView(APIView):
                     "updated_requirements": updated_reqs,
                     "created_allocations": created_allocs,
                     "updated_allocations": updated_allocs,
+                }, status=status.HTTP_200_OK)
+
+            if import_type == "meals":
+                result = self._import_meal_logistics(ws=ws, request=request, event_id=event_id)
+                updated_meals = result["updated_meals"]
+                errors = result["errors"]
+
+                if errors:
+                    return Response({
+                        "detail": "Import completed with errors.",
+                        "updated_meals": updated_meals,
+                        "errors": errors,
+                    }, status=status.HTTP_207_MULTI_STATUS)
+
+                return Response({
+                    "detail": "Import successful.",
+                    "updated_meals": updated_meals,
                 }, status=status.HTTP_200_OK)
 
             with transaction.atomic():

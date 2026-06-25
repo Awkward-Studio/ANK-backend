@@ -779,17 +779,20 @@ class AllocationDailyMeal(models.Model):
     def save(self, *args, **kwargs):
         settings = ManpowerSettings.get_settings()
         if self.breakfast_type == "allowance":
-            self.breakfast_amount = settings.default_breakfast_rate
+            if not self.breakfast_amount or self.breakfast_amount == Decimal("0.00"):
+                self.breakfast_amount = settings.default_breakfast_rate
         else:
             self.breakfast_amount = Decimal("0.00")
 
         if self.lunch_type == "allowance":
-            self.lunch_amount = settings.default_lunch_rate
+            if not self.lunch_amount or self.lunch_amount == Decimal("0.00"):
+                self.lunch_amount = settings.default_lunch_rate
         else:
             self.lunch_amount = Decimal("0.00")
 
         if self.dinner_type == "allowance":
-            self.dinner_amount = settings.default_dinner_rate
+            if not self.dinner_amount or self.dinner_amount == Decimal("0.00"):
+                self.dinner_amount = settings.default_dinner_rate
         else:
             self.dinner_amount = Decimal("0.00")
 
