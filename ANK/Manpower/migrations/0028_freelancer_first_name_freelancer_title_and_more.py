@@ -3,6 +3,65 @@
 from django.db import migrations, models
 
 
+FIELDS = [
+    ("Freelancer", "first_name", models.CharField(blank=True, max_length=100, null=True)),
+    ("Freelancer", "title", models.CharField(blank=True, max_length=50, null=True)),
+    (
+        "FreelancerAllocation",
+        "first_name",
+        models.CharField(blank=True, max_length=100, null=True),
+    ),
+    (
+        "FreelancerAllocation",
+        "location",
+        models.CharField(blank=True, max_length=200, null=True),
+    ),
+    (
+        "FreelancerAllocation",
+        "profile",
+        models.CharField(blank=True, max_length=100, null=True),
+    ),
+    (
+        "FreelancerAllocation",
+        "teams",
+        models.CharField(blank=True, max_length=200, null=True),
+    ),
+    (
+        "FreelancerAllocation",
+        "title",
+        models.CharField(blank=True, max_length=50, null=True),
+    ),
+    (
+        "ManpowerRequirement",
+        "profile",
+        models.CharField(blank=True, max_length=100, null=True),
+    ),
+    (
+        "ManpowerRequirement",
+        "teams",
+        models.CharField(blank=True, max_length=200, null=True),
+    ),
+]
+
+
+def add_missing_columns(apps, schema_editor):
+    with schema_editor.connection.cursor() as cursor:
+        for model_name, field_name, field in FIELDS:
+            model = apps.get_model("Manpower", model_name)
+            table_name = model._meta.db_table
+            existing_columns = {
+                column.name
+                for column in schema_editor.connection.introspection.get_table_description(
+                    cursor, table_name
+                )
+            }
+            if field_name in existing_columns:
+                continue
+
+            field.set_attributes_from_name(field_name)
+            schema_editor.add_field(model, field)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,49 +69,59 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='freelancer',
-            name='first_name',
-            field=models.CharField(blank=True, max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancer',
-            name='title',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancerallocation',
-            name='first_name',
-            field=models.CharField(blank=True, max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancerallocation',
-            name='location',
-            field=models.CharField(blank=True, max_length=200, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancerallocation',
-            name='profile',
-            field=models.CharField(blank=True, max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancerallocation',
-            name='teams',
-            field=models.CharField(blank=True, max_length=200, null=True),
-        ),
-        migrations.AddField(
-            model_name='freelancerallocation',
-            name='title',
-            field=models.CharField(blank=True, max_length=50, null=True),
-        ),
-        migrations.AddField(
-            model_name='manpowerrequirement',
-            name='profile',
-            field=models.CharField(blank=True, max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='manpowerrequirement',
-            name='teams',
-            field=models.CharField(blank=True, max_length=200, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(
+                    add_missing_columns,
+                    reverse_code=migrations.RunPython.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='freelancer',
+                    name='first_name',
+                    field=models.CharField(blank=True, max_length=100, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancer',
+                    name='title',
+                    field=models.CharField(blank=True, max_length=50, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancerallocation',
+                    name='first_name',
+                    field=models.CharField(blank=True, max_length=100, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancerallocation',
+                    name='location',
+                    field=models.CharField(blank=True, max_length=200, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancerallocation',
+                    name='profile',
+                    field=models.CharField(blank=True, max_length=100, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancerallocation',
+                    name='teams',
+                    field=models.CharField(blank=True, max_length=200, null=True),
+                ),
+                migrations.AddField(
+                    model_name='freelancerallocation',
+                    name='title',
+                    field=models.CharField(blank=True, max_length=50, null=True),
+                ),
+                migrations.AddField(
+                    model_name='manpowerrequirement',
+                    name='profile',
+                    field=models.CharField(blank=True, max_length=100, null=True),
+                ),
+                migrations.AddField(
+                    model_name='manpowerrequirement',
+                    name='teams',
+                    field=models.CharField(blank=True, max_length=200, null=True),
+                ),
+            ],
         ),
     ]
