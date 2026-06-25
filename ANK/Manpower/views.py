@@ -2319,7 +2319,6 @@ class ManpowerTemplateExportAPIView(APIView):
                 "Meal ID",
                 "Freelancer",
                 "Department",
-                "Role",
                 "Date (YYYY-MM-DD)",
                 "Worked (TRUE/FALSE)",
                 "Breakfast Type",
@@ -2344,11 +2343,11 @@ class ManpowerTemplateExportAPIView(APIView):
 
             dv_meal_type = DataValidation(type="list", formula1="Legend!$A$2:$A$4", allow_blank=False)
             ws.add_data_validation(dv_meal_type)
-            dv_meal_type.add("H2:J1000")
+            dv_meal_type.add("G2:I1000")
 
             dv_bool = DataValidation(type="list", formula1="Legend!$B$2:$B$3", allow_blank=False)
             ws.add_data_validation(dv_bool)
-            dv_bool.add("G2:G1000")
+            dv_bool.add("F2:F1000")
 
             meals = (
                 AllocationDailyMeal.objects
@@ -2356,25 +2355,21 @@ class ManpowerTemplateExportAPIView(APIView):
                 .exclude(allocation__status="released")
                 .select_related(
                     "allocation__freelancer",
-                    "allocation__requirement",
                     "allocation__event_department__department",
                 )
                 .order_by(
                     "allocation__freelancer__name",
-                    "allocation__requirement__name",
                     "allocation__created_at",
                     "date",
                 )
             )
-            for meal in meals:
+            for idx, meal in enumerate(meals, start=2):
                 allocation = meal.allocation
-                daily_total = meal.breakfast_amount + meal.lunch_amount + meal.dinner_amount
                 ws.append([
                     str(allocation.id),
                     str(meal.id),
                     allocation.freelancer.name,
                     allocation.event_department.department.name,
-                    allocation.requirement.name if allocation.requirement else "",
                     meal.date,
                     "TRUE" if meal.is_worked else "FALSE",
                     meal.breakfast_type,
@@ -2383,7 +2378,7 @@ class ManpowerTemplateExportAPIView(APIView):
                     meal.breakfast_amount,
                     meal.lunch_amount,
                     meal.dinner_amount,
-                    daily_total,
+                    f"=SUM(J{idx}:L{idx})",
                     "",
                 ])
 
@@ -2507,6 +2502,56 @@ class ManpowerTemplateExportAPIView(APIView):
                         str(req.id),
                         str(allocation.id),
                     ])
+
+            # Export orphan allocations (direct allocations to event/department without a requirement)
+            orphan_allocations = (
+                FreelancerAllocation.objects
+                .filter(event_department__event=event, requirement__isnull=True)
+                .exclude(status="released")
+                .select_related("freelancer", "event_department__department")
+                .prefetch_related("cost_sheet", "mous")
+                .order_by("freelancer__name")
+            )
+            for allocation in orphan_allocations:
+                dept_name = allocation.event_department.department.name
+                req_values = [
+                    allocation.teams or "Internal",
+                    dept_name,
+                    allocation.profile or "General",
+                    allocation.location or "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    allocation.start_date,
+                    allocation.end_date,
+                    "TRUE" if allocation.is_extra else "FALSE",
+                ]
+                cost_sheet = getattr(allocation, "cost_sheet", None) if hasattr(allocation, "cost_sheet") else None
+                total_commercial = cost_sheet.total_estimated_cost if cost_sheet else ""
+                rate = cost_sheet.negotiated_rate if cost_sheet else ""
+                ws.append(req_values[:4] + [
+                    allocation.title or allocation.freelancer.title or "",
+                    allocation.first_name or allocation.freelancer.first_name or allocation.freelancer.name.split()[0],
+                    allocation.last_name or " ".join(allocation.freelancer.name.split()[1:]),
+                    allocation.contact_number or allocation.freelancer.contact_phone,
+                ] + req_values[8:] + [
+                    allocation.freelancer.name,
+                    rate,
+                    allocation.start_date,
+                    allocation.end_date,
+                    "TRUE" if allocation.is_extra else "FALSE",
+                    f"{allocation.start_date or ''} - {allocation.end_date or ''}" if allocation.start_date or allocation.end_date else "",
+                    total_commercial,
+                    rate,
+                    "Open" if allocation.status == "soft_blocked" else "Pending",
+                    allocation.status.replace("_", " "),
+                    "Yes" if allocation.is_extra else "No",
+                    "Yes",
+                    "Yes" if allocation.mous.filter(status="accepted").exists() else "No",
+                    "",
+                    str(allocation.id),
+                ])
         elif template_type == "requirement":
             ws.title = "Requirements"
             headers = [
@@ -2558,6 +2603,7 @@ class ManpowerTemplateExportAPIView(APIView):
                 "End Date (YYYY-MM-DD)",
                 "Mark as Extra (TRUE/FALSE)"
             ]
+            ws.append(headers)
             
             # Legend data
             reqs = ManpowerRequirement.objects.filter(event_department__event=event).select_related("event_department__department")
@@ -2592,7 +2638,64 @@ class ManpowerTemplateExportAPIView(APIView):
             ws.add_data_validation(dv_bool)
             dv_bool.add("F2:F1000")
 
-        if template_type not in ("manpower", "combined", "meals"):
+            requirements = (
+                ManpowerRequirement.objects
+                .filter(event_department__event=event)
+                .select_related("event_department__department")
+                .prefetch_related("allocations__freelancer", "allocations__cost_sheet")
+                .order_by("event_department__department__name", "name", "created_at")
+            )
+            for req in requirements:
+                req_str = f"{req.name} - {req.skill_category} @ {req.event_department.department.name} "
+                if req.location:
+                    req_str += f"[{req.location}] "
+                req_str += f"({req.id})"
+
+                allocations = list(req.allocations.exclude(status="released").select_related("freelancer", "cost_sheet"))
+                if not allocations:
+                    ws.append([
+                        req_str,
+                        "",
+                        "",
+                        req.start_date,
+                        req.end_date,
+                        "TRUE" if req.is_extra else "FALSE"
+                    ])
+                else:
+                    for alloc in allocations:
+                        cost_sheet = getattr(alloc, "cost_sheet", None) if hasattr(alloc, "cost_sheet") else None
+                        rate = cost_sheet.negotiated_rate if cost_sheet else ""
+                        ws.append([
+                            req_str,
+                            alloc.freelancer.name,
+                            rate,
+                            alloc.start_date,
+                            alloc.end_date,
+                            "TRUE" if alloc.is_extra else "FALSE"
+                        ])
+
+            # Export orphan allocations (direct allocations to event/department without a requirement)
+            orphan_allocations = (
+                FreelancerAllocation.objects
+                .filter(event_department__event=event, requirement__isnull=True)
+                .exclude(status="released")
+                .select_related("freelancer", "event_department__department")
+                .prefetch_related("cost_sheet")
+                .order_by("freelancer__name")
+            )
+            for alloc in orphan_allocations:
+                cost_sheet = getattr(alloc, "cost_sheet", None) if hasattr(alloc, "cost_sheet") else None
+                rate = cost_sheet.negotiated_rate if cost_sheet else ""
+                ws.append([
+                    "",  # Blank requirement dropdown so they must select one to import back
+                    alloc.freelancer.name,
+                    rate,
+                    alloc.start_date,
+                    alloc.end_date,
+                    "TRUE" if alloc.is_extra else "FALSE"
+                ])
+
+        if template_type not in ("manpower", "combined", "meals", "allocation"):
             ws.append(headers)
         for cell in ws[1]:
             cell.font = Font(bold=True)
@@ -3215,16 +3318,33 @@ class ManpowerBulkImportAPIView(APIView):
                             if not start: start = req.start_date
                             if not end: end = req.end_date
 
-                            alloc = FreelancerAllocation.objects.create(
-                                freelancer=freelancer,
-                                event_department=req.event_department,
-                                requirement=req,
-                                status="soft_blocked",
-                                assigned_by=request.user,
-                                start_date=start,
-                                end_date=end,
-                                is_extra=is_extra_bool
+                            alloc = (
+                                FreelancerAllocation.objects
+                                .filter(requirement=req, freelancer=freelancer)
+                                .exclude(status="released")
+                                .first()
                             )
+                            if alloc:
+                                if self._allocation_is_protected(alloc):
+                                    errors.append(f"Row {row_idx}: Allocation for '{freelancer_name}' is protected and cannot be modified.")
+                                    continue
+                                alloc.start_date = start
+                                alloc.end_date = end
+                                alloc.is_extra = is_extra_bool
+                                alloc.save()
+                                updated_allocs += 1
+                            else:
+                                alloc = FreelancerAllocation.objects.create(
+                                    freelancer=freelancer,
+                                    event_department=req.event_department,
+                                    requirement=req,
+                                    status="soft_blocked",
+                                    assigned_by=request.user,
+                                    start_date=start,
+                                    end_date=end,
+                                    is_extra=is_extra_bool
+                                )
+                                created_allocs += 1
                             
                             try: rate = Decimal(str(negotiated_rate)) if negotiated_rate else Decimal("0.00")
                             except: rate = Decimal("0.00")
@@ -3236,11 +3356,17 @@ class ManpowerBulkImportAPIView(APIView):
                                     if delta > 0: days = Decimal(str(delta))
                                 except: pass
 
-                            EventCostSheet.objects.create(
-                                allocation=alloc, negotiated_rate=rate,
-                                days_planned=days, travel_costs=Decimal("0.00")
+                            cost_sheet, _ = EventCostSheet.objects.get_or_create(
+                                allocation=alloc,
+                                defaults={
+                                    "negotiated_rate": rate,
+                                    "days_planned": days,
+                                    "travel_costs": Decimal("0.00")
+                                }
                             )
-                            created_allocs += 1
+                            cost_sheet.negotiated_rate = rate
+                            cost_sheet.days_planned = days
+                            cost_sheet.save()
                     except Exception as e:
                         errors.append(f"Row {row_idx}: {str(e)}")
 
