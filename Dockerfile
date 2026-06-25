@@ -18,13 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy code
 COPY . .
 
-# Generate model migrations during image build so ECS startup only applies them.
-RUN cd ANK && python manage.py makemigrations --noinput
-
 # Healthcheck is handled by App Runner; we just expose the port
 EXPOSE 8000
 
-# Entrypoint runs your "release" tasks, then starts Daphne
+# Entrypoint runs release tasks on the server, then starts Daphne
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
