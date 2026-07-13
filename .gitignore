@@ -42,4 +42,7 @@ venv/
 .vscode/
 
 # Documentation
-*.mdANK/.env
+*.md
+
+# Local backend secrets
+ANK/.env
