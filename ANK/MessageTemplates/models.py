@@ -217,6 +217,13 @@ class WhatsAppPhoneNumber(models.Model):
     Each number can have its own credentials or inherit from WABA.
     """
 
+    META_STATUS_CHOICES = [
+        ("active", "Active"),
+        ("blocked", "Blocked"),
+        ("logged_out", "Logged Out"),
+        ("unknown", "Unknown"),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     business_account = models.ForeignKey(
@@ -290,6 +297,25 @@ class WhatsAppPhoneNumber(models.Model):
         default=False,
         db_index=True,
         help_text="Default number to use when none specified"
+    )
+
+    meta_status = models.CharField(
+        max_length=20,
+        choices=META_STATUS_CHOICES,
+        default="unknown",
+        db_index=True,
+        help_text="Current status from Meta reconciliation"
+    )
+
+    meta_status_reason = models.TextField(
+        blank=True,
+        help_text="Human-readable reason for the last Meta status"
+    )
+
+    meta_last_checked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time this number was reconciled with Meta"
     )
     
     last_used_at = models.DateTimeField(

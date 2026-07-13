@@ -5,8 +5,11 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 import os
 
+from django.shortcuts import get_object_or_404
+
 from MessageTemplates.models import WhatsAppBusinessAccount
-from MessageTemplates.serializers import WhatsAppBusinessAccountSerializer
+from MessageTemplates.serializers import WhatsAppBusinessAccountSerializer, WhatsAppPhoneNumberSerializer
+from MessageTemplates.services.meta_reconciliation import reconcile_all_wabas
 
 logger = logging.getLogger(__name__)
 WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
@@ -52,3 +55,59 @@ class WABAListCreateView(APIView):
         
         ser = WhatsAppBusinessAccountSerializer(waba)
         return Response(ser.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class WABADetailView(APIView):
+    permission_classes = [AllowAny]
+
+    def _authorize(self, request):
+        token = request.headers.get("X-Webhook-Token", "")
+        return WEBHOOK_SECRET and token == WEBHOOK_SECRET
+
+    def delete(self, request, waba_id: str):
+        if not self._authorize(request):
+            return Response({"error": "Unauthorized"}, status=403)
+
+        waba = get_object_or_404(WhatsAppBusinessAccount, waba_id=waba_id)
+        waba.delete()
+        return Response({"success": True, "deleted_waba_id": waba_id}, status=status.HTTP_200_OK)
+
+
+class WABAMetaStatusView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            return Response({"error": "Unauthorized"}, status=403)
+
+        waba_id = request.query_params.get("waba_id")
+        waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
+        if waba_id:
+            waba_qs = waba_qs.filter(waba_id=waba_id)
+
+        results = reconcile_all_wabas(waba_qs)
+        payload = []
+        for result in results:
+            waba = next((item for item in waba_qs if item.waba_id == result["waba_id"]), None)
+            if not waba:
+                continue
+
+            numbers = result["numbers"]
+            counts = {
+                "active": sum(1 for phone in numbers if phone.meta_status == "active"),
+                "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
+                "logged_out": sum(1 for phone in numbers if phone.meta_status == "logged_out"),
+                "unknown": sum(1 for phone in numbers if phone.meta_status == "unknown"),
+            }
+            payload.append(
+                {
+                    "waba": WhatsAppBusinessAccountSerializer(waba).data,
+                    "fetch_error": result["fetch_error"],
+                    "meta_phone_number_ids": result["meta_phone_number_ids"],
+                    "counts": counts,
+                    "numbers": WhatsAppPhoneNumberSerializer(numbers, many=True).data,
+                }
+            )
+
+        return Response({"success": True, "wabas": payload}, status=status.HTTP_200_OK)

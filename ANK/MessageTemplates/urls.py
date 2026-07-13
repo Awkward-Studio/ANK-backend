@@ -1,7 +1,7 @@
 from django.urls import path
 from MessageTemplates.whatsapp_views.flush_message import FlushQueuedMessagesView
 from MessageTemplates.whatsapp_views.send_template import SendLocalTemplateView
-from MessageTemplates.whatsapp_views.waba_management import WABAListCreateView
+from MessageTemplates.whatsapp_views.waba_management import WABAListCreateView, WABADetailView, WABAMetaStatusView
 from MessageTemplates.whatsapp_views.phone_number_management import (
     StorePhoneNumberView,
     ListPhoneNumbersView,
@@ -54,6 +54,8 @@ urlpatterns = [
     ),
     # WhatsApp Account Management
     path("whatsapp/wabas/", WABAListCreateView.as_view(), name="whatsapp-waba-list"),
+    path("whatsapp/wabas/<str:waba_id>/", WABADetailView.as_view(), name="whatsapp-waba-detail"),
+    path("whatsapp/meta-status/", WABAMetaStatusView.as_view(), name="whatsapp-meta-status"),
 
     # WhatsApp Phone Number Management
     path(

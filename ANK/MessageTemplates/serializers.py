@@ -218,11 +218,22 @@ class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
             "messaging_limit_tier",
             "is_active",
             "is_default",
+            "meta_status",
+            "meta_status_reason",
+            "meta_last_checked_at",
             "created_at",
             "updated_at",
             "last_used_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "last_used_at"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+            "meta_status",
+            "meta_status_reason",
+            "meta_last_checked_at",
+        ]
 
 
 class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
@@ -324,6 +335,8 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
                 "messaging_limit_tier": validated_data.get("messaging_limit_tier", ""),
                 "is_active": True,
                 "is_default": validated_data.get("is_default", False),
+                "meta_status": "active",
+                "meta_status_reason": "",
             },
         )
         
