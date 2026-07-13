@@ -6,6 +6,7 @@ from MessageTemplates.whatsapp_views.phone_number_management import (
     StorePhoneNumberView,
     ListPhoneNumbersView,
     PhoneNumberDetailView,
+    MetaStatusReportView,
 )
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
@@ -69,6 +70,11 @@ urlpatterns = [
         "whatsapp/phone-numbers/<str:phone_number_id>/",
         PhoneNumberDetailView.as_view(),
         name="whatsapp-phone-number-detail",
+    ),
+    path(
+        "whatsapp/phone-numbers-meta-status/",
+        MetaStatusReportView.as_view(),
+        name="whatsapp-meta-status",
     ),
 ]
 

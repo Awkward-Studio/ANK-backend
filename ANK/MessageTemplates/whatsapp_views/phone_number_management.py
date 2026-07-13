@@ -224,3 +224,88 @@ class PhoneNumberDetailView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class MetaStatusReportView(APIView):
+    """
+    GET /api/whatsapp/phone-numbers/meta-status/
+    Headers: X-Webhook-Token: <DJANGO_RSVP_SECRET>
+    
+    Queries the Meta Graph API directly using stored tokens to check 
+    the actual validity and restrictions of all active phone numbers.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = request.headers.get("X-Webhook-Token", request.query_params.get("token", ""))
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            logger.warning("[META_STATUS] Invalid or missing webhook token")
+            return Response(
+                {"success": False, "error": "Invalid authentication token"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        logger.info("[META_STATUS] Generating Meta Graph API report for all active numbers")
+
+        checked_wabas = set()
+        phone_numbers = WhatsAppPhoneNumber.objects.filter(is_active=True)
+        report = []
+
+        for phone in phone_numbers:
+            waba_id = phone.waba_id
+            access_token = phone.get_access_token()
+            
+            if not waba_id or not access_token:
+                report.append({
+                    "display_number": phone.display_phone_number,
+                    "name": phone.verified_name,
+                    "status": "ERROR",
+                    "message": "Missing WABA ID or Access Token in database"
+                })
+                continue
+                
+            if waba_id in checked_wabas:
+                continue
+                
+            checked_wabas.add(waba_id)
+            url = f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers"
+            try:
+                res = requests.get(url, params={"access_token": access_token}, timeout=10)
+                data = res.json()
+                
+                if res.ok:
+                    meta_numbers = data.get("data", [])
+                    if not meta_numbers:
+                        report.append({
+                            "waba_id": waba_id,
+                            "status": "ERROR",
+                            "message": "No phone numbers found in this WABA on Meta's side"
+                        })
+                    else:
+                        for n in meta_numbers:
+                            report.append({
+                                "waba_id": waba_id,
+                                "meta_id": n.get('id'),
+                                "display_number": n.get('display_phone_number'),
+                                "name": n.get('verified_name'),
+                                "status": n.get('status'),
+                                "quality": n.get('quality_rating')
+                            })
+                else:
+                    report.append({
+                        "waba_id": waba_id,
+                        "status": "META_API_ERROR",
+                        "message": data.get('error', {}).get('message', 'Unknown Error'),
+                        "error_details": data
+                    })
+            except Exception as e:
+                report.append({
+                    "waba_id": waba_id,
+                    "status": "REQUEST_FAILED",
+                    "message": str(e)
+                })
+
+        return Response({
+            "success": True,
+            "report": report
+        }, status=status.HTTP_200_OK)
