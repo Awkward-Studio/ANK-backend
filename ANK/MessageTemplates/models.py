@@ -155,6 +155,8 @@ class WhatsAppBusinessAccount(models.Model):
         help_text="Fernet-encrypted permanent system user access token",
         blank=True
     )
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    data_access_expires_at = models.DateTimeField(null=True, blank=True)
     
     is_active = models.BooleanField(default=True, db_index=True)
 
@@ -180,6 +182,9 @@ class WhatsAppBusinessAccount(models.Model):
         Returns empty string if decryption fails or no token exists.
         """
         if not self._encrypted_token:
+            return ""
+        if self.token_expires_at and timezone.now() >= self.token_expires_at:
+            logger.warning("[WABA] Stored token has expired for %s", self.waba_id)
             return ""
         
         try:

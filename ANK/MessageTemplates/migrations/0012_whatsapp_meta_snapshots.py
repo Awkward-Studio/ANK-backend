@@ -5,6 +5,8 @@ class Migration(migrations.Migration):
     dependencies = [("MessageTemplates", "0011_whatsappphonenumber_meta_status")]
 
     operations = [
+        migrations.AddField(model_name="whatsappbusinessaccount", name="token_expires_at", field=models.DateTimeField(blank=True, null=True)),
+        migrations.AddField(model_name="whatsappbusinessaccount", name="data_access_expires_at", field=models.DateTimeField(blank=True, null=True)),
         migrations.AddField(model_name="whatsappbusinessaccount", name="template_access_status", field=models.CharField(default="unknown", max_length=20)),
         migrations.AddField(model_name="whatsappbusinessaccount", name="template_access_reason", field=models.TextField(blank=True)),
         migrations.AddField(model_name="whatsappbusinessaccount", name="template_access_last_checked_at", field=models.DateTimeField(blank=True, null=True)),

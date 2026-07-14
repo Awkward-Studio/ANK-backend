@@ -193,6 +193,8 @@ class WhatsAppBusinessAccountSerializer(serializers.ModelSerializer):
             "waba_id",
             "name",
             "is_active",
+            "token_expires_at",
+            "data_access_expires_at",
             "template_access_status",
             "template_access_reason",
             "template_access_last_checked_at",
@@ -208,6 +210,7 @@ class WhatsAppBusinessAccountSerializer(serializers.ModelSerializer):
             "template_access_reason", "template_access_last_checked_at",
             "meta_last_attempt_at", "meta_last_success_at",
             "meta_fetch_error_code", "meta_fetch_error_message",
+            "token_expires_at", "data_access_expires_at",
         ]
 
 
@@ -296,6 +299,8 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         default="",
         help_text="Access token (optional, will be encrypted if WHATSAPP_ENCRYPTION_KEY is set)",
     )
+    token_expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    data_access_expires_at = serializers.DateTimeField(required=False, allow_null=True)
     display_phone_number = serializers.CharField(
         max_length=20, required=True, help_text="Display format like +919876543210"
     )
@@ -322,6 +327,8 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         logger = logging.getLogger(__name__)
         
         access_token = validated_data.pop("access_token", "")
+        token_expires_at = validated_data.pop("token_expires_at", None)
+        data_access_expires_at = validated_data.pop("data_access_expires_at", None)
         waba_id = validated_data.get("waba_id", "") or validated_data.get("asset_id", "")
         phone_number_id = validated_data.get("phone_number_id")
         
@@ -345,6 +352,8 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
             if encryption_key:
                 try:
                     waba.set_token(access_token)
+                    waba.token_expires_at = token_expires_at
+                    waba.data_access_expires_at = data_access_expires_at
                     waba.save()
                     token_stored = True
                     logger.info(f"[STORE_PHONE] Successfully encrypted and stored token for WABA {waba_id}")

@@ -102,8 +102,12 @@ def _post(path: str, payload: Dict[str, Any], phone_number_id: Optional[str] = N
     token, sender_id = _get_credentials(phone_number_id)
     
     url = f"{WABA_API_BASE}/{sender_id}/{path}"
-    logger.warning(f"[WA-POST] URL={url} SENDER={sender_id}")
-    logger.warning(f"[WA-POST-PAYLOAD] {payload}")
+    logger.info(
+        "[WA-POST] sender=%s endpoint=%s type=%s",
+        sender_id,
+        path,
+        payload.get("type"),
+    )
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -111,13 +115,21 @@ def _post(path: str, payload: Dict[str, Any], phone_number_id: Optional[str] = N
     }
 
     r = requests.post(url, headers=headers, json=payload, timeout=15)
-    logger.warning(f"[WA-POST-STATUS] {r.status_code}")
-    logger.warning(f"[WA-POST-BODY] {r.text}")
+    logger.info("[WA-POST] status=%s", r.status_code)
 
     data = r.json() if r.content else {}
     if r.status_code >= 300 or 'error' in data:
-        logger.exception(f"[WA-POST] ERROR {r.status_code}: {data}")
-        raise WhatsAppError(f"WABA error {r.status_code}: {data}")
+        error = data.get("error") or {}
+        logger.error(
+            "[WA-POST] status=%s code=%s subcode=%s trace=%s",
+            r.status_code,
+            error.get("code"),
+            error.get("error_subcode"),
+            error.get("fbtrace_id"),
+        )
+        raise WhatsAppError(
+            f"WABA error {r.status_code}: {error.get('message', 'send failed')}"
+        )
     
     # Add sender info for tracking
     data['_sender_phone_number_id'] = sender_id
