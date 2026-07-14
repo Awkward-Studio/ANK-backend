@@ -223,6 +223,15 @@ class WhatsAppPhoneNumber(models.Model):
         ("logged_out", "Logged Out"),
         ("unknown", "Unknown"),
     ]
+    META_ACCESS_STATE_CHOICES = [
+        ("never_checked", "Never checked"),
+        ("reachable", "Reachable"),
+        ("partial", "Partial"),
+        ("not_in_waba", "Not in WABA"),
+        ("access_denied", "Access denied"),
+        ("token_expired", "Token expired"),
+        ("error", "Error"),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
@@ -317,6 +326,24 @@ class WhatsAppPhoneNumber(models.Model):
         blank=True,
         help_text="Last time this number was reconciled with Meta"
     )
+    meta_access_state = models.CharField(
+        max_length=20,
+        choices=META_ACCESS_STATE_CHOICES,
+        default="never_checked",
+        db_index=True,
+    )
+    meta_seen_in_waba = models.BooleanField(null=True, blank=True)
+    meta_last_attempt_at = models.DateTimeField(null=True, blank=True)
+    meta_last_success_at = models.DateTimeField(null=True, blank=True)
+    meta_fetch_error_code = models.CharField(max_length=100, blank=True)
+    meta_fetch_error_message = models.TextField(blank=True)
+    meta_details_snapshot = models.JSONField(default=dict, blank=True)
+    code_verification_status = models.CharField(max_length=50, blank=True)
+    name_status = models.CharField(max_length=50, blank=True)
+    new_name_status = models.CharField(max_length=50, blank=True)
+    account_mode = models.CharField(max_length=50, blank=True)
+    platform_type = models.CharField(max_length=50, blank=True, db_index=True)
+    is_official_business_account = models.BooleanField(null=True, blank=True)
     
     last_used_at = models.DateTimeField(
         null=True,
@@ -335,6 +362,21 @@ class WhatsAppPhoneNumber(models.Model):
             models.Index(fields=["is_active", "is_default"]),
             models.Index(fields=["waba_id", "is_active"]),
         ]
+
+    @property
+    def is_usable(self) -> bool:
+        """A configured sender is usable only when Meta hosts it on Cloud API."""
+        return self.is_active and self.platform_type.upper() == "CLOUD_API"
+
+    @property
+    def usability_reason(self) -> str:
+        if not self.is_active:
+            return "Disabled in ANK"
+        if not self.platform_type:
+            return "Platform type has not been reported by Meta"
+        if self.platform_type.upper() != "CLOUD_API":
+            return f"Meta platform is {self.platform_type}, not CLOUD_API"
+        return ""
 
     def get_access_token(self) -> str:
         """

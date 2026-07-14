@@ -160,6 +160,9 @@ if USE_JWT:
             "public": os.getenv("DRF_THROTTLE_PUBLIC", "100/hour"),
             "download": os.getenv("DRF_THROTTLE_DOWNLOAD", "30/min"),
             "import": os.getenv("DRF_THROTTLE_IMPORT", "10/hour"),
+            "whatsapp_reconciliation": os.getenv(
+                "DRF_THROTTLE_WHATSAPP_RECONCILIATION", "10/hour"
+            ),
         },
     }
 else:
@@ -177,6 +180,9 @@ else:
             "public": os.getenv("DRF_THROTTLE_PUBLIC", "100/hour"),
             "download": os.getenv("DRF_THROTTLE_DOWNLOAD", "30/min"),
             "import": os.getenv("DRF_THROTTLE_IMPORT", "10/hour"),
+            "whatsapp_reconciliation": os.getenv(
+                "DRF_THROTTLE_WHATSAPP_RECONCILIATION", "10/hour"
+            ),
         },
     }
 

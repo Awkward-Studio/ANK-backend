@@ -22,6 +22,7 @@ PHONE_NUMBER_FIELDS = ",".join(
         "messaging_limit_tier",
         "code_verification_status",
         "account_mode",
+        "platform_type",
         "name_status",
         "new_name",
         "new_name_status",
@@ -212,6 +213,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
             phone.verified_name = meta_phone.get("verified_name") or phone.verified_name
             phone.quality_rating = meta_phone.get("quality_rating") or phone.quality_rating
             phone.messaging_limit_tier = meta_phone.get("messaging_limit_tier") or phone.messaging_limit_tier
+            phone.platform_type = meta_phone.get("platform_type") or ""
 
         phone.meta_last_checked_at = checked_at
         phone.save(
@@ -220,6 +222,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
                 "verified_name",
                 "quality_rating",
                 "messaging_limit_tier",
+                "platform_type",
                 "meta_status",
                 "meta_status_reason",
                 "meta_last_checked_at",

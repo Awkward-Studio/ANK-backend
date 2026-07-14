@@ -8,6 +8,11 @@ from MessageTemplates.whatsapp_views.phone_number_management import (
     PhoneNumberDetailView,
     MetaStatusReportView,
 )
+from MessageTemplates.whatsapp_views.hosted_reconciliation import (
+    HostedReconciliationApplyView,
+    HostedReconciliationPreviewView,
+    HostedReconciliationSnapshotView,
+)
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
     MessageTemplateList,
@@ -56,6 +61,21 @@ urlpatterns = [
     path("whatsapp/wabas/", WABAListCreateView.as_view(), name="whatsapp-waba-list"),
     path("whatsapp/wabas/<str:waba_id>/", WABADetailView.as_view(), name="whatsapp-waba-detail"),
     path("whatsapp/meta-status/", WABAMetaStatusView.as_view(), name="whatsapp-meta-status"),
+    path(
+        "whatsapp/reconciliation/snapshot/",
+        HostedReconciliationSnapshotView.as_view(),
+        name="whatsapp-reconciliation-snapshot",
+    ),
+    path(
+        "whatsapp/reconciliation/preview/",
+        HostedReconciliationPreviewView.as_view(),
+        name="whatsapp-reconciliation-preview",
+    ),
+    path(
+        "whatsapp/reconciliation/apply/",
+        HostedReconciliationApplyView.as_view(),
+        name="whatsapp-reconciliation-apply",
+    ),
 
     # WhatsApp Phone Number Management
     path(
