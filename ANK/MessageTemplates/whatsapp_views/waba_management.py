@@ -113,6 +113,7 @@ class WABAMetaStatusView(APIView):
                     "meta_phone_number_ids": result["meta_phone_number_ids"],
                     "counts": counts,
                     "numbers": serialized_numbers,
+                    "template_management": result["template_management"],
                 }
             )
 

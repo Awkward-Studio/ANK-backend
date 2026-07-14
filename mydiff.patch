@@ -1,0 +1,102 @@
+diff --git a/ANK/MessageTemplates/services/meta_reconciliation.py b/ANK/MessageTemplates/services/meta_reconciliation.py
+index b8d7f9b..67b4ee1 100644
+--- a/ANK/MessageTemplates/services/meta_reconciliation.py
++++ b/ANK/MessageTemplates/services/meta_reconciliation.py
+@@ -10,6 +10,8 @@ from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
+ logger = logging.getLogger(__name__)
+ 
+ GRAPH_API_BASE = os.getenv("WABA_API_BASE", "https://graph.facebook.com/v21.0")
++# Align template capability checks with the Communications template manager.
++TEMPLATE_GRAPH_API_BASE = os.getenv("WABA_TEMPLATE_API_BASE", "https://graph.facebook.com/v20.0")
+ 
+ PHONE_NUMBER_FIELDS = ",".join(
+     [
+@@ -28,6 +30,52 @@ PHONE_NUMBER_FIELDS = ",".join(
+ )
+ 
+ 
++def _template_management_capability(waba: WhatsAppBusinessAccount) -> Dict[str, str]:
++    """Check whether the saved token can access this WABA's template edge.
++
++    Meta creates templates at the WABA level, rather than against an individual
++    phone number.  A successful read proves management-edge access but does not
++    submit a template or guarantee approval, policy eligibility, or quota.
++    """
++    # Communications resolves templates with the shared WABA token first.
++    # Preserve its behavior here so both screens report the same capability.
++    token = os.getenv("WABA_ACCESS_TOKEN", "") or _get_waba_token(waba)
++    if not token:
++        return {
++            "status": "unavailable",
++            "reason": "No access token available for this WABA",
++        }
++
++    try:
++        response = requests.get(
++            f"{TEMPLATE_GRAPH_API_BASE}/{waba.waba_id}/message_templates",
++            params={"access_token": token, "fields": "name", "limit": 1},
++            timeout=10,
++        )
++        if response.ok:
++            return {"status": "available", "reason": ""}
++
++        try:
++            payload = response.json()
++        except ValueError:
++            payload = {}
++        error = payload.get("error") or {}
++        message = error.get("message") or response.text[:300]
++        code = error.get("code")
++        lowered = str(message).lower()
++        if (
++            response.status_code in {400, 401, 403, 404}
++            or code in {10, 100, 190, 200}
++            or "unsupported get request" in lowered
++            or "permission" in lowered
++            or "access token" in lowered
++        ):
++            return {"status": "unavailable", "reason": message}
++        return {"status": "unknown", "reason": message}
++    except requests.RequestException as error:
++        return {"status": "unknown", "reason": str(error)}
++
++
+ def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
+     token = waba.get_token()
+     if token:
+@@ -131,6 +179,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
+     """
+     local_numbers = list(waba.phone_numbers.all())
+     meta_numbers, fetch_error, fetch_status = _fetch_waba_phone_numbers(waba)
++    template_management = _template_management_capability(waba)
+     checked_at = timezone.now()
+ 
+     if fetch_error:
+@@ -146,6 +195,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
+             "numbers": local_numbers,
+             "meta_phone_number_ids": [],
+             "meta_details_by_phone_id": {},
++            "template_management": template_management,
+         }
+ 
+     meta_by_id = {str(item.get("id")): item for item in meta_numbers if item.get("id")}
+@@ -186,6 +236,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
+         # non-sensitive Meta record for the status UI without persisting an
+         # unbounded vendor payload in ANK's database.
+         "meta_details_by_phone_id": meta_by_id,
++        "template_management": template_management,
+     }
+ 
+ 
+diff --git a/ANK/MessageTemplates/whatsapp_views/waba_management.py b/ANK/MessageTemplates/whatsapp_views/waba_management.py
+index 00a8f0c..3509560 100644
+--- a/ANK/MessageTemplates/whatsapp_views/waba_management.py
++++ b/ANK/MessageTemplates/whatsapp_views/waba_management.py
+@@ -113,6 +113,7 @@ class WABAMetaStatusView(APIView):
+                     "meta_phone_number_ids": result["meta_phone_number_ids"],
+                     "counts": counts,
+                     "numbers": serialized_numbers,
++                    "template_management": result["template_management"],
+                 }
+             )
+ 
