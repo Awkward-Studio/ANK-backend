@@ -31,7 +31,8 @@ for phone in phone_numbers:
     checked_wabas.add(waba_id)
     print(f"\n🔍 Checking WABA ID: {waba_id} (using token from phone {phone.display_phone_number})")
     
-    url = f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers"
+    graph_version = os.getenv("META_GRAPH_API_VERSION", "v25.0")
+    url = f"https://graph.facebook.com/{graph_version}/{waba_id}/phone_numbers"
     try:
         res = requests.get(url, params={"access_token": access_token}, timeout=10)
         data = res.json()

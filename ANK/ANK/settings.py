@@ -75,6 +75,19 @@ WHATSAPP_ENCRYPTION_KEY = os.getenv("WHATSAPP_ENCRYPTION_KEY")
 if not WHATSAPP_ENCRYPTION_KEY and not DEBUG:
     raise ImproperlyConfigured("WHATSAPP_ENCRYPTION_KEY must be set in production")
 
+# Meta Graph API configuration. Keep the version in one place so upgrades can be
+# validated and rolled out without editing individual WhatsApp services.
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
+META_GRAPH_API_BASE_URL = os.getenv(
+    "META_GRAPH_API_BASE_URL", "https://graph.facebook.com"
+).rstrip("/")
+ANK_INTERNAL_API_SECRET = os.getenv(
+    "ANK_INTERNAL_API_SECRET", os.getenv("DJANGO_RSVP_SECRET", "")
+)
+ANK_INTERNAL_API_SECRET_PREVIOUS = os.getenv(
+    "ANK_INTERNAL_API_SECRET_PREVIOUS", ""
+)
+
 # ---------------------------
 # Installed apps
 # ---------------------------

@@ -193,10 +193,22 @@ class WhatsAppBusinessAccountSerializer(serializers.ModelSerializer):
             "waba_id",
             "name",
             "is_active",
+            "template_access_status",
+            "template_access_reason",
+            "template_access_last_checked_at",
+            "meta_last_attempt_at",
+            "meta_last_success_at",
+            "meta_fetch_error_code",
+            "meta_fetch_error_message",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", "created_at", "updated_at", "template_access_status",
+            "template_access_reason", "template_access_last_checked_at",
+            "meta_last_attempt_at", "meta_last_success_at",
+            "meta_fetch_error_code", "meta_fetch_error_message",
+        ]
 
 
 class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
@@ -221,6 +233,18 @@ class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
             "meta_status",
             "meta_status_reason",
             "meta_last_checked_at",
+            "meta_access_state",
+            "meta_seen_in_waba",
+            "meta_last_attempt_at",
+            "meta_last_success_at",
+            "meta_fetch_error_code",
+            "meta_fetch_error_message",
+            "meta_details_snapshot",
+            "code_verification_status",
+            "name_status",
+            "new_name_status",
+            "account_mode",
+            "is_official_business_account",
             "created_at",
             "updated_at",
             "last_used_at",
@@ -233,6 +257,18 @@ class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
             "meta_status",
             "meta_status_reason",
             "meta_last_checked_at",
+            "meta_access_state",
+            "meta_seen_in_waba",
+            "meta_last_attempt_at",
+            "meta_last_success_at",
+            "meta_fetch_error_code",
+            "meta_fetch_error_message",
+            "meta_details_snapshot",
+            "code_verification_status",
+            "name_status",
+            "new_name_status",
+            "account_mode",
+            "is_official_business_account",
         ]
 
 
@@ -469,4 +505,3 @@ class FlowSessionSerializer(serializers.ModelSerializer):
                 "rsvp_status": "-",
                 "event_name": "-",
             }
-

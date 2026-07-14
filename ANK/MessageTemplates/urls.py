@@ -1,13 +1,15 @@
 from django.urls import path
 from MessageTemplates.whatsapp_views.flush_message import FlushQueuedMessagesView
 from MessageTemplates.whatsapp_views.send_template import SendLocalTemplateView
-from MessageTemplates.whatsapp_views.waba_management import WABAListCreateView, WABADetailView, WABAMetaStatusView
+from MessageTemplates.whatsapp_views.waba_management import WABAListCreateView, WABADetailView, WABAMetaStatusView, WhatsAppAdminCheckView
 from MessageTemplates.whatsapp_views.phone_number_management import (
     StorePhoneNumberView,
     ListPhoneNumbersView,
     PhoneNumberDetailView,
     MetaStatusReportView,
 )
+from MessageTemplates.whatsapp_views.meta_templates import MetaTemplateListCreateView
+from MessageTemplates.whatsapp_views.meta_messages import MetaMessageSendView
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
     MessageTemplateList,
@@ -21,6 +23,7 @@ urlpatterns = [
     path(
         "message-templates/", MessageTemplateList.as_view(), name="messagetemplate-list"
     ),
+    path("whatsapp/messages/send/", MetaMessageSendView.as_view(), name="whatsapp-meta-send"),
     path(
         "message-templates/<uuid:pk>/",
         MessageTemplateDetail.as_view(),
@@ -54,8 +57,14 @@ urlpatterns = [
     ),
     # WhatsApp Account Management
     path("whatsapp/wabas/", WABAListCreateView.as_view(), name="whatsapp-waba-list"),
+    path("whatsapp/admin-check/", WhatsAppAdminCheckView.as_view(), name="whatsapp-admin-check"),
     path("whatsapp/wabas/<str:waba_id>/", WABADetailView.as_view(), name="whatsapp-waba-detail"),
     path("whatsapp/meta-status/", WABAMetaStatusView.as_view(), name="whatsapp-meta-status"),
+    path(
+        "whatsapp/wabas/<str:waba_id>/templates/",
+        MetaTemplateListCreateView.as_view(),
+        name="whatsapp-meta-templates",
+    ),
 
     # WhatsApp Phone Number Management
     path(

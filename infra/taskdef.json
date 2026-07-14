@@ -40,7 +40,11 @@
         },
         {
           "name": "DEBUG",
-          "value": "true"
+          "value": "false"
+        },
+        {
+          "name": "META_GRAPH_API_VERSION",
+          "value": "v25.0"
         },
         {
           "name": "DJANGO_CORS_ALLOWED_ORIGINS",

@@ -8,7 +8,9 @@ import requests
 from typing import Dict, Any, List, Optional, Tuple
 
 
-WABA_API_BASE = "https://graph.facebook.com/v21.0"
+from django.conf import settings
+
+WABA_API_BASE = f"{settings.META_GRAPH_API_BASE_URL}/{settings.META_GRAPH_API_VERSION}"
 
 WABA_TOKEN = os.getenv("WABA_ACCESS_TOKEN", "")
 WABA_PHONE_ID = os.getenv("WABA_PHONE_NUMBER_ID", "")
@@ -400,4 +402,3 @@ def send_template(
     msg_id = (data.get("messages") or [{}])[0].get("id", "")
     sender_id = data.get('_sender_phone_number_id', '')
     return (msg_id, sender_id)
-

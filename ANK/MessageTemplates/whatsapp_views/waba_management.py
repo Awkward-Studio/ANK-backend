@@ -2,35 +2,26 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny
 import os
+from django.conf import settings as django_settings
 
 from django.shortcuts import get_object_or_404
 
 from MessageTemplates.models import WhatsAppBusinessAccount
 from MessageTemplates.serializers import WhatsAppBusinessAccountSerializer, WhatsAppPhoneNumberSerializer
 from MessageTemplates.services.meta_reconciliation import reconcile_all_wabas
+from MessageTemplates.permissions import IsWhatsAppAdminOrInternalService
 
 logger = logging.getLogger(__name__)
-WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
-
 class WABAListCreateView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def get(self, request):
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            return Response({"error": "Unauthorized"}, status=403)
-            
         qs = WhatsAppBusinessAccount.objects.all()
         ser = WhatsAppBusinessAccountSerializer(qs, many=True)
         return Response(ser.data)
 
     def post(self, request):
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            return Response({"error": "Unauthorized"}, status=403)
-            
         waba_id = request.data.get("waba_id")
         name = request.data.get("name")
         access_token = request.data.get("access_token")
@@ -57,39 +48,72 @@ class WABAListCreateView(APIView):
         return Response(ser.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
-class WABADetailView(APIView):
-    permission_classes = [AllowAny]
+class WhatsAppAdminCheckView(APIView):
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
-    def _authorize(self, request):
-        token = request.headers.get("X-Webhook-Token", "")
-        return WEBHOOK_SECRET and token == WEBHOOK_SECRET
+    def get(self, request):
+        return Response({"authorized": True}, status=status.HTTP_200_OK)
+
+
+class WABADetailView(APIView):
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def delete(self, request, waba_id: str):
-        if not self._authorize(request):
-            return Response({"error": "Unauthorized"}, status=403)
-
         waba = get_object_or_404(WhatsAppBusinessAccount, waba_id=waba_id)
         waba.delete()
         return Response({"success": True, "deleted_waba_id": waba_id}, status=status.HTTP_200_OK)
 
 
 class WABAMetaStatusView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def get(self, request):
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            return Response({"error": "Unauthorized"}, status=403)
-
+        """Return saved snapshots without making a Meta request."""
         waba_id = request.query_params.get("waba_id")
         waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
         if waba_id:
             waba_qs = waba_qs.filter(waba_id=waba_id)
 
+        results = [
+            {
+                "waba_id": waba.waba_id,
+                "fetch_error": waba.meta_fetch_error_message,
+                "numbers": list(waba.phone_numbers.all()),
+                "meta_phone_number_ids": [
+                    phone.phone_number_id
+                    for phone in waba.phone_numbers.all()
+                    if phone.meta_seen_in_waba
+                ],
+                "meta_details_by_phone_id": {
+                    phone.phone_number_id: phone.meta_details_snapshot
+                    for phone in waba.phone_numbers.all()
+                },
+                "template_management": {
+                    "status": waba.template_access_status,
+                    "reason": waba.template_access_reason,
+                    "last_checked_at": waba.template_access_last_checked_at,
+                },
+            }
+            for waba in waba_qs
+        ]
+        return self._response(waba_qs, results)
+
+    def post(self, request):
+        """Refresh saved snapshots from Meta, isolated by WABA."""
+        waba_id = request.data.get("waba_id") or request.query_params.get("waba_id")
+        waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
+        if waba_id:
+            waba_qs = waba_qs.filter(waba_id=waba_id)
+
         results = reconcile_all_wabas(waba_qs)
+        return self._response(waba_qs, results)
+
+    @staticmethod
+    def _response(waba_qs, results):
+        wabas_by_id = {waba.waba_id: waba for waba in waba_qs}
         payload = []
         for result in results:
-            waba = next((item for item in waba_qs if item.waba_id == result["waba_id"]), None)
+            waba = wabas_by_id.get(result["waba_id"])
             if not waba:
                 continue
 
@@ -100,12 +124,9 @@ class WABAMetaStatusView(APIView):
                 number["meta_details"] = meta_details_by_phone_id.get(
                     str(number["phone_number_id"])
                 )
-            counts = {
-                "active": sum(1 for phone in numbers if phone.meta_status == "active"),
-                "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
-                "logged_out": sum(1 for phone in numbers if phone.meta_status == "logged_out"),
-                "unknown": sum(1 for phone in numbers if phone.meta_status == "unknown"),
-            }
+            counts = {}
+            for phone in numbers:
+                counts[phone.meta_access_state] = counts.get(phone.meta_access_state, 0) + 1
             payload.append(
                 {
                     "waba": WhatsAppBusinessAccountSerializer(waba).data,
@@ -117,4 +138,11 @@ class WABAMetaStatusView(APIView):
                 }
             )
 
-        return Response({"success": True, "wabas": payload}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "success": True,
+                "graph_api_version": django_settings.META_GRAPH_API_VERSION,
+                "wabas": payload,
+            },
+            status=status.HTTP_200_OK,
+        )

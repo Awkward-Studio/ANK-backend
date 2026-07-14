@@ -4,7 +4,6 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 
 from MessageTemplates.models import WhatsAppPhoneNumber, WhatsAppBusinessAccount
@@ -13,10 +12,13 @@ from MessageTemplates.serializers import (
     WhatsAppPhoneNumberWriteSerializer,
 )
 from MessageTemplates.services.meta_reconciliation import reconcile_all_wabas
+from MessageTemplates.permissions import (
+    IsAuthenticatedOrInternalService,
+    IsWhatsAppAdminOrInternalService,
+)
+from MessageTemplates.services.meta_graph import MetaGraphClient, MetaGraphError
 
 logger = logging.getLogger(__name__)
-WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
-
 
 class StorePhoneNumberView(APIView):
     """
@@ -37,18 +39,9 @@ class StorePhoneNumberView(APIView):
     }
     """
 
-    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def post(self, request):
-        # Verify webhook token
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            logger.warning("[STORE_PHONE] Invalid or missing webhook token")
-            return Response(
-                {"success": False, "error": "Invalid authentication token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        
         logger.info("[STORE_PHONE] Received request to store phone number")
         
         serializer = WhatsAppPhoneNumberWriteSerializer(data=request.data)
@@ -70,19 +63,11 @@ class StorePhoneNumberView(APIView):
             access_token = phone_number.get_access_token()
             
             if waba_id and access_token:
-                sub_url = f"https://graph.facebook.com/v20.0/{waba_id}/subscribed_apps"
                 try:
-                    sub_res = requests.post(
-                        sub_url, 
-                        params={"access_token": access_token},
-                        timeout=10
-                    )
-                    if sub_res.ok:
-                        logger.info(f"[STORE_PHONE] Successfully subscribed webhooks for WABA {waba_id}")
-                    else:
-                        logger.warning(f"[STORE_PHONE] Webhook subscription failed for {waba_id}: {sub_res.text}")
-                except Exception as sub_err:
-                    logger.error(f"[STORE_PHONE] Error calling Meta Graph API for subscription: {sub_err}")
+                    MetaGraphClient(access_token).subscribe_waba(waba_id)
+                    logger.info("[STORE_PHONE] Subscribed WABA %s", waba_id)
+                except MetaGraphError as sub_err:
+                    logger.warning("[STORE_PHONE] WABA subscription failed: %s", sub_err)
             # ------------------------------------------------------
 
             # Return created phone number details
@@ -117,18 +102,9 @@ class ListPhoneNumbersView(APIView):
     Returns list of available phone numbers.
     """
 
-    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
+    permission_classes = [IsAuthenticatedOrInternalService]
 
     def get(self, request):
-        # Verify webhook token
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            logger.warning("[LIST_PHONES] Invalid or missing webhook token")
-            return Response(
-                {"success": False, "error": "Invalid authentication token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        
         logger.info("[LIST_PHONES] Fetching phone numbers")
 
         # Parse query params
@@ -175,19 +151,10 @@ class PhoneNumberDetailView(APIView):
     Get or update a specific phone number.
     """
 
-    permission_classes = [AllowAny]  # Verify with X-Webhook-Token header
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def get(self, request, phone_number_id: str):
         """Get details of a specific phone number"""
-        # Verify webhook token
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            logger.warning(f"[PHONE_DETAIL] Invalid or missing webhook token")
-            return Response(
-                {"success": False, "error": "Invalid authentication token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        
         logger.info(f"[PHONE_DETAIL] Fetching phone_number_id={phone_number_id}")
 
         phone = get_object_or_404(WhatsAppPhoneNumber, phone_number_id=phone_number_id)
@@ -200,15 +167,6 @@ class PhoneNumberDetailView(APIView):
 
     def patch(self, request, phone_number_id: str):
         """Update phone number settings (is_active, is_default, etc.)"""
-        # Verify webhook token
-        token = request.headers.get("X-Webhook-Token", "")
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            logger.warning(f"[PHONE_UPDATE] Invalid or missing webhook token")
-            return Response(
-                {"success": False, "error": "Invalid authentication token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        
         logger.info(f"[PHONE_UPDATE] Updating phone_number_id={phone_number_id}")
 
         phone = get_object_or_404(WhatsAppPhoneNumber, phone_number_id=phone_number_id)
@@ -249,78 +207,28 @@ class MetaStatusReportView(APIView):
     Queries the Meta Graph API directly using stored tokens to check 
     the actual validity and restrictions of all active phone numbers.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsWhatsAppAdminOrInternalService]
 
     def get(self, request):
-        token = request.headers.get("X-Webhook-Token", request.query_params.get("token", ""))
-        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
-            logger.warning("[META_STATUS] Invalid or missing webhook token")
-            return Response(
-                {"success": False, "error": "Invalid authentication token"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        logger.info("[META_STATUS] Generating Meta Graph API report for all active numbers")
-
-        checked_wabas = set()
-        phone_numbers = WhatsAppPhoneNumber.objects.filter(is_active=True)
+        logger.info("[META_STATUS] Refreshing report through the central Graph client")
+        results = reconcile_all_wabas(
+            WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
+        )
         report = []
-
-        for phone in phone_numbers:
-            waba_id = phone.waba_id
-            access_token = phone.get_access_token()
-            
-            if not waba_id or not access_token:
-                report.append({
-                    "display_number": phone.display_phone_number,
-                    "name": phone.verified_name,
-                    "status": "ERROR",
-                    "message": "Missing WABA ID or Access Token in database"
-                })
-                continue
-                
-            if waba_id in checked_wabas:
-                continue
-                
-            checked_wabas.add(waba_id)
-            url = f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers"
-            try:
-                res = requests.get(url, params={"access_token": access_token}, timeout=10)
-                data = res.json()
-                
-                if res.ok:
-                    meta_numbers = data.get("data", [])
-                    if not meta_numbers:
-                        report.append({
-                            "waba_id": waba_id,
-                            "status": "ERROR",
-                            "message": "No phone numbers found in this WABA on Meta's side"
-                        })
-                    else:
-                        for n in meta_numbers:
-                            report.append({
-                                "waba_id": waba_id,
-                                "meta_id": n.get('id'),
-                                "display_number": n.get('display_phone_number'),
-                                "name": n.get('verified_name'),
-                                "status": n.get('status'),
-                                "quality": n.get('quality_rating')
-                            })
-                else:
-                    report.append({
-                        "waba_id": waba_id,
-                        "status": "META_API_ERROR",
-                        "message": data.get('error', {}).get('message', 'Unknown Error'),
-                        "error_details": data
-                    })
-            except Exception as e:
-                report.append({
-                    "waba_id": waba_id,
-                    "status": "REQUEST_FAILED",
-                    "message": str(e)
-                })
-
-        return Response({
-            "success": True,
-            "report": report
-        }, status=status.HTTP_200_OK)
+        for result in results:
+            for phone in result["numbers"]:
+                report.append(
+                    {
+                        "waba_id": phone.waba_id,
+                        "meta_id": phone.phone_number_id,
+                        "display_number": phone.display_phone_number,
+                        "name": phone.verified_name,
+                        "access_state": phone.meta_access_state,
+                        "seen_in_waba": phone.meta_seen_in_waba,
+                        "quality": phone.quality_rating,
+                        "code_verification_status": phone.code_verification_status or None,
+                        "name_status": phone.name_status or None,
+                        "message": phone.meta_fetch_error_message,
+                    }
+                )
+        return Response({"success": True, "report": report})
