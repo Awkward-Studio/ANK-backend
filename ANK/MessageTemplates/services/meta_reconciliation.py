@@ -37,10 +37,10 @@ def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
     return os.getenv("WABA_ACCESS_TOKEN", "")
 
 
-def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str]:
+def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str, str]:
     token = _get_waba_token(waba)
     if not token:
-        return [], "No access token available for this WABA"
+        return [], "No access token available for this WABA", "logged_out"
 
     url = f"{GRAPH_API_BASE}/{waba.waba_id}/phone_numbers"
     params = {"fields": PHONE_NUMBER_FIELDS, "limit": 100}
@@ -58,17 +58,31 @@ def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict]
         try:
             payload = response.json()
         except ValueError:
-            return [], f"Meta returned non-JSON response ({response.status_code})"
+            return [], f"Meta returned non-JSON response ({response.status_code})", "unknown"
 
         if not response.ok:
             error = payload.get("error") or {}
             message = error.get("message") or response.text[:300]
-            return [], message
+            code = error.get("code")
+            error_subcode = error.get("error_subcode")
+            lowered = str(message).lower()
+            if (
+                response.status_code in {400, 401, 403}
+                or code in {10, 100, 190, 200}
+                or error_subcode in {33, 2018001}
+                or "unsupported get request" in lowered
+                or "does not exist" in lowered
+                or "object with id" in lowered
+                or "permission" in lowered
+                or "access token" in lowered
+            ):
+                return [], message, "logged_out"
+            return [], message, "unknown"
 
         numbers.extend(payload.get("data") or [])
         url = (payload.get("paging") or {}).get("next")
 
-    return numbers, ""
+    return numbers, "", ""
 
 
 def _status_from_meta(meta_phone: dict) -> Tuple[str, str]:
@@ -109,13 +123,13 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
     disappear from a WABA after Meta/business-side changes.
     """
     local_numbers = list(waba.phone_numbers.all())
-    meta_numbers, fetch_error = _fetch_waba_phone_numbers(waba)
+    meta_numbers, fetch_error, fetch_status = _fetch_waba_phone_numbers(waba)
     checked_at = timezone.now()
 
     if fetch_error:
         logger.warning("[META-RECONCILE] WABA %s fetch failed: %s", waba.waba_id, fetch_error)
         for phone in local_numbers:
-            phone.meta_status = "unknown"
+            phone.meta_status = fetch_status or "unknown"
             phone.meta_status_reason = fetch_error
             phone.meta_last_checked_at = checked_at
             phone.save(update_fields=["meta_status", "meta_status_reason", "meta_last_checked_at"])
@@ -134,10 +148,8 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
         if not meta_phone:
             phone.meta_status = "logged_out"
             phone.meta_status_reason = "Phone number is saved locally but no longer appears under this WABA in Meta"
-            phone.is_active = False
         else:
             phone.meta_status, phone.meta_status_reason = _status_from_meta(meta_phone)
-            phone.is_active = phone.meta_status == "active"
             phone.display_phone_number = meta_phone.get("display_phone_number") or phone.display_phone_number
             phone.verified_name = meta_phone.get("verified_name") or phone.verified_name
             phone.quality_rating = meta_phone.get("quality_rating") or phone.quality_rating
@@ -150,7 +162,6 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
                 "verified_name",
                 "quality_rating",
                 "messaging_limit_tier",
-                "is_active",
                 "meta_status",
                 "meta_status_reason",
                 "meta_last_checked_at",

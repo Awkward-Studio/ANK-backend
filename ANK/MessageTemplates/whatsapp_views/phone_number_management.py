@@ -112,7 +112,7 @@ class ListPhoneNumbersView(APIView):
     Query params:
       - is_active (bool, default: true; pass all to include every status)
       - waba_id (str, optional)
-      - sync_meta (bool, default: true)
+      - sync_meta (bool, default: false)
     
     Returns list of available phone numbers.
     """
@@ -134,7 +134,7 @@ class ListPhoneNumbersView(APIView):
         # Parse query params
         is_active_param = request.query_params.get("is_active", "true").lower()
         waba_id = request.query_params.get("waba_id", None)
-        sync_meta = request.query_params.get("sync_meta", "true").lower() == "true"
+        sync_meta = request.query_params.get("sync_meta", "false").lower() == "true"
 
         if sync_meta:
             waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
@@ -145,7 +145,9 @@ class ListPhoneNumbersView(APIView):
         # Build query
         queryset = WhatsAppPhoneNumber.objects.all()
         if is_active_param == "true":
-            queryset = queryset.filter(is_active=True, meta_status="active")
+            queryset = queryset.filter(is_active=True)
+            if sync_meta:
+                queryset = queryset.filter(meta_status="active")
         elif is_active_param == "false":
             queryset = queryset.filter(is_active=False)
         if waba_id:
