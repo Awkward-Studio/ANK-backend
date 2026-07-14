@@ -19,6 +19,11 @@ PHONE_NUMBER_FIELDS = ",".join(
         "quality_rating",
         "messaging_limit_tier",
         "code_verification_status",
+        "account_mode",
+        "name_status",
+        "new_name",
+        "new_name_status",
+        "is_official_business_account",
     ]
 )
 
@@ -87,8 +92,8 @@ def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict]
 
 def _status_from_meta(meta_phone: dict) -> Tuple[str, str]:
     status_values = {
-        str(meta_phone.get("status") or "").upper(),
         str(meta_phone.get("name_status") or "").upper(),
+        str(meta_phone.get("new_name_status") or "").upper(),
         str(meta_phone.get("code_verification_status") or "").upper(),
     }
     quality = str(meta_phone.get("quality_rating") or "").upper()
@@ -104,8 +109,10 @@ def _status_from_meta(meta_phone: dict) -> Tuple[str, str]:
     }
     if status_values & blocked_markers or quality == "RED":
         reason_parts = [
-            f"status={meta_phone.get('status')}" if meta_phone.get("status") else "",
             f"name_status={meta_phone.get('name_status')}" if meta_phone.get("name_status") else "",
+            f"new_name_status={meta_phone.get('new_name_status')}"
+            if meta_phone.get("new_name_status")
+            else "",
             f"code_verification_status={meta_phone.get('code_verification_status')}"
             if meta_phone.get("code_verification_status")
             else "",
@@ -138,6 +145,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
             "fetch_error": fetch_error,
             "numbers": local_numbers,
             "meta_phone_number_ids": [],
+            "meta_details_by_phone_id": {},
         }
 
     meta_by_id = {str(item.get("id")): item for item in meta_numbers if item.get("id")}
@@ -174,6 +182,10 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
         "fetch_error": "",
         "numbers": local_numbers,
         "meta_phone_number_ids": sorted(meta_ids),
+        # This is intentionally response-only.  It exposes the complete
+        # non-sensitive Meta record for the status UI without persisting an
+        # unbounded vendor payload in ANK's database.
+        "meta_details_by_phone_id": meta_by_id,
     }
 
 

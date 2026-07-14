@@ -94,6 +94,12 @@ class WABAMetaStatusView(APIView):
                 continue
 
             numbers = result["numbers"]
+            meta_details_by_phone_id = result.get("meta_details_by_phone_id", {})
+            serialized_numbers = WhatsAppPhoneNumberSerializer(numbers, many=True).data
+            for number in serialized_numbers:
+                number["meta_details"] = meta_details_by_phone_id.get(
+                    str(number["phone_number_id"])
+                )
             counts = {
                 "active": sum(1 for phone in numbers if phone.meta_status == "active"),
                 "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
@@ -106,7 +112,7 @@ class WABAMetaStatusView(APIView):
                     "fetch_error": result["fetch_error"],
                     "meta_phone_number_ids": result["meta_phone_number_ids"],
                     "counts": counts,
-                    "numbers": WhatsAppPhoneNumberSerializer(numbers, many=True).data,
+                    "numbers": serialized_numbers,
                 }
             )
 
