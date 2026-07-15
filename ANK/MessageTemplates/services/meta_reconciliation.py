@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Dict, Iterable, List, Tuple
 
 import requests
@@ -9,9 +8,9 @@ from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API_BASE = os.getenv("WABA_API_BASE", "https://graph.facebook.com/v21.0")
+GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 # Align template capability checks with the Communications template manager.
-TEMPLATE_GRAPH_API_BASE = os.getenv("WABA_TEMPLATE_API_BASE", "https://graph.facebook.com/v20.0")
+TEMPLATE_GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
 
 PHONE_NUMBER_FIELDS = ",".join(
     [
@@ -38,9 +37,7 @@ def _template_management_capability(waba: WhatsAppBusinessAccount) -> Dict[str, 
     phone number.  A successful read proves management-edge access but does not
     submit a template or guarantee approval, policy eligibility, or quota.
     """
-    # Communications resolves templates with the shared WABA token first.
-    # Preserve its behavior here so both screens report the same capability.
-    token = os.getenv("WABA_ACCESS_TOKEN", "") or _get_waba_token(waba)
+    token = _get_waba_token(waba)
     if not token:
         return {
             "status": "unavailable",
@@ -84,11 +81,11 @@ def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
 
     phone = waba.phone_numbers.first()
     if phone:
-        token = phone.get_access_token()
+        token = phone.get_access_token(allow_env_fallback=False)
         if token:
             return token
 
-    return os.getenv("WABA_ACCESS_TOKEN", "")
+    return ""
 
 
 def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str, str]:

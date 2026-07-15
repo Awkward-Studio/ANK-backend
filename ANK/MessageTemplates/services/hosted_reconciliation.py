@@ -163,6 +163,7 @@ def _local_dict(phone):
     return {
         "phone_number_id": str(phone.phone_number_id),
         "display_phone_number": phone.display_phone_number,
+        "normalized_display_phone_number": phone.normalized_display_phone_number,
         "verified_name": phone.verified_name,
         "quality_rating": phone.quality_rating,
         "messaging_limit_tier": phone.messaging_limit_tier,
@@ -245,9 +246,42 @@ def build_comparison(access_token: str, waba_ids: Iterable[str] = None, client=N
         result_wabas.append({"waba_id": waba_id, "name": None, "local_count": 0, "meta_count": None, "error": {"message": "WABA is not present in the hosted database", "access_state": "error"}, "template_management": None, "phones": []})
         summary["waba_access_error"] += 1
 
+    duplicate_groups = {}
+    for waba_row in result_wabas:
+        for phone_row in waba_row.get("phones", []):
+            local = phone_row.get("local") or {}
+            meta = phone_row.get("meta") or {}
+            display = meta.get("display_phone_number") or local.get("display_phone_number") or ""
+            normalized = local.get("normalized_display_phone_number") or "".join(
+                char for char in str(display) if char.isdigit()
+            )
+            if not normalized:
+                continue
+            duplicate_groups.setdefault(normalized, []).append(
+                {
+                    "waba_id": waba_row.get("waba_id"),
+                    "waba_name": waba_row.get("name"),
+                    "phone_number_id": phone_row.get("phone_number_id"),
+                    "display_phone_number": display,
+                    "verified_name": meta.get("verified_name") or local.get("verified_name"),
+                    "classification": phone_row.get("classification"),
+                    "platform_type": meta.get("platform_type") or local.get("platform_type"),
+                    "is_active": local.get("is_active"),
+                    "is_usable": local.get("is_usable"),
+                }
+            )
+    duplicate_groups = {
+        normalized: rows
+        for normalized, rows in sorted(duplicate_groups.items())
+        if len(rows) > 1
+    }
+    if duplicate_groups:
+        summary["duplicate_display_number"] = sum(len(rows) for rows in duplicate_groups.values())
+
     comparison = {
         "graph_api_version": GRAPH_VERSION,
         "wabas": result_wabas,
+        "duplicate_display_number_groups": duplicate_groups,
         "summary": dict(sorted(summary.items())),
     }
     digest = hashlib.sha256(json.dumps(comparison, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

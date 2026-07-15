@@ -11,6 +11,39 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 
+def _normalize_display_phone_number(value: str) -> str:
+    return "".join(char for char in str(value or "") if char.isdigit())
+
+
+def _fetch_meta_phone_numbers(waba_id: str, access_token: str) -> list[dict]:
+    import requests
+
+    response = requests.get(
+        f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers",
+        params={
+            "access_token": access_token,
+            "fields": (
+                "id,display_phone_number,verified_name,quality_rating,"
+                "messaging_limit_tier,code_verification_status,name_status,"
+                "new_name_status,account_mode,platform_type,is_official_business_account"
+            ),
+            "limit": 100,
+        },
+        timeout=10,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+
+    if not response.ok:
+        error = payload.get("error") or {}
+        message = error.get("message") or response.text[:300]
+        raise serializers.ValidationError({"waba_id": f"Meta could not verify this WABA: {message}"})
+
+    return payload.get("data") or []
+
+
 class MessageTemplateVariableSerializer(serializers.ModelSerializer):
     template = serializers.PrimaryKeyRelatedField(read_only=True)
 
@@ -213,6 +246,7 @@ class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
             "asset_id",
             "waba_id",
             "display_phone_number",
+            "normalized_display_phone_number",
             "verified_name",
             "quality_rating",
             "messaging_limit_tier",
@@ -245,6 +279,7 @@ class WhatsAppPhoneNumberSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "last_used_at",
+            "normalized_display_phone_number",
             "meta_status",
             "meta_status_reason",
             "meta_last_checked_at",
@@ -318,10 +353,95 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         access_token = validated_data.pop("access_token", "")
         waba_id = validated_data.get("waba_id", "") or validated_data.get("asset_id", "")
         phone_number_id = validated_data.get("phone_number_id")
+        display_phone_number = validated_data.get("display_phone_number", "")
         
         # Use asset_id as waba_id fallback if waba_id is empty
         if not waba_id:
             waba_id = phone_number_id  # Last resort fallback
+
+        normalized_display = _normalize_display_phone_number(display_phone_number)
+
+        def _existing_duplicate(normalized_number: str):
+            if not normalized_number:
+                return None
+            queryset = WhatsAppPhoneNumber.objects.exclude(phone_number_id=phone_number_id)
+            return (
+                queryset.filter(normalized_display_phone_number=normalized_number).first()
+                or next(
+                    (
+                        existing
+                        for existing in queryset
+                        if _normalize_display_phone_number(existing.display_phone_number) == normalized_number
+                    ),
+                    None,
+                )
+            )
+
+        existing_duplicate = _existing_duplicate(normalized_display)
+        if existing_duplicate:
+            raise serializers.ValidationError(
+                {
+                    "display_phone_number": (
+                        "This WhatsApp number is already registered in ANK "
+                        f"under WABA {existing_duplicate.waba_id}. Delete the existing record before "
+                        "onboarding the same number again."
+                    )
+                }
+            )
+
+        existing_waba = WhatsAppBusinessAccount.objects.filter(waba_id=waba_id).first()
+        verification_token = access_token or (existing_waba.get_token() if existing_waba else "")
+        if not verification_token:
+            raise serializers.ValidationError(
+                {"access_token": "An account token is required to verify this WABA with Meta before saving."}
+            )
+
+        meta_numbers = _fetch_meta_phone_numbers(waba_id, verification_token)
+        meta_by_id = {str(item.get("id")): item for item in meta_numbers if item.get("id")}
+        meta_phone = meta_by_id.get(str(phone_number_id))
+        if not meta_phone:
+            raise serializers.ValidationError(
+                {
+                    "phone_number_id": (
+                        "Meta verification failed: this phone number does not appear "
+                        "under the submitted WABA for the supplied token."
+                    )
+                }
+            )
+
+        meta_display_phone_number = meta_phone.get("display_phone_number") or display_phone_number
+        normalized_meta_display = _normalize_display_phone_number(meta_display_phone_number)
+        existing_duplicate = _existing_duplicate(normalized_meta_display)
+        if existing_duplicate:
+            raise serializers.ValidationError(
+                {
+                    "display_phone_number": (
+                        "Meta returned a WhatsApp number already registered in ANK "
+                        f"under WABA {existing_duplicate.waba_id}. Delete the existing record before "
+                        "onboarding the same number again."
+                    )
+                }
+            )
+
+        platform_type = str(meta_phone.get("platform_type") or "").upper()
+        if not platform_type:
+            raise serializers.ValidationError(
+                {
+                    "platform_type": (
+                        "Meta did not return platform_type for this number. ANK cannot confirm "
+                        "that it is a Cloud API sender."
+                    )
+                }
+            )
+        if platform_type != "CLOUD_API":
+            raise serializers.ValidationError(
+                {
+                    "platform_type": (
+                        f"Meta reports this number as {platform_type}, not CLOUD_API. "
+                        "ANK cannot use it as a Cloud API sender."
+                    )
+                }
+            )
 
         # Get or create WABA
         waba, created = WhatsAppBusinessAccount.objects.get_or_create(
@@ -359,10 +479,20 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
                 "business_account": waba,
                 "asset_id": validated_data.get("asset_id", ""),
                 "waba_id": waba_id,
-                "display_phone_number": validated_data.get("display_phone_number"),
-                "verified_name": validated_data.get("verified_name", ""),
-                "quality_rating": validated_data.get("quality_rating", "UNKNOWN"),
-                "messaging_limit_tier": validated_data.get("messaging_limit_tier", ""),
+                "display_phone_number": meta_display_phone_number,
+                "normalized_display_phone_number": normalized_meta_display,
+                "verified_name": meta_phone.get("verified_name") or validated_data.get("verified_name", ""),
+                "quality_rating": meta_phone.get("quality_rating") or validated_data.get("quality_rating", "UNKNOWN"),
+                "messaging_limit_tier": meta_phone.get("messaging_limit_tier") or validated_data.get("messaging_limit_tier", ""),
+                "code_verification_status": meta_phone.get("code_verification_status") or "",
+                "name_status": meta_phone.get("name_status") or "",
+                "new_name_status": meta_phone.get("new_name_status") or "",
+                "account_mode": meta_phone.get("account_mode") or "",
+                "platform_type": meta_phone.get("platform_type") or "",
+                "is_official_business_account": meta_phone.get("is_official_business_account"),
+                "meta_seen_in_waba": True,
+                "meta_access_state": "reachable",
+                "meta_details_snapshot": meta_phone,
                 "is_active": True,
                 "is_default": validated_data.get("is_default", False),
                 "meta_status": "active",

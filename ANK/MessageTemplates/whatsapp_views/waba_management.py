@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 import os
+import requests
 
 from django.shortcuts import get_object_or_404
 
@@ -37,6 +38,27 @@ class WABAListCreateView(APIView):
         
         if not all([waba_id, name]):
             return Response({"error": "Missing required fields"}, status=400)
+        if not access_token:
+            return Response({"error": "Access token is required to verify this WABA before saving"}, status=400)
+
+        verify_response = requests.get(
+            f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers",
+            params={"access_token": access_token, "limit": 1},
+            timeout=10,
+        )
+        if not verify_response.ok:
+            try:
+                payload = verify_response.json()
+            except ValueError:
+                payload = {}
+            error = payload.get("error") or {}
+            return Response(
+                {
+                    "error": "Meta could not verify this WABA for the supplied token",
+                    "details": error.get("message") or verify_response.text[:300],
+                },
+                status=400,
+            )
             
         waba, created = WhatsAppBusinessAccount.objects.update_or_create(
             waba_id=waba_id,

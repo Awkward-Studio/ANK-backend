@@ -4,6 +4,7 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 
@@ -96,6 +97,12 @@ class StorePhoneNumberView(APIView):
                 status=status.HTTP_201_CREATED,
             )
 
+        except ValidationError as e:
+            logger.warning(f"[STORE_PHONE] Meta validation failed: {e.detail}")
+            return Response(
+                {"success": False, "errors": e.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Exception as e:
             logger.exception(f"[STORE_PHONE] Failed to store phone number: {e}")
             return Response(

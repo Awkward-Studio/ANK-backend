@@ -267,6 +267,13 @@ class WhatsAppPhoneNumber(models.Model):
         max_length=20,
         help_text="Human-readable phone number (e.g., '+919876543210')"
     )
+
+    normalized_display_phone_number = models.CharField(
+        max_length=20,
+        blank=True,
+        db_index=True,
+        help_text="Digits-only display number used to prevent duplicate onboarding"
+    )
     
     verified_name = models.CharField(
         max_length=200,
@@ -378,13 +385,13 @@ class WhatsAppPhoneNumber(models.Model):
             return f"Meta platform is {self.platform_type}, not CLOUD_API"
         return ""
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, allow_env_fallback: bool = True) -> str:
         """
         Get access token for this phone number.
         Priority:
           1. Per-number token (if not expired)
           2. WABA system token
-          3. Environment variable fallback
+          3. Environment variable fallback, when explicitly allowed
         """
         # Try per-number token first (if not expired)
         if self._encrypted_user_token and self.token_expires_at:
@@ -405,10 +412,11 @@ class WhatsAppPhoneNumber(models.Model):
                 return token
         
         # Fallback to env var (backward compatibility)
-        env_token = os.getenv("WABA_ACCESS_TOKEN", "")
-        if env_token:
-            logger.info(f"[PHONE] Using env var fallback for {self.phone_number_id}")
-            return env_token
+        if allow_env_fallback:
+            env_token = os.getenv("WABA_ACCESS_TOKEN", "")
+            if env_token:
+                logger.info(f"[PHONE] Using env var fallback for {self.phone_number_id}")
+                return env_token
         
         logger.warning(f"[PHONE] No access token available for {self.phone_number_id}")
         return ""
@@ -451,6 +459,12 @@ class WhatsAppPhoneNumber(models.Model):
     def __str__(self):
         default_marker = " [DEFAULT]" if self.is_default else ""
         return f"{self.display_phone_number} - {self.verified_name}{default_marker}"
+
+    def save(self, *args, **kwargs):
+        self.normalized_display_phone_number = "".join(
+            char for char in str(self.display_phone_number or "") if char.isdigit()
+        )
+        super().save(*args, **kwargs)
 
 
 class BroadcastCampaign(models.Model):
