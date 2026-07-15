@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Dict, Iterable, List, Tuple
 
 import requests
@@ -85,7 +86,7 @@ def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
         if token:
             return token
 
-    return ""
+    return os.getenv("WABA_ACCESS_TOKEN", "")
 
 
 def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str, str]:

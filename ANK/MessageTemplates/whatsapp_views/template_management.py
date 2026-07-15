@@ -97,8 +97,10 @@ class WhatsAppTemplateManagementView(APIView):
         if not token and phone:
             token = phone.get_access_token(allow_env_fallback=False)
         if not token:
+            token = os.getenv("WABA_ACCESS_TOKEN", "")
+        if not token:
             return None, Response(
-                {"success": False, "error": "No stored token is available for this WABA."},
+                {"success": False, "error": "No stored or configured system-user token is available for this WABA."},
                 status=status.HTTP_409_CONFLICT,
             )
 
