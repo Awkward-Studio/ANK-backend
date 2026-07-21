@@ -36,7 +36,7 @@ class Accommodation(models.Model):
     room_count = models.PositiveIntegerField(default=1)
     event_room_type = models.ForeignKey(
         EventHotelRoomType,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name="accommodations",
         null=True,
         blank=True,

@@ -681,15 +681,15 @@ class EventSessionsAPIView(DepartmentAccessMixin, APIView):
         return Session.objects.all()
 
     def get(self, request, pk):
-        # Ensure user has access to this event
-        accessible_events = PermissionChecker.get_user_accessible_events(request.user)
-        if not accessible_events.filter(id=pk).exists() and request.user.role != 'super_admin':
-            return Response(
-                {"detail": "You don't have access to this event"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        event = get_object_or_404(Event, pk=pk)
         try:
+            # Ensure user has access to this event.
+            accessible_events = PermissionChecker.get_user_accessible_events(request.user)
+            if not accessible_events.filter(id=pk).exists() and request.user.role != 'super_admin':
+                return Response(
+                    {"detail": "You don't have access to this event"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            get_object_or_404(Event, pk=pk)
             qs = self.get_queryset().filter(event_id=pk)
             return Response(SessionSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:

@@ -111,11 +111,11 @@ INSTALLED_APPS = [
 # Middleware
 # ---------------------------
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "ANK.middleware.ApiSlashMiddleware",
     "ANK.middleware.JsonErrorMiddleware",
     "ANK.rate_limit.RateLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -282,7 +282,11 @@ CORS_ALLOW_ALL_ORIGINS = get_bool_env("DJANGO_CORS_ALLOW_ALL_ORIGINS", DEBUG)
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = csv_env(
     "DJANGO_CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://ank-test.vercel.app,https://*.vercel.app",
+    "http://localhost:3000,http://127.0.0.1:3000,http://192.168.1.34:3000,https://ank-test.vercel.app",
+)
+CORS_ALLOWED_ORIGIN_REGEXES = csv_env(
+    "DJANGO_CORS_ALLOWED_ORIGIN_REGEXES",
+    r"^https://.*\.vercel\.app$",
 )
 
 CSRF_TRUSTED_ORIGINS = csv_env(
