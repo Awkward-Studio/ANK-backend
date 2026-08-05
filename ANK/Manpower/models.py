@@ -41,6 +41,8 @@ class Freelancer(models.Model):
     parent_name = models.CharField(max_length=200, blank=True, help_text='S/o / D/o')
     id_type = models.CharField(max_length=20, choices=[('PAN', 'PAN'), ('AADHAR', 'Aadhar')], default='PAN')
     id_number = models.CharField(max_length=100, blank=True, help_text='PAN / Aadhar Number')
+    pan_number = models.CharField(max_length=20, blank=True, help_text='PAN Number')
+    aadhaar_number = models.CharField(max_length=20, blank=True, help_text='Aadhaar Number')
     
     # Banking Details
     bank_account_name = models.CharField(max_length=200, blank=True)

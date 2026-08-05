@@ -458,7 +458,8 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data["missing_fields"])
         self.assertIn("address", response.data["missing_fields"])
-        self.assertIn("id_number", response.data["missing_fields"])
+        self.assertIn("pan_number", response.data["missing_fields"])
+        self.assertIn("aadhaar_number", response.data["missing_fields"])
         self.assertIn("digital_signature", response.data["missing_fields"])
 
     def test_public_adjustment_saves_profile_id_signature_and_bank_details(self):
@@ -489,8 +490,8 @@ class ManpowerTestCase(TestCase):
                 "other_adjustments": "0.00",
                 "email": "freelancer@example.com",
                 "address": "Mahim, Mumbai",
-                "id_type": "PAN",
-                "id_number": "ABCDE1234F",
+                "pan_number": "ABCDE1234F",
+                "aadhaar_number": "123456789012",
                 "digital_signature": "John Doe",
                 "bank_account_name": "John Doe",
                 "bank_name": "HDFC Bank",
@@ -512,4 +513,6 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(self.freelancer.address, "Mahim, Mumbai")
         self.assertEqual(self.freelancer.id_type, "PAN")
         self.assertEqual(self.freelancer.id_number, "ABCDE1234F")
+        self.assertEqual(self.freelancer.pan_number, "ABCDE1234F")
+        self.assertEqual(self.freelancer.aadhaar_number, "123456789012")
         self.assertEqual(self.freelancer.bank_ifsc, "HDFC0001234")

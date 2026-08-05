@@ -122,7 +122,9 @@ def generate_invoice_pdf(invoice):
 
     # LEFT: Freelancer (Provider)
     pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"NAME: {f.name}\nADDRESS: {f.address or 'N/A'}\nMOBILE: {f.contact_phone or 'N/A'}\nE-MAIL: {f.email or 'N/A'}\n{f.id_type}.NO: {f.id_number or 'N/A'}"))
+    pan_number = getattr(f, "pan_number", "") or (f.id_number if f.id_type == "PAN" else "")
+    aadhaar_number = getattr(f, "aadhaar_number", "") or (f.id_number if f.id_type == "AADHAR" else "")
+    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"NAME: {f.name}\nADDRESS: {f.address or 'N/A'}\nMOBILE: {f.contact_phone or 'N/A'}\nE-MAIL: {f.email or 'N/A'}\nPAN.NO: {pan_number or 'N/A'}\nAADHAAR.NO: {aadhaar_number or 'N/A'}"))
 
     # RIGHT: Company (Receiver)
     pdf.set_xy(pdf.l_margin + epw/2 + 5, y_parties)

@@ -2140,6 +2140,10 @@ def public_adjustment_interaction(request, token):
                 "id_type": freelancer.id_type,
                 "has_id_number": bool((freelancer.id_number or "").strip()),
                 "masked_id_number": mask_public_value(freelancer.id_number),
+                "has_pan_number": bool((freelancer.pan_number or "").strip()),
+                "masked_pan_number": mask_public_value(freelancer.pan_number),
+                "has_aadhaar_number": bool((freelancer.aadhaar_number or "").strip()),
+                "masked_aadhaar_number": mask_public_value(freelancer.aadhaar_number),
                 "banking_details": {
                     "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
                     "has_bank_name": bool((freelancer.bank_name or "").strip()),
@@ -2193,8 +2197,8 @@ def public_adjustment_interaction(request, token):
     profile_fields = (
         "email",
         "address",
-        "id_type",
-        "id_number",
+        "pan_number",
+        "aadhaar_number",
     )
 
     bank_updates = {
@@ -2212,8 +2216,6 @@ def public_adjustment_interaction(request, token):
     missing_profile_fields = [
         field for field, value in profile_updates.items() if not value
     ]
-    if profile_updates.get("id_type") not in ["PAN", "AADHAR"]:
-        missing_profile_fields.append("id_type")
     if not digital_signature:
         missing_profile_fields.append("digital_signature")
     missing_fields = missing_bank_fields + missing_profile_fields
@@ -2223,6 +2225,14 @@ def public_adjustment_interaction(request, token):
                 "error": "Email, address, ID details, digital signature, and bank account details are required",
                 "missing_fields": missing_fields,
             },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    existing_email_owner = Freelancer.objects.filter(
+        email__iexact=profile_updates["email"]
+    ).exclude(pk=adjustment.allocation.freelancer_id).exists()
+    if existing_email_owner:
+        return Response(
+            {"error": "Email is already registered to another freelancer."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2237,7 +2247,9 @@ def public_adjustment_interaction(request, token):
         freelancer = adjustment.allocation.freelancer
         for field, value in {**bank_updates, **profile_updates}.items():
             setattr(freelancer, field, value)
-        freelancer.save(update_fields=bank_fields + profile_fields)
+        freelancer.id_type = "PAN"
+        freelancer.id_number = profile_updates["pan_number"]
+        freelancer.save(update_fields=bank_fields + profile_fields + ("id_type", "id_number"))
         _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 
