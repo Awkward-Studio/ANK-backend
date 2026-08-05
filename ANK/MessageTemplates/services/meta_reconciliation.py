@@ -9,9 +9,9 @@ from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
-# Align template capability checks with the Communications template manager.
-TEMPLATE_GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
+GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
+GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+TEMPLATE_GRAPH_API_BASE = GRAPH_API_BASE
 
 PHONE_NUMBER_FIELDS = ",".join(
     [
@@ -29,6 +29,56 @@ PHONE_NUMBER_FIELDS = ",".join(
         "is_official_business_account",
     ]
 )
+
+WABA_AUDIT_FIELDS = [
+    "name",
+    "owner_business_info",
+    "account_review_status",
+    "whatsapp_business_manager_messaging_limit",
+]
+
+
+def _meta_error(response, payload: dict) -> dict:
+    error = payload.get("error") or {}
+    return {
+        "message": error.get("error_user_msg") or error.get("message") or response.text[:300],
+        "code": error.get("code"),
+        "subcode": error.get("error_subcode"),
+        "trace_id": error.get("fbtrace_id"),
+        "http_status": response.status_code,
+    }
+
+
+def _meta_get(path: str, access_token: str, params=None) -> Tuple[dict, dict]:
+    try:
+        response = requests.get(
+            f"{GRAPH_API_BASE}/{path.lstrip('/')}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params or {},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return {}, {"message": str(exc), "http_status": None}
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.ok:
+        return payload, {}
+    return {}, _meta_error(response, payload)
+
+
+def _get_app_credentials() -> Tuple[str, str]:
+    app_id = os.getenv("META_APP_ID") or os.getenv("FACEBOOK_APP_ID") or ""
+    app_token = os.getenv("META_APP_ACCESS_TOKEN") or os.getenv("FACEBOOK_APP_ACCESS_TOKEN") or ""
+    if app_token:
+        return app_id, app_token
+
+    app_secret = os.getenv("META_APP_SECRET") or os.getenv("FACEBOOK_APP_SECRET") or ""
+    if app_id and app_secret:
+        return app_id, f"{app_id}|{app_secret}"
+    return app_id, ""
 
 
 def _template_management_capability(waba: WhatsAppBusinessAccount) -> Dict[str, str]:
@@ -75,18 +125,160 @@ def _template_management_capability(waba: WhatsAppBusinessAccount) -> Dict[str, 
         return {"status": "unknown", "reason": str(error)}
 
 
-def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
+def _get_waba_token_with_source(waba: WhatsAppBusinessAccount) -> Tuple[str, str]:
     token = waba.get_token()
     if token:
-        return token
+        return token, "encrypted_waba_token"
 
     phone = waba.phone_numbers.first()
     if phone:
         token = phone.get_access_token(allow_env_fallback=False)
         if token:
-            return token
+            return token, "encrypted_phone_token"
 
-    return os.getenv("WABA_ACCESS_TOKEN", "")
+    token = os.getenv("WABA_ACCESS_TOKEN", "")
+    return (token, "production_environment") if token else ("", "missing")
+
+
+def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
+    token, _source = _get_waba_token_with_source(waba)
+    return token
+
+
+def _fetch_fields_with_fallback(object_id: str, fields: List[str], token: str) -> Tuple[dict, dict]:
+    payload, error = _meta_get(object_id, token, {"fields": ",".join(fields)})
+    if not error:
+        return payload, {}
+
+    values = {"id": object_id}
+    errors = {}
+    for field in fields:
+        field_payload, field_error = _meta_get(object_id, token, {"fields": field})
+        if field_error:
+            errors[field] = field_error
+        elif field in field_payload:
+            values[field] = field_payload[field]
+    return values, errors
+
+
+def _token_audit(token: str, waba_id: str) -> dict:
+    expected_app_id, app_token = _get_app_credentials()
+    result = {
+        "status": "unknown",
+        "introspection_credential_source": "app_token" if app_token else "waba_token_fallback",
+        "is_valid": None,
+        "app_id": None,
+        "expected_app_id": expected_app_id or None,
+        "app_matches": None,
+        "expires_at": None,
+        "data_access_expires_at": None,
+        "scopes": [],
+        "required_scopes_granted": None,
+        "waba_in_granular_targets": None,
+        "error": None,
+    }
+    payload, error = _meta_get("debug_token", app_token or token, {"input_token": token})
+    if error:
+        result.update({"status": "error", "error": error})
+        return result
+
+    data = payload.get("data") or {}
+    granular_scopes = data.get("granular_scopes") or []
+    scopes = sorted(
+        set(data.get("scopes") or [])
+        | {str(scope.get("scope")) for scope in granular_scopes if scope.get("scope")}
+    )
+    required = {"whatsapp_business_management", "whatsapp_business_messaging"}
+    target_ids = {
+        str(target_id)
+        for scope in granular_scopes
+        for target_id in scope.get("target_ids") or []
+    }
+    token_app_id = str(data.get("app_id") or "")
+    result.update(
+        {
+            "status": "valid" if data.get("is_valid") else "invalid",
+            "is_valid": bool(data.get("is_valid")),
+            "app_id": token_app_id or None,
+            "app_matches": token_app_id == expected_app_id if expected_app_id else None,
+            "expires_at": data.get("expires_at") or None,
+            "data_access_expires_at": data.get("data_access_expires_at") or None,
+            "scopes": scopes,
+            "required_scopes_granted": required.issubset(set(scopes)),
+            "waba_in_granular_targets": str(waba_id) in target_ids if target_ids else None,
+            "error": None,
+        }
+    )
+    return result
+
+
+def _subscription_audit(waba_id: str, token: str, expected_app_id: str = "") -> dict:
+    configured_app_id, _app_token = _get_app_credentials()
+    expected_app_id = expected_app_id or configured_app_id
+    payload, error = _meta_get(
+        f"{waba_id}/subscribed_apps",
+        token,
+        {"limit": 100},
+    )
+    if error:
+        return {
+            "status": "error",
+            "subscribed": None,
+            "expected_app_id": expected_app_id or None,
+            "apps": [],
+            "error": error,
+        }
+
+    apps = []
+    for row in payload.get("data") or []:
+        app = row.get("whatsapp_business_api_data") or row
+        if app.get("id"):
+            apps.append({"id": str(app.get("id")), "name": app.get("name")})
+    subscribed = (
+        any(app["id"] == expected_app_id for app in apps)
+        if expected_app_id
+        else None
+    )
+    return {
+        "status": "verified" if subscribed else ("app_id_not_configured" if subscribed is None else "not_subscribed"),
+        "subscribed": subscribed,
+        "expected_app_id": expected_app_id or None,
+        "apps": apps,
+        "error": None,
+    }
+
+
+def build_waba_verification(waba: WhatsAppBusinessAccount) -> dict:
+    token, token_source = _get_waba_token_with_source(waba)
+    checked_at = timezone.now().isoformat()
+    if not token:
+        return {
+            "graph_api_version": GRAPH_API_VERSION,
+            "checked_at": checked_at,
+            "token_source": token_source,
+            "token": {"status": "missing", "is_valid": None, "error": "No server-side WABA token is configured."},
+            "waba": {"id": str(waba.waba_id), "fields": {}, "field_errors": {}},
+            "app_subscription": {"status": "unknown", "subscribed": None, "apps": [], "error": "No token available."},
+        }
+
+    waba_fields, field_errors = _fetch_fields_with_fallback(
+        str(waba.waba_id), WABA_AUDIT_FIELDS, token
+    )
+    token_audit = _token_audit(token, str(waba.waba_id))
+    return {
+        "graph_api_version": GRAPH_API_VERSION,
+        "checked_at": checked_at,
+        "token_source": token_source,
+        "token": token_audit,
+        "waba": {
+            "id": str(waba.waba_id),
+            "fields": waba_fields,
+            "field_errors": field_errors,
+        },
+        "app_subscription": _subscription_audit(
+            str(waba.waba_id), token, str(token_audit.get("app_id") or "")
+        ),
+    }
 
 
 def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str, str]:
@@ -134,6 +326,18 @@ def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict]
         numbers.extend(payload.get("data") or [])
         url = (payload.get("paging") or {}).get("next")
 
+    for number in numbers:
+        phone_id = number.get("id")
+        if not phone_id:
+            continue
+        coexistence_payload, coexistence_error = _meta_get(
+            str(phone_id), token, {"fields": "is_on_biz_app"}
+        )
+        if coexistence_error:
+            number["is_on_biz_app_error"] = coexistence_error
+        elif "is_on_biz_app" in coexistence_payload:
+            number["is_on_biz_app"] = coexistence_payload["is_on_biz_app"]
+
     return numbers, "", ""
 
 
@@ -170,6 +374,46 @@ def _status_from_meta(meta_phone: dict) -> Tuple[str, str]:
     return "active", ""
 
 
+def phone_identity_verification(meta_phone: dict) -> dict:
+    name_status = str(meta_phone.get("name_status") or "UNKNOWN").upper()
+    new_name_status = str(meta_phone.get("new_name_status") or "UNKNOWN").upper()
+    platform_type = str(meta_phone.get("platform_type") or "UNKNOWN").upper()
+    is_on_biz_app = meta_phone.get("is_on_biz_app")
+    display_name_approved = name_status == "APPROVED"
+    coexistence_confirmed = is_on_biz_app is True and platform_type == "CLOUD_API"
+    if coexistence_confirmed:
+        coexistence_reason = "Meta reports is_on_biz_app=true and platform_type=CLOUD_API."
+    elif meta_phone.get("is_on_biz_app_error"):
+        coexistence_reason = "Meta did not allow ANK to read is_on_biz_app with the current token."
+    elif is_on_biz_app is False:
+        coexistence_reason = "Meta reports is_on_biz_app=false."
+    else:
+        coexistence_reason = "Meta did not return is_on_biz_app, so coexistence cannot be confirmed."
+
+    if display_name_approved:
+        display_name_reason = "Meta reports name_status=APPROVED."
+    elif name_status in {"NON_EXISTS", "NONE", "UNKNOWN", ""}:
+        display_name_reason = "Meta has not reported an approved display-name review for this number."
+    elif name_status in {"PENDING_REVIEW", "PENDING"}:
+        display_name_reason = "Meta is reviewing the display name."
+    else:
+        display_name_reason = f"Meta reports name_status={name_status}."
+
+    return {
+        "display_name_approved": display_name_approved,
+        "display_name_status": name_status,
+        "display_name_reason": display_name_reason,
+        "new_name_status": new_name_status,
+        "verified_name": meta_phone.get("verified_name"),
+        "code_verification_status": meta_phone.get("code_verification_status"),
+        "coexistence_confirmed": coexistence_confirmed,
+        "coexistence_reason": coexistence_reason,
+        "is_on_biz_app": is_on_biz_app,
+        "platform_type": platform_type,
+        "is_official_business_account": meta_phone.get("is_official_business_account"),
+    }
+
+
 def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, object]:
     """
     Compare local phone numbers for one WABA with Meta's current phone list.
@@ -179,6 +423,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
     local_numbers = list(waba.phone_numbers.all())
     meta_numbers, fetch_error, fetch_status = _fetch_waba_phone_numbers(waba)
     template_management = _template_management_capability(waba)
+    waba_verification = build_waba_verification(waba)
     checked_at = timezone.now()
 
     if fetch_error:
@@ -195,6 +440,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
             "meta_phone_number_ids": [],
             "meta_details_by_phone_id": {},
             "template_management": template_management,
+            "verification": waba_verification,
         }
 
     meta_by_id = {str(item.get("id")): item for item in meta_numbers if item.get("id")}
@@ -211,7 +457,12 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
             phone.verified_name = meta_phone.get("verified_name") or phone.verified_name
             phone.quality_rating = meta_phone.get("quality_rating") or phone.quality_rating
             phone.messaging_limit_tier = meta_phone.get("messaging_limit_tier") or phone.messaging_limit_tier
+            phone.code_verification_status = meta_phone.get("code_verification_status") or ""
+            phone.name_status = meta_phone.get("name_status") or ""
+            phone.new_name_status = meta_phone.get("new_name_status") or ""
+            phone.account_mode = meta_phone.get("account_mode") or ""
             phone.platform_type = meta_phone.get("platform_type") or ""
+            phone.is_official_business_account = meta_phone.get("is_official_business_account")
 
         phone.meta_last_checked_at = checked_at
         phone.save(
@@ -220,7 +471,12 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
                 "verified_name",
                 "quality_rating",
                 "messaging_limit_tier",
+                "code_verification_status",
+                "name_status",
+                "new_name_status",
+                "account_mode",
                 "platform_type",
+                "is_official_business_account",
                 "meta_status",
                 "meta_status_reason",
                 "meta_last_checked_at",
@@ -238,6 +494,7 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
         # unbounded vendor payload in ANK's database.
         "meta_details_by_phone_id": meta_by_id,
         "template_management": template_management,
+        "verification": waba_verification,
     }
 
 

@@ -10,7 +10,10 @@ from django.shortcuts import get_object_or_404
 
 from MessageTemplates.models import WhatsAppBusinessAccount
 from MessageTemplates.serializers import WhatsAppBusinessAccountSerializer, WhatsAppPhoneNumberSerializer
-from MessageTemplates.services.meta_reconciliation import reconcile_all_wabas
+from MessageTemplates.services.meta_reconciliation import (
+    phone_identity_verification,
+    reconcile_all_wabas,
+)
 
 logger = logging.getLogger(__name__)
 WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
@@ -119,9 +122,9 @@ class WABAMetaStatusView(APIView):
             meta_details_by_phone_id = result.get("meta_details_by_phone_id", {})
             serialized_numbers = WhatsAppPhoneNumberSerializer(numbers, many=True).data
             for number in serialized_numbers:
-                number["meta_details"] = meta_details_by_phone_id.get(
-                    str(number["phone_number_id"])
-                )
+                meta_details = meta_details_by_phone_id.get(str(number["phone_number_id"])) or {}
+                number["meta_details"] = meta_details
+                number["identity_verification"] = phone_identity_verification(meta_details)
             counts = {
                 "active": sum(1 for phone in numbers if phone.meta_status == "active"),
                 "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
@@ -136,6 +139,7 @@ class WABAMetaStatusView(APIView):
                     "counts": counts,
                     "numbers": serialized_numbers,
                     "template_management": result["template_management"],
+                    "verification": result.get("verification") or {},
                 }
             )
 

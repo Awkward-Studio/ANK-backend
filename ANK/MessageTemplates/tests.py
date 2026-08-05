@@ -1,12 +1,142 @@
 from unittest.mock import patch
 
 from django.urls import reverse
+from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
 from MessageTemplates.serializers import WhatsAppPhoneNumberSerializer
 from MessageTemplates.services.hosted_reconciliation import apply_comparison
+from MessageTemplates.services.meta_reconciliation import (
+    _subscription_audit,
+    _token_audit,
+    phone_identity_verification,
+)
 from Staff.models import User
+
+
+class MetaIdentityVerificationTests(SimpleTestCase):
+    def test_nonexistent_name_is_not_approved(self):
+        result = phone_identity_verification(
+            {
+                "verified_name": "Tanisha & Tushar RSVP",
+                "name_status": "NON_EXISTS",
+                "new_name_status": "NONE",
+                "platform_type": "CLOUD_API",
+                "is_on_biz_app": True,
+            }
+        )
+
+        self.assertFalse(result["display_name_approved"])
+        self.assertEqual(result["display_name_status"], "NON_EXISTS")
+        self.assertTrue(result["coexistence_confirmed"])
+
+    def test_approved_name_and_coexistence_are_independent_verdicts(self):
+        result = phone_identity_verification(
+            {
+                "verified_name": "A New Knot",
+                "name_status": "APPROVED",
+                "platform_type": "CLOUD_API",
+                "is_on_biz_app": False,
+            }
+        )
+
+        self.assertTrue(result["display_name_approved"])
+        self.assertFalse(result["coexistence_confirmed"])
+
+    @patch.dict("os.environ", {"META_APP_ID": "app-1", "META_APP_ACCESS_TOKEN": "app-secret-token"}, clear=False)
+    @patch("MessageTemplates.services.meta_reconciliation._meta_get")
+    def test_token_audit_is_sanitized(self, meta_get):
+        meta_get.return_value = (
+            {
+                "data": {
+                    "is_valid": True,
+                    "app_id": "app-1",
+                    "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+                    "granular_scopes": [{"scope": "whatsapp_business_management", "target_ids": ["waba-1"]}],
+                }
+            },
+            {},
+        )
+
+        result = _token_audit("never-return-this-token", "waba-1")
+
+        self.assertEqual(result["status"], "valid")
+        self.assertTrue(result["app_matches"])
+        self.assertTrue(result["required_scopes_granted"])
+        self.assertTrue(result["waba_in_granular_targets"])
+        self.assertNotIn("never-return-this-token", str(result))
+
+    @patch.dict("os.environ", {"META_APP_ID": "app-1"}, clear=False)
+    @patch("MessageTemplates.services.meta_reconciliation._meta_get")
+    def test_subscription_audit_supports_meta_nested_app_shape(self, meta_get):
+        meta_get.return_value = (
+            {
+                "data": [
+                    {"whatsapp_business_api_data": {"id": "app-1", "name": "ANK"}}
+                ]
+            },
+            {},
+        )
+
+        result = _subscription_audit("waba-1", "never-return-this-token")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertTrue(result["subscribed"])
+        self.assertEqual(result["apps"], [{"id": "app-1", "name": "ANK"}])
+        self.assertNotIn("never-return-this-token", str(result))
+
+
+class MetaStatusApiIdentityTests(APITestCase):
+    def setUp(self):
+        self.waba = WhatsAppBusinessAccount.objects.create(waba_id="waba-status", name="RSVP WABA")
+        self.phone = WhatsAppPhoneNumber.objects.create(
+            business_account=self.waba,
+            phone_number_id="phone-status",
+            asset_id="phone-status",
+            waba_id="waba-status",
+            display_phone_number="+919920928992",
+            verified_name="Tanisha & Tushar RSVP",
+        )
+
+    @patch("MessageTemplates.whatsapp_views.waba_management.WEBHOOK_SECRET", "status-secret")
+    @patch("MessageTemplates.whatsapp_views.waba_management.reconcile_all_wabas")
+    def test_status_response_exposes_explicit_identity_verdict_without_tokens(self, reconcile):
+        reconcile.return_value = [
+            {
+                "waba_id": "waba-status",
+                "fetch_error": "",
+                "numbers": [self.phone],
+                "meta_phone_number_ids": ["phone-status"],
+                "meta_details_by_phone_id": {
+                    "phone-status": {
+                        "verified_name": "Tanisha & Tushar RSVP",
+                        "name_status": "NON_EXISTS",
+                        "new_name_status": "NONE",
+                        "platform_type": "CLOUD_API",
+                        "is_on_biz_app": True,
+                    }
+                },
+                "template_management": {"status": "available", "reason": ""},
+                "verification": {
+                    "token_source": "production_environment",
+                    "token": {"status": "valid", "app_id": "app-1"},
+                    "app_subscription": {"status": "verified", "subscribed": True},
+                },
+            }
+        ]
+
+        response = self.client.get(
+            "/api/whatsapp/meta-status/",
+            HTTP_X_WEBHOOK_TOKEN="status-secret",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        number = response.data["wabas"][0]["numbers"][0]
+        self.assertFalse(number["identity_verification"]["display_name_approved"])
+        self.assertEqual(number["identity_verification"]["display_name_status"], "NON_EXISTS")
+        self.assertTrue(number["identity_verification"]["coexistence_confirmed"])
+        self.assertNotIn("access_token", str(response.data).lower())
 
 
 class HostedReconciliationApiTests(APITestCase):
