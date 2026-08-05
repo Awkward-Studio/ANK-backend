@@ -2135,6 +2135,11 @@ def public_adjustment_interaction(request, token):
                 "id": adjustment.id,
                 "event_name": adjustment.allocation.event_department.event.name,
                 "freelancer_name": adjustment.allocation.freelancer.name,
+                "email": freelancer.email,
+                "address": freelancer.address,
+                "id_type": freelancer.id_type,
+                "has_id_number": bool((freelancer.id_number or "").strip()),
+                "masked_id_number": mask_public_value(freelancer.id_number),
                 "banking_details": {
                     "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
                     "has_bank_name": bool((freelancer.bank_name or "").strip()),
@@ -2185,19 +2190,38 @@ def public_adjustment_interaction(request, token):
         "bank_branch",
         "bank_ifsc",
     )
+    profile_fields = (
+        "email",
+        "address",
+        "id_type",
+        "id_number",
+    )
 
     bank_updates = {
         field: str(request.data.get(field) or "").strip()
         for field in bank_fields
     }
+    profile_updates = {
+        field: str(request.data.get(field) or "").strip()
+        for field in profile_fields
+    }
+    digital_signature = str(request.data.get("digital_signature") or "").strip()
     missing_bank_fields = [
         field for field, value in bank_updates.items() if not value
     ]
-    if missing_bank_fields:
+    missing_profile_fields = [
+        field for field, value in profile_updates.items() if not value
+    ]
+    if profile_updates.get("id_type") not in ["PAN", "AADHAR"]:
+        missing_profile_fields.append("id_type")
+    if not digital_signature:
+        missing_profile_fields.append("digital_signature")
+    missing_fields = missing_bank_fields + missing_profile_fields
+    if missing_fields:
         return Response(
             {
-                "error": "Bank account details are required",
-                "missing_fields": missing_bank_fields,
+                "error": "Email, address, ID details, digital signature, and bank account details are required",
+                "missing_fields": missing_fields,
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -2206,11 +2230,14 @@ def public_adjustment_interaction(request, token):
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
     with transaction.atomic():
-        ser.save(freelancer_submitted_at=timezone.now())
+        ser.save(
+            freelancer_submitted_at=timezone.now(),
+            freelancer_digital_signature=digital_signature,
+        )
         freelancer = adjustment.allocation.freelancer
-        for field, value in bank_updates.items():
+        for field, value in {**bank_updates, **profile_updates}.items():
             setattr(freelancer, field, value)
-        freelancer.save(update_fields=bank_fields)
+        freelancer.save(update_fields=bank_fields + profile_fields)
         _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 

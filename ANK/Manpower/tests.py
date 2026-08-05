@@ -417,3 +417,99 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(adjustment.freelancer_comments, snapshot["freelancer_comments"])
         self.assertEqual(adjustment.revised_total, snapshot["revised_total"])
         self.assertEqual(adjustment.revisions.count(), snapshot["revision_count"])
+
+    def test_public_adjustment_requires_profile_id_signature_and_bank_details(self):
+        from .views import public_adjustment_interaction
+        from rest_framework.test import APIRequestFactory
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+            travel_costs=Decimal("1000.00"),
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            f"/api/manpower/public/adjustment/{adjustment.secure_token}/",
+            {
+                "actual_days_worked": "3.0",
+                "total_engagement_days": "3.0",
+                "travel_adjustments": "0.00",
+                "other_adjustments": "0.00",
+                "bank_account_name": "John Doe",
+                "bank_name": "HDFC Bank",
+                "bank_account_number": "1234567890",
+                "bank_branch": "Lower Parel",
+                "bank_ifsc": "HDFC0001234",
+            },
+            format="json",
+        )
+
+        response = public_adjustment_interaction(request, token=adjustment.secure_token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data["missing_fields"])
+        self.assertIn("address", response.data["missing_fields"])
+        self.assertIn("id_number", response.data["missing_fields"])
+        self.assertIn("digital_signature", response.data["missing_fields"])
+
+    def test_public_adjustment_saves_profile_id_signature_and_bank_details(self):
+        from .views import public_adjustment_interaction
+        from rest_framework.test import APIRequestFactory
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+            travel_costs=Decimal("1000.00"),
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+
+        factory = APIRequestFactory()
+        request = factory.post(
+            f"/api/manpower/public/adjustment/{adjustment.secure_token}/",
+            {
+                "actual_days_worked": "3.0",
+                "total_engagement_days": "3.0",
+                "travel_adjustments": "0.00",
+                "other_adjustments": "0.00",
+                "email": "freelancer@example.com",
+                "address": "Mahim, Mumbai",
+                "id_type": "PAN",
+                "id_number": "ABCDE1234F",
+                "digital_signature": "John Doe",
+                "bank_account_name": "John Doe",
+                "bank_name": "HDFC Bank",
+                "bank_account_number": "1234567890",
+                "bank_branch": "Lower Parel",
+                "bank_ifsc": "HDFC0001234",
+            },
+            format="json",
+        )
+
+        response = public_adjustment_interaction(request, token=adjustment.secure_token)
+
+        self.assertEqual(response.status_code, 200)
+        adjustment.refresh_from_db()
+        self.freelancer.refresh_from_db()
+        self.assertIsNotNone(adjustment.freelancer_submitted_at)
+        self.assertEqual(adjustment.freelancer_digital_signature, "John Doe")
+        self.assertEqual(self.freelancer.email, "freelancer@example.com")
+        self.assertEqual(self.freelancer.address, "Mahim, Mumbai")
+        self.assertEqual(self.freelancer.id_type, "PAN")
+        self.assertEqual(self.freelancer.id_number, "ABCDE1234F")
+        self.assertEqual(self.freelancer.bank_ifsc, "HDFC0001234")

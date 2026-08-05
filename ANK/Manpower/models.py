@@ -379,6 +379,7 @@ class PostEventAdjustment(models.Model):
     )
     secure_token = models.UUIDField(default=uuid.uuid4, unique=True)
     freelancer_submitted_at = models.DateTimeField(null=True, blank=True)
+    freelancer_digital_signature = models.CharField(max_length=200, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
