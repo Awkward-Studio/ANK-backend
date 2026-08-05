@@ -139,6 +139,86 @@ class MetaStatusApiIdentityTests(APITestCase):
         self.assertNotIn("access_token", str(response.data).lower())
 
 
+class DisplayNameManagementApiTests(APITestCase):
+    def setUp(self):
+        self.waba = WhatsAppBusinessAccount.objects.create(waba_id="waba-display", name="Display WABA")
+        self.phone = WhatsAppPhoneNumber.objects.create(
+            business_account=self.waba,
+            phone_number_id="phone-display",
+            asset_id="phone-display",
+            waba_id="waba-display",
+            display_phone_number="+919920928992",
+            verified_name="Tanisha & Tushar's Hospitality Team",
+            is_active=True,
+        )
+        self.url = reverse("whatsapp-phone-display-name", args=[self.phone.phone_number_id])
+
+    @patch("MessageTemplates.whatsapp_views.waba_management.WEBHOOK_SECRET", "status-secret")
+    @patch("MessageTemplates.whatsapp_views.waba_management.fetch_phone_display_name_status")
+    @patch("MessageTemplates.whatsapp_views.waba_management.submit_phone_display_name")
+    def test_submit_display_name_returns_fresh_pending_status(self, submit, refresh):
+        submit.return_value = ({"success": True}, {})
+        refresh.return_value = (
+            {
+                "verified_name": "Tanisha & Tushar's Hospitality Team",
+                "name_status": "NON_EXISTS",
+                "new_display_name": "Tanisha & Tushar's Hospitality Team",
+                "new_name_status": "PENDING_REVIEW",
+            },
+            {},
+        )
+
+        response = self.client.post(
+            self.url,
+            {"action": "submit_display_name", "display_name": "Tanisha & Tushar's Hospitality Team"},
+            format="json",
+            HTTP_X_WEBHOOK_TOKEN="status-secret",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["display_name_status"]["new_name_status"], "PENDING_REVIEW")
+        submit.assert_called_once_with(self.phone, "Tanisha & Tushar's Hospitality Team")
+
+    @patch("MessageTemplates.whatsapp_views.waba_management.WEBHOOK_SECRET", "status-secret")
+    @patch("MessageTemplates.whatsapp_views.waba_management.fetch_phone_display_name_status")
+    @patch("MessageTemplates.whatsapp_views.waba_management.reregister_phone_number")
+    def test_reregister_is_locked_before_new_name_approval(self, reregister, refresh):
+        refresh.return_value = ({"new_name_status": "PENDING_REVIEW"}, {})
+
+        response = self.client.post(
+            self.url,
+            {"action": "reregister", "pin": "123456"},
+            format="json",
+            HTTP_X_WEBHOOK_TOKEN="status-secret",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        reregister.assert_not_called()
+
+    @patch("MessageTemplates.whatsapp_views.waba_management.WEBHOOK_SECRET", "status-secret")
+    def test_display_name_mutation_requires_server_secret(self):
+        response = self.client.post(
+            self.url,
+            {"action": "submit_display_name", "display_name": "Name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("MessageTemplates.whatsapp_views.waba_management.WEBHOOK_SECRET", "status-secret")
+    @patch("MessageTemplates.whatsapp_views.waba_management.submit_phone_display_name")
+    def test_submit_cannot_change_the_synchronized_name(self, submit):
+        response = self.client.post(
+            self.url,
+            {"action": "submit_display_name", "display_name": "A Different Name"},
+            format="json",
+            HTTP_X_WEBHOOK_TOKEN="status-secret",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        submit.assert_not_called()
+
+
 class HostedReconciliationApiTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_user(email="admin@example.com", password="password", role="admin")

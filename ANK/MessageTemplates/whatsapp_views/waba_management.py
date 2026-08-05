@@ -8,11 +8,14 @@ import requests
 
 from django.shortcuts import get_object_or_404
 
-from MessageTemplates.models import WhatsAppBusinessAccount
+from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
 from MessageTemplates.serializers import WhatsAppBusinessAccountSerializer, WhatsAppPhoneNumberSerializer
 from MessageTemplates.services.meta_reconciliation import (
+    fetch_phone_display_name_status,
     phone_identity_verification,
     reconcile_all_wabas,
+    reregister_phone_number,
+    submit_phone_display_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,3 +147,83 @@ class WABAMetaStatusView(APIView):
             )
 
         return Response({"success": True, "wabas": payload}, status=status.HTTP_200_OK)
+
+
+class PhoneDisplayNameManagementView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, phone_number_id: str):
+        token = request.headers.get("X-Webhook-Token", "")
+        if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        phone = get_object_or_404(
+            WhatsAppPhoneNumber.objects.select_related("business_account"),
+            phone_number_id=phone_number_id,
+            is_active=True,
+        )
+        action = str(request.data.get("action") or "").strip()
+
+        if action == "submit_display_name":
+            display_name = str(request.data.get("display_name") or "").strip()
+            if not display_name or len(display_name) > 256:
+                return Response(
+                    {"error": "display_name must contain between 1 and 256 characters."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if display_name != phone.verified_name:
+                return Response(
+                    {
+                        "error": "This action can only submit the currently synchronized Meta name for review.",
+                        "current_display_name": phone.verified_name,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            result, error = submit_phone_display_name(phone, display_name)
+            if error:
+                return Response(
+                    {"error": "Meta rejected the display-name submission.", "details": error},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif action == "reregister":
+            pin = str(request.data.get("pin") or "").strip()
+            if len(pin) != 6 or not pin.isdigit():
+                return Response(
+                    {"error": "A six-digit WhatsApp two-step verification PIN is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            current, current_error = fetch_phone_display_name_status(phone)
+            if current_error:
+                return Response(
+                    {"error": "Meta display-name status could not be refreshed.", "details": current_error},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if str(current.get("new_name_status") or "").upper() != "APPROVED":
+                return Response(
+                    {
+                        "error": "Re-registration is locked until Meta reports new_name_status=APPROVED.",
+                        "display_name_status": current,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            result, error = reregister_phone_number(phone, pin)
+            if error:
+                return Response(
+                    {"error": "Meta rejected phone-number re-registration.", "details": error},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            return Response({"error": "Unsupported action."}, status=status.HTTP_400_BAD_REQUEST)
+
+        refreshed, refresh_error = fetch_phone_display_name_status(phone)
+        return Response(
+            {
+                "success": True,
+                "action": action,
+                "meta_result": result,
+                "display_name_status": refreshed,
+                "refresh_error": refresh_error or None,
+            },
+            status=status.HTTP_200_OK,
+        )

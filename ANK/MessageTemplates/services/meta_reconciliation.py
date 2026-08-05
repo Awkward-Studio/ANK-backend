@@ -26,7 +26,7 @@ PHONE_NUMBER_FIELDS = ",".join(
         "account_mode",
         "platform_type",
         "name_status",
-        "new_name",
+        "new_display_name",
         "new_name_status",
         "is_official_business_account",
     ]
@@ -69,6 +69,60 @@ def _meta_get(path: str, access_token: str, params=None) -> Tuple[dict, dict]:
     if response.ok:
         return payload, {}
     return {}, _meta_error(response, payload)
+
+
+def _meta_post(path: str, access_token: str, params=None, json=None) -> Tuple[dict, dict]:
+    try:
+        response = requests.post(
+            f"{GRAPH_API_BASE}/{path.lstrip('/')}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params or {},
+            json=json,
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return {}, {"message": str(exc), "http_status": None}
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.ok:
+        return payload, {}
+    return {}, _meta_error(response, payload)
+
+
+def fetch_phone_display_name_status(phone: WhatsAppPhoneNumber) -> Tuple[dict, dict]:
+    token = phone.get_access_token()
+    if not token:
+        return {}, {"message": "No server-side access token is available for this phone number."}
+    return _meta_get(
+        str(phone.phone_number_id),
+        token,
+        {"fields": "verified_name,name_status,new_display_name,new_name_status"},
+    )
+
+
+def submit_phone_display_name(phone: WhatsAppPhoneNumber, display_name: str) -> Tuple[dict, dict]:
+    token = phone.get_access_token()
+    if not token:
+        return {}, {"message": "No server-side access token is available for this phone number."}
+    return _meta_post(
+        str(phone.phone_number_id),
+        token,
+        {"new_display_name": display_name},
+    )
+
+
+def reregister_phone_number(phone: WhatsAppPhoneNumber, pin: str) -> Tuple[dict, dict]:
+    token = phone.get_access_token()
+    if not token:
+        return {}, {"message": "No server-side access token is available for this phone number."}
+    return _meta_post(
+        f"{phone.phone_number_id}/register",
+        token,
+        json={"messaging_product": "whatsapp", "pin": pin},
+    )
 
 
 def _get_app_credentials() -> Tuple[str, str]:
@@ -428,6 +482,7 @@ def phone_identity_verification(meta_phone: dict) -> dict:
         "display_name_status": name_status,
         "display_name_reason": display_name_reason,
         "new_name_status": new_name_status,
+        "new_display_name": meta_phone.get("new_display_name"),
         "verified_name": meta_phone.get("verified_name"),
         "code_verification_status": meta_phone.get("code_verification_status"),
         "coexistence_confirmed": coexistence_confirmed,
