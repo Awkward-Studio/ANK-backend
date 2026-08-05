@@ -1,8 +1,10 @@
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Iterable, List, Tuple
 
 import requests
+from django.db import close_old_connections
 from django.utils import timezone
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
@@ -146,14 +148,14 @@ def _get_waba_token(waba: WhatsAppBusinessAccount) -> str:
 
 
 def _fetch_fields_with_fallback(object_id: str, fields: List[str], token: str) -> Tuple[dict, dict]:
-    payload, error = _meta_get(object_id, token, {"fields": ",".join(fields)})
-    if not error:
-        return payload, {}
-
     values = {"id": object_id}
     errors = {}
-    for field in fields:
-        field_payload, field_error = _meta_get(object_id, token, {"fields": field})
+    with ThreadPoolExecutor(max_workers=len(fields)) as executor:
+        results = executor.map(
+            lambda field: (field, *_meta_get(object_id, token, {"fields": field})),
+            fields,
+        )
+    for field, field_payload, field_error in results:
         if field_error:
             errors[field] = field_error
         elif field in field_payload:
@@ -261,10 +263,34 @@ def build_waba_verification(waba: WhatsAppBusinessAccount) -> dict:
             "app_subscription": {"status": "unknown", "subscribed": None, "apps": [], "error": "No token available."},
         }
 
-    waba_fields, field_errors = _fetch_fields_with_fallback(
-        str(waba.waba_id), WABA_AUDIT_FIELDS, token
-    )
-    token_audit = _token_audit(token, str(waba.waba_id))
+    configured_app_id, _app_token = _get_app_credentials()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        fields_future = executor.submit(
+            _fetch_fields_with_fallback,
+            str(waba.waba_id),
+            WABA_AUDIT_FIELDS,
+            token,
+        )
+        token_future = executor.submit(_token_audit, token, str(waba.waba_id))
+        subscription_future = executor.submit(
+            _subscription_audit,
+            str(waba.waba_id),
+            token,
+            configured_app_id,
+        )
+        waba_fields, field_errors = fields_future.result()
+        token_audit = token_future.result()
+        subscription_audit = subscription_future.result()
+
+    if subscription_audit.get("subscribed") is None and token_audit.get("app_id"):
+        expected_app_id = str(token_audit["app_id"])
+        subscription_audit["expected_app_id"] = expected_app_id
+        subscription_audit["subscribed"] = any(
+            app.get("id") == expected_app_id for app in subscription_audit.get("apps") or []
+        )
+        subscription_audit["status"] = (
+            "verified" if subscription_audit["subscribed"] else "not_subscribed"
+        )
     return {
         "graph_api_version": GRAPH_API_VERSION,
         "checked_at": checked_at,
@@ -275,9 +301,7 @@ def build_waba_verification(waba: WhatsAppBusinessAccount) -> dict:
             "fields": waba_fields,
             "field_errors": field_errors,
         },
-        "app_subscription": _subscription_audit(
-            str(waba.waba_id), token, str(token_audit.get("app_id") or "")
-        ),
+        "app_subscription": subscription_audit,
     }
 
 
@@ -421,9 +445,13 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
     disappear from a WABA after Meta/business-side changes.
     """
     local_numbers = list(waba.phone_numbers.all())
-    meta_numbers, fetch_error, fetch_status = _fetch_waba_phone_numbers(waba)
-    template_management = _template_management_capability(waba)
-    waba_verification = build_waba_verification(waba)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        numbers_future = executor.submit(_fetch_waba_phone_numbers, waba)
+        template_future = executor.submit(_template_management_capability, waba)
+        verification_future = executor.submit(build_waba_verification, waba)
+        meta_numbers, fetch_error, fetch_status = numbers_future.result()
+        template_management = template_future.result()
+        waba_verification = verification_future.result()
     checked_at = timezone.now()
 
     if fetch_error:
@@ -500,4 +528,20 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
 
 def reconcile_all_wabas(wabas: Iterable[WhatsAppBusinessAccount] = None) -> List[Dict[str, object]]:
     queryset = wabas if wabas is not None else WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers").all()
-    return [reconcile_waba_phone_numbers(waba) for waba in queryset]
+    waba_ids = [str(waba.waba_id) for waba in queryset]
+    if len(waba_ids) <= 1:
+        return [reconcile_waba_phone_numbers(waba) for waba in queryset]
+
+    def reconcile_by_id(waba_id: str) -> Dict[str, object]:
+        close_old_connections()
+        try:
+            waba = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers").get(
+                waba_id=waba_id
+            )
+            return reconcile_waba_phone_numbers(waba)
+        finally:
+            close_old_connections()
+
+    max_workers = min(8, len(waba_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(reconcile_by_id, waba_ids))
