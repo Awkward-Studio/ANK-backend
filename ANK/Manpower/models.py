@@ -43,6 +43,8 @@ class Freelancer(models.Model):
     id_number = models.CharField(max_length=100, blank=True, help_text='PAN / Aadhar Number')
     pan_number = models.CharField(max_length=20, blank=True, help_text='PAN Number')
     aadhaar_number = models.CharField(max_length=20, blank=True, help_text='Aadhaar Number')
+    pan_document = models.FileField(upload_to="freelancer_documents/pan/", blank=True, null=True)
+    aadhaar_document = models.FileField(upload_to="freelancer_documents/aadhaar/", blank=True, null=True)
     
     # Banking Details
     bank_account_name = models.CharField(max_length=200, blank=True)

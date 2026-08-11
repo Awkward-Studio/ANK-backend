@@ -1,11 +1,14 @@
 import uuid
 import io
 import zipfile
+import json
+from pathlib import Path
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import status, filters, generics
 from rest_framework.views import APIView
-from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
+from rest_framework.decorators import action, api_view, parser_classes, permission_classes, throttle_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -62,10 +65,33 @@ from .public_views import generate_invoice_pdf, mask_public_value
 
 ADMIN_ROLES = {"admin", "super_admin"}
 MANPOWER_MANAGER_ROLES = {"admin", "super_admin", "department_head"}
+IDENTITY_DOCUMENT_MAX_SIZE = 5 * 1024 * 1024
+IDENTITY_DOCUMENT_ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+}
+IDENTITY_DOCUMENT_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
 
 class DownloadRateThrottle(ScopedRateThrottle):
     scope = "download"
+
+
+def _validate_identity_document(uploaded_file, label):
+    if not uploaded_file:
+        return None
+    if uploaded_file.size > IDENTITY_DOCUMENT_MAX_SIZE:
+        return f"{label} document must be 5 MB or smaller."
+    content_type = (getattr(uploaded_file, "content_type", "") or "").lower()
+    extension = Path(uploaded_file.name or "").suffix.lower()
+    if (
+        content_type not in IDENTITY_DOCUMENT_ALLOWED_CONTENT_TYPES
+        or extension not in IDENTITY_DOCUMENT_ALLOWED_EXTENSIONS
+    ):
+        return f"{label} document must be a JPG, PNG, WebP, or PDF file."
+    return None
 
 
 def _has_any_role(request, allowed_roles):
@@ -2106,6 +2132,7 @@ def issue_adjustment_secure_link(request, allocation_id):
 
 @api_view(["GET", "POST"])
 @permission_classes([AllowAny])
+@parser_classes([JSONParser, FormParser, MultiPartParser])
 def public_adjustment_interaction(request, token):
     try:
         adjustment = PostEventAdjustment.objects.select_related(
@@ -2142,8 +2169,10 @@ def public_adjustment_interaction(request, token):
                 "masked_id_number": mask_public_value(freelancer.id_number),
                 "has_pan_number": bool((freelancer.pan_number or "").strip()),
                 "masked_pan_number": mask_public_value(freelancer.pan_number),
+                "has_pan_document": bool(freelancer.pan_document),
                 "has_aadhaar_number": bool((freelancer.aadhaar_number or "").strip()),
                 "masked_aadhaar_number": mask_public_value(freelancer.aadhaar_number),
+                "has_aadhaar_document": bool(freelancer.aadhaar_document),
                 "banking_details": {
                     "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
                     "has_bank_name": bool((freelancer.bank_name or "").strip()),
@@ -2227,6 +2256,19 @@ def public_adjustment_interaction(request, token):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+    document_errors = [
+        error
+        for error in (
+            _validate_identity_document(request.FILES.get("pan_document"), "PAN"),
+            _validate_identity_document(request.FILES.get("aadhaar_document"), "Aadhaar"),
+        )
+        if error
+    ]
+    if document_errors:
+        return Response(
+            {"error": " ".join(document_errors), "document_errors": document_errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     existing_email_owner = Freelancer.objects.filter(
         email__iexact=profile_updates["email"]
     ).exclude(pk=adjustment.allocation.freelancer_id).exists()
@@ -2237,6 +2279,14 @@ def public_adjustment_interaction(request, token):
         )
 
     updates = {k: v for k, v in request.data.items() if k in adjustment_fields}
+    if isinstance(updates.get("engagement_periods"), str):
+        try:
+            updates["engagement_periods"] = json.loads(updates["engagement_periods"])
+        except json.JSONDecodeError:
+            return Response(
+                {"error": "Engagement periods must be valid JSON."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
     with transaction.atomic():
@@ -2249,7 +2299,14 @@ def public_adjustment_interaction(request, token):
             setattr(freelancer, field, value)
         freelancer.id_type = "PAN"
         freelancer.id_number = profile_updates["pan_number"]
-        freelancer.save(update_fields=bank_fields + profile_fields + ("id_type", "id_number"))
+        update_fields = list(bank_fields + profile_fields + ("id_type", "id_number"))
+        if request.FILES.get("pan_document"):
+            freelancer.pan_document = request.FILES["pan_document"]
+            update_fields.append("pan_document")
+        if request.FILES.get("aadhaar_document"):
+            freelancer.aadhaar_document = request.FILES["aadhaar_document"]
+            update_fields.append("aadhaar_document")
+        freelancer.save(update_fields=update_fields)
         _create_revision(adjustment, "submission")
     return Response({"status": "submitted", "adjustment_id": adjustment.id})
 

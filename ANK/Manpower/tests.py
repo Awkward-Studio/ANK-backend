@@ -1,5 +1,7 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
+import tempfile
 from decimal import Decimal
 from Events.models.event_model import Event
 from Departments.models import Department, EventDepartment
@@ -516,3 +518,70 @@ class ManpowerTestCase(TestCase):
         self.assertEqual(self.freelancer.pan_number, "ABCDE1234F")
         self.assertEqual(self.freelancer.aadhaar_number, "123456789012")
         self.assertEqual(self.freelancer.bank_ifsc, "HDFC0001234")
+
+    def test_public_adjustment_uploads_pan_and_aadhaar_documents(self):
+        from .views import public_adjustment_interaction
+        from rest_framework.test import APIRequestFactory
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+            travel_costs=Decimal("1000.00"),
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+
+        pan_document = SimpleUploadedFile(
+            "pan.jpg",
+            b"\xff\xd8\xff\xe0test-pan",
+            content_type="image/jpeg",
+        )
+        aadhaar_document = SimpleUploadedFile(
+            "aadhaar.png",
+            b"\x89PNG\r\n\x1a\ntest-aadhaar",
+            content_type="image/png",
+        )
+
+        factory = APIRequestFactory()
+        with tempfile.TemporaryDirectory() as media_root, self.settings(MEDIA_ROOT=media_root):
+            request = factory.post(
+                f"/api/manpower/public/adjustment/{adjustment.secure_token}/",
+                {
+                    "actual_days_worked": "3.0",
+                    "total_engagement_days": "3.0",
+                    "engagement_periods": '[{"start":"2026-06-01","end":"2026-06-03","days":3}]',
+                    "travel_adjustments": "0.00",
+                    "other_adjustments": "0.00",
+                    "email": "freelancer-upload@example.com",
+                    "address": "Mahim, Mumbai",
+                    "pan_number": "ABCDE1234F",
+                    "aadhaar_number": "123456789012",
+                    "digital_signature": "John Doe",
+                    "bank_account_name": "John Doe",
+                    "bank_name": "HDFC Bank",
+                    "bank_account_number": "1234567890",
+                    "bank_branch": "Lower Parel",
+                    "bank_ifsc": "HDFC0001234",
+                    "pan_document": pan_document,
+                    "aadhaar_document": aadhaar_document,
+                },
+                format="multipart",
+            )
+
+            response = public_adjustment_interaction(request, token=adjustment.secure_token)
+
+            self.assertEqual(response.status_code, 200)
+            self.freelancer.refresh_from_db()
+            adjustment.refresh_from_db()
+            self.assertTrue(self.freelancer.pan_document.name.startswith("freelancer_documents/pan/"))
+            self.assertTrue(self.freelancer.aadhaar_document.name.startswith("freelancer_documents/aadhaar/"))
+            self.assertEqual(
+                adjustment.engagement_periods,
+                [{"start": "2026-06-01", "end": "2026-06-03", "days": 3}],
+            )

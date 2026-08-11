@@ -380,3 +380,42 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", 5 * 1
 FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("FILE_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024))
 RATE_LIMIT_ENABLED = get_bool_env("RATE_LIMIT_ENABLED", True)
 ALLOW_PUBLIC_REGISTRATION = get_bool_env("ALLOW_PUBLIC_REGISTRATION", DEBUG)
+
+USE_S3_STORAGE = get_bool_env("USE_S3_STORAGE", False)
+if USE_S3_STORAGE:
+    INSTALLED_APPS.append("storages")
+    AWS_ACCESS_KEY_ID = os.getenv("RAILWAY_BUCKET_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.getenv("RAILWAY_BUCKET_SECRET_KEY")
+    AWS_STORAGE_BUCKET_NAME = os.getenv("RAILWAY_BUCKET_NAME")
+    AWS_S3_ENDPOINT_URL = os.getenv("RAILWAY_BUCKET_ENPOINT_URL")
+    AWS_S3_REGION_NAME = os.getenv("RAILWAY_BUCKET_REGION", "auto")
+    AWS_S3_ADDRESSING_STYLE = os.getenv("AWS_S3_ADDRESSING_STYLE", "path")
+    AWS_QUERYSTRING_AUTH = True
+    AWS_DEFAULT_ACL = None
+    AWS_S3_FILE_OVERWRITE = False
+
+    missing_s3_settings = [
+        name
+        for name, value in {
+            "AWS_ACCESS_KEY_ID": AWS_ACCESS_KEY_ID,
+            "AWS_SECRET_ACCESS_KEY": AWS_SECRET_ACCESS_KEY,
+            "AWS_STORAGE_BUCKET_NAME": AWS_STORAGE_BUCKET_NAME,
+            "AWS_S3_ENDPOINT_URL": AWS_S3_ENDPOINT_URL,
+        }.items()
+        if not value
+    ]
+    if missing_s3_settings:
+        raise ImproperlyConfigured(
+            "USE_S3_STORAGE=True requires Railway bucket variables: "
+            "RAILWAY_BUCKET_ACCESS_KEY_ID, RAILWAY_BUCKET_SECRET_KEY, "
+            "RAILWAY_BUCKET_NAME, RAILWAY_BUCKET_ENPOINT_URL"
+        )
+
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }

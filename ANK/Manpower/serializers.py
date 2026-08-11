@@ -69,6 +69,7 @@ class FreelancerSerializer(serializers.ModelSerializer):
         fields = [
             "id", "name", "first_name", "title", "skills", "skill_names", "skill_category", "city", "address",
             "parent_name", "id_type", "id_number", "pan_number", "aadhaar_number",
+            "pan_document", "aadhaar_document",
             "bank_account_name", "bank_name", "bank_account_number",
             "bank_branch", "bank_ifsc", "contact_phone", "email",
             "base_daily_rate", "documents", "average_rating", "is_active",
