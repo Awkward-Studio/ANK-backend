@@ -1,7 +1,7 @@
 # ECS Cluster
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-${var.environment}-cluster"
-  
+
   setting {
     name  = "containerInsights"
     value = "enabled"
@@ -25,8 +25,8 @@ resource "aws_iam_role" "ecs_execution" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
@@ -37,6 +37,22 @@ resource "aws_iam_role_policy_attachment" "ecs_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  count = length(var.additional_secret_arns) > 0 ? 1 : 0
+
+  name = "${var.project_name}-${var.environment}-ecs-secrets"
+  role = aws_iam_role.ecs_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = values(var.additional_secret_arns)
+    }]
+  })
+}
+
 # Task Role
 resource "aws_iam_role" "ecs_task" {
   name = "${var.project_name}-${var.environment}-ecs-task"
@@ -44,8 +60,8 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
@@ -64,7 +80,7 @@ resource "aws_ecs_task_definition" "main" {
   container_definitions = jsonencode([{
     name  = "${var.project_name}-container"
     image = var.docker_image != "" ? var.docker_image : "nginx:latest"
-    
+
     portMappings = [{
       containerPort = var.container_port
       protocol      = "tcp"
@@ -72,7 +88,15 @@ resource "aws_ecs_task_definition" "main" {
 
     environment = [
       { name = "DATABASE_URL", value = "postgresql://${var.db_username}:${var.db_password}@${var.db_endpoint}/${var.db_name}" },
+      { name = "USE_S3_STORAGE", value = "true" },
       { name = "PORT", value = tostring(var.container_port) }
+    ]
+
+    secrets = [
+      for name, arn in var.additional_secret_arns : {
+        name      = name
+        valueFrom = arn
+      }
     ]
 
     logConfiguration = {
@@ -97,7 +121,7 @@ resource "aws_ecs_service" "main" {
   network_configuration {
     subnets          = var.public_subnet_ids
     security_groups  = [var.ecs_security_group_id]
-    assign_public_ip = true  # Required since no NAT gateway
+    assign_public_ip = true # Required since no NAT gateway
   }
 
   load_balancer {

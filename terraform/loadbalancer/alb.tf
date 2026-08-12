@@ -10,7 +10,7 @@ resource "aws_lb" "main" {
   subnets            = var.public_subnet_ids
 
   enable_deletion_protection = false
-  enable_http2              = true
+  enable_http2               = true
 
   tags = {
     Name = "${var.project_name}-${var.environment}-alb"
@@ -26,7 +26,7 @@ resource "aws_lb_target_group" "main" {
   port        = 8000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  target_type = "ip"  # For Fargate
+  target_type = "ip" # For Fargate
 
   health_check {
     enabled             = true

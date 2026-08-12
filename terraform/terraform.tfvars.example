@@ -41,4 +41,9 @@ certificate_arn   = ""          # Optional: Add ACM cert ARN for HTTPS
 additional_secrets = {
   # "DJANGO_SECRET_KEY" = "your-secret-key-here"
   # "MANGO_RSVP_SEC"    = "your-api-secret-here"
+  "RAILWAY_BUCKET_ENDPOINT_URL"  = "https://your-railway-bucket-endpoint"
+  "RAILWAY_BUCKET_REGION"        = "auto"
+  "RAILWAY_BUCKET_NAME"          = "your-bucket-name"
+  "RAILWAY_BUCKET_ACCESS_KEY_ID" = "your-access-key-id"
+  "RAILWAY_BUCKET_SECRET_KEY"    = "your-secret-key"
 }

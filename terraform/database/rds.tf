@@ -22,9 +22,9 @@ resource "aws_db_instance" "postgres" {
   instance_class = var.db_instance_class
 
   # Storage
-  allocated_storage     = var.db_allocated_storage
-  storage_type          = "gp2"
-  storage_encrypted     = true
+  allocated_storage = var.db_allocated_storage
+  storage_type      = "gp2"
+  storage_encrypted = true
 
   # Database
   db_name  = var.db_name
@@ -42,9 +42,9 @@ resource "aws_db_instance" "postgres" {
 
   # Backup
   backup_retention_period = 7
-  backup_window          = "03:00-04:00"
-  maintenance_window     = "mon:04:00-mon:05:00"
-  
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "mon:04:00-mon:05:00"
+
   # Snapshots
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.project_name}-${var.environment}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
@@ -54,7 +54,7 @@ resource "aws_db_instance" "postgres" {
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   # Deletion protection
-  deletion_protection = false  # Set to true for production
+  deletion_protection = false # Set to true for production
 
   tags = {
     Name = "${var.project_name}-${var.environment}-postgres"

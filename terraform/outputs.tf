@@ -111,7 +111,7 @@ output "secrets_arns" {
 
 output "next_steps" {
   description = "Next steps after infrastructure creation"
-  value = <<-EOT
+  value       = <<-EOT
   
   ========================================
   Infrastructure Created Successfully!

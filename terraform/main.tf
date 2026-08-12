@@ -11,7 +11,7 @@
 
 terraform {
   required_version = ">= 1.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -57,10 +57,10 @@ module "networking" {
   project_name = var.project_name
   environment  = var.environment
   aws_region   = var.aws_region
-  
-  vpc_cidr = var.vpc_cidr
+
+  vpc_cidr          = var.vpc_cidr
   availability_zone = var.availability_zone
-  
+
   public_subnet_cidr  = var.public_subnet_cidr
   private_subnet_cidr = var.private_subnet_cidr
 }
@@ -74,18 +74,18 @@ module "database" {
 
   project_name = var.project_name
   environment  = var.environment
-  
-  vpc_id                = module.networking.vpc_id
-  private_subnet_ids    = module.networking.private_subnet_ids
-  db_security_group_id  = module.networking.rds_security_group_id
-  
+
+  vpc_id               = module.networking.vpc_id
+  private_subnet_ids   = module.networking.private_subnet_ids
+  db_security_group_id = module.networking.rds_security_group_id
+
   db_name     = var.db_name
   db_username = var.db_username
   db_password = var.db_password
-  
-  db_instance_class   = var.db_instance_class
+
+  db_instance_class    = var.db_instance_class
   db_allocated_storage = var.db_allocated_storage
-  db_engine_version   = var.db_engine_version
+  db_engine_version    = var.db_engine_version
 }
 
 # =====================================
@@ -97,13 +97,13 @@ module "loadbalancer" {
 
   project_name = var.project_name
   environment  = var.environment
-  
-  vpc_id             = module.networking.vpc_id
-  public_subnet_ids  = module.networking.public_subnet_ids
+
+  vpc_id                = module.networking.vpc_id
+  public_subnet_ids     = module.networking.public_subnet_ids
   alb_security_group_id = module.networking.alb_security_group_id
-  
+
   health_check_path = var.health_check_path
-  certificate_arn   = var.certificate_arn   # Optional for HTTPS
+  certificate_arn   = var.certificate_arn # Optional for HTTPS
 }
 
 # =====================================
@@ -115,7 +115,7 @@ module "storage" {
 
   project_name = var.project_name
   environment  = var.environment
-  
+
   ecr_repository_name = var.ecr_repository_name
 }
 
@@ -129,29 +129,33 @@ module "compute" {
   project_name = var.project_name
   environment  = var.environment
   aws_region   = var.aws_region
-  
-  vpc_id              = module.networking.vpc_id
-  public_subnet_ids   = module.networking.public_subnet_ids
+
+  vpc_id                = module.networking.vpc_id
+  public_subnet_ids     = module.networking.public_subnet_ids
   ecs_security_group_id = module.networking.ecs_security_group_id
-  
+
   # Load Balancer
   target_group_arn = module.loadbalancer.target_group_arn
-  
+
   # Database connection
   db_endpoint = module.database.db_endpoint
   db_name     = var.db_name
   db_username = var.db_username
   db_password = var.db_password
-  
+
   # ECS Configuration
-  ecs_task_cpu          = var.ecs_task_cpu
-  ecs_task_memory       = var.ecs_task_memory
-  ecs_desired_count     = var.ecs_desired_count
-  container_port        = var.container_port
-  docker_image          = var.docker_image
-  
+  ecs_task_cpu      = var.ecs_task_cpu
+  ecs_task_memory   = var.ecs_task_memory
+  ecs_desired_count = var.ecs_desired_count
+  container_port    = var.container_port
+  docker_image      = var.docker_image
+
   # Secrets (optional)
   additional_secrets = var.additional_secrets
+  additional_secret_arns = {
+    for key, arn in module.secrets.secrets_arns : key => arn
+    if contains(keys(var.additional_secrets), key)
+  }
 }
 
 # =====================================
@@ -163,7 +167,7 @@ module "secrets" {
 
   project_name = var.project_name
   environment  = var.environment
-  
+
   db_connection_string = "postgresql://${var.db_username}:${var.db_password}@${module.database.db_endpoint}/${var.db_name}"
   additional_secrets   = var.additional_secrets
 }

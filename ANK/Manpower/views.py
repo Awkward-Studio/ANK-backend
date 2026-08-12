@@ -74,7 +74,6 @@ IDENTITY_DOCUMENT_ALLOWED_CONTENT_TYPES = {
 }
 IDENTITY_DOCUMENT_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
-
 class DownloadRateThrottle(ScopedRateThrottle):
     scope = "download"
 

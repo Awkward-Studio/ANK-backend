@@ -1,15 +1,13 @@
 import uuid
-import io
 import logging
 from django.utils import timezone
-from django.core.files.base import ContentFile
 from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from fpdf import FPDF
-from .models import MoU, InvoiceWorkflow
+from .models import MoU, InvoiceWorkflow, ManpowerSettings
 from utils.swagger import (
     document_api_view,
     doc_retrieve,
@@ -215,16 +213,42 @@ def generate_invoice_pdf(invoice):
 
     pdf.set_xy(pdf.l_margin + epw/2, y_bank)
     pdf.set_font("helvetica", "B", 9)
-    pdf.multi_cell(w=epw/2, h=5, txt=clean_text("SIGNATURE OF FREELANCER\n\nMANDATORY"), align="R")
+    freelancer_signature = (adj.freelancer_digital_signature or "").strip()
+    if freelancer_signature:
+        freelancer_signature_text = (
+            "SIGNATURE OF FREELANCER\n"
+            f"Digitally Signed by {freelancer_signature}\n"
+            f"Date: {adj.freelancer_submitted_at.strftime('%d-%m-%Y') if adj.freelancer_submitted_at else 'N/A'}"
+        )
+    else:
+        freelancer_signature_text = "SIGNATURE OF FREELANCER\n\nMANDATORY"
+    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(freelancer_signature_text), align="R")
     pdf.ln(15)
 
     # 5. Approvals Footer
     pdf.set_font("helvetica", "B", 8)
     pdf.cell(w=epw/3, h=6, txt="Hired By", border="T", align="C")
     pdf.cell(w=epw/3, h=6, txt="Sanctioned By", border="T", align="C")
-    pdf.cell(w=epw/3, h=6, txt="Approve By", border="T", align="C", ln=1)
+    pdf.cell(w=epw/3, h=6, txt="Approved By", border="T", align="C", ln=1)
 
-    pdf.ln(10)
+    pdf.ln(8)
+    pdf.set_font("helvetica", "", 8)
+    manpower_settings = ManpowerSettings.get_settings()
+    signatory_name = manpower_settings.invoice_authorised_signatory_name.strip()
+    signatory_title = manpower_settings.invoice_authorised_signatory_title.strip()
+    approval_text = "Pending Approval"
+    if invoice.approved_at:
+        approval_text = f"Digitally Signed by {signatory_name}"
+        if signatory_title:
+            approval_text = f"{approval_text} - {signatory_title}"
+    pdf.cell(w=epw/3, h=5, txt="", align="C")
+    pdf.cell(w=epw/3, h=5, txt="", align="C")
+    pdf.cell(w=epw/3, h=5, txt=clean_text(approval_text), align="C", ln=1)
+    if invoice.approved_at:
+        pdf.cell(w=epw, h=5, txt=clean_text(f"Approval Date: {invoice.approved_at.strftime('%d-%m-%Y %H:%M')}"), align="R", ln=1)
+
+    pdf.ln(6)
+    pdf.set_font("helvetica", "B", 8)
     pdf.cell(w=epw/2, h=6, txt="A/C. MANAGER", border="T", align="C")
     pdf.cell(w=epw/2, h=6, txt="SR.A/C MANAGER", border="T", align="C", ln=1)
 

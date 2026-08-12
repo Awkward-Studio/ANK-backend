@@ -15,7 +15,7 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description =  "Environment (dev, staging, prod)"
+  description = "Environment (dev, staging, prod)"
   type        = string
   default     = "prod"
 }
@@ -79,7 +79,7 @@ variable "db_password" {
 variable "db_instance_class" {
   description = "RDS instance class"
   type        = string
-  default     = "db.t3.micro"  # Free tier eligible
+  default     = "db.t3.micro" # Free tier eligible
 }
 
 variable "db_allocated_storage" {
@@ -101,13 +101,13 @@ variable "db_engine_version" {
 variable "ecs_task_cpu" {
   description = "Fargate task CPU units"
   type        = string
-  default     = "256"  # 0.25 vCPU
+  default     = "256" # 0.25 vCPU
 }
 
 variable "ecs_task_memory" {
   description = "Fargate task memory in MB"
   type        = string
-  default     = "512"  # 0.5 GB
+  default     = "512" # 0.5 GB
 }
 
 variable "ecs_desired_count" {
@@ -125,7 +125,7 @@ variable "container_port" {
 variable "docker_image" {
   description = "Docker image URL (ECR image)"
   type        = string
-  default     = ""  # Will be set after initial ECR push
+  default     = "" # Will be set after initial ECR push
 }
 
 variable "ecr_repository_name" {
@@ -141,13 +141,13 @@ variable "ecr_repository_name" {
 variable "health_check_path" {
   description = "Health check path for target group"
   type        = string
-  default     = "/health"  # Adjust based on your app
+  default     = "/health" # Adjust based on your app
 }
 
 variable "certificate_arn" {
   description = "ACM certificate ARN for HTTPS (optional)"
   type        = string
-  default     = ""  # Leave empty for HTTP only
+  default     = "" # Leave empty for HTTP only
 }
 
 # =====================================

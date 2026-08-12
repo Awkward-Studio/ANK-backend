@@ -35,6 +35,10 @@
           "value": "true"
         },
         {
+          "name": "USE_S3_STORAGE",
+          "value": "true"
+        },
+        {
           "name": "DJANGO_ALLOWED_HOSTS",
           "value": "*"
         },
@@ -79,6 +83,26 @@
         {
           "name": "WHATSAPP_ENCRYPTION_KEY",
           "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/WHATSAPP_ENCRYPTION_KEY:WHATSAPP_ENCRYPTION_KEY:AWSCURRENT:"
+        },
+        {
+          "name": "RAILWAY_BUCKET_ENDPOINT_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/RAILWAY_BUCKET_ENDPOINT_URL:RAILWAY_BUCKET_ENDPOINT_URL:AWSCURRENT:"
+        },
+        {
+          "name": "RAILWAY_BUCKET_REGION",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/RAILWAY_BUCKET_REGION:RAILWAY_BUCKET_REGION:AWSCURRENT:"
+        },
+        {
+          "name": "RAILWAY_BUCKET_NAME",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/RAILWAY_BUCKET_NAME:RAILWAY_BUCKET_NAME:AWSCURRENT:"
+        },
+        {
+          "name": "RAILWAY_BUCKET_ACCESS_KEY_ID",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/RAILWAY_BUCKET_ACCESS_KEY_ID:RAILWAY_BUCKET_ACCESS_KEY_ID:AWSCURRENT:"
+        },
+        {
+          "name": "RAILWAY_BUCKET_SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/RAILWAY_BUCKET_SECRET_KEY:RAILWAY_BUCKET_SECRET_KEY:AWSCURRENT:"
         }
       ],
       "logConfiguration": {

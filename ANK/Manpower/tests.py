@@ -12,7 +12,8 @@ from .models import (
     EventCostSheet,
     MoU,
     PostEventAdjustment,
-    FreelancerRating
+    FreelancerRating,
+    InvoiceWorkflow,
 )
 from .serializers import (
     FreelancerSerializer,
@@ -585,3 +586,45 @@ class ManpowerTestCase(TestCase):
                 adjustment.engagement_periods,
                 [{"start": "2026-06-01", "end": "2026-06-03", "days": 3}],
             )
+
+    def test_invoice_approval_records_approved_timestamp_without_signature_upload(self):
+        from .views import invoice_transition
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+            travel_costs=Decimal("1000.00"),
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+        invoice = InvoiceWorkflow.objects.create(
+            adjustment=adjustment,
+            event=self.event,
+            event_department=self.event_department,
+            freelancer=self.freelancer,
+            invoice_number="INV-SIGN-OK",
+            payable_amount=Decimal("15000.00"),
+            status="submitted",
+        )
+
+        factory = APIRequestFactory()
+        request = factory.patch(
+            f"/api/manpower/invoices/{invoice.id}/status/",
+            {"status": "approved"},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+
+        response = invoice_transition(request, pk=invoice.id)
+
+        self.assertEqual(response.status_code, 200)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, "approved")
+        self.assertIsNotNone(invoice.approved_at)

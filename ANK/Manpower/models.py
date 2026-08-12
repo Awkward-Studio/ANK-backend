@@ -720,6 +720,12 @@ class ManpowerSettings(models.Model):
     default_dinner_rate = models.DecimalField(
         max_digits=10, decimal_places=2, default=Decimal("0.00")
     )
+    invoice_authorised_signatory_name = models.CharField(
+        max_length=200, default="Divya Jain"
+    )
+    invoice_authorised_signatory_title = models.CharField(
+        max_length=200, default="Manager People & Strategy"
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

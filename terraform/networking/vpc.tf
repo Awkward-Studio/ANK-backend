@@ -61,7 +61,7 @@ resource "aws_subnet" "private" {
 # Create a second private subnet in a different AZ
 resource "aws_subnet" "private_secondary" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 10)  # Auto-generate CIDR
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 10) # Auto-generate CIDR
   availability_zone = data.aws_availability_zones.available.names[1]
 
   tags = {
@@ -93,7 +93,7 @@ resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
   # No internet route - cost optimization
-  
+
   tags = {
     Name = "${var.project_name}-${var.environment}-private-rt"
   }
