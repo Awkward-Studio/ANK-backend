@@ -149,6 +149,9 @@ class WhatsAppTemplateManagementView(APIView):
                 {"success": False, "error": "Missing required fields: name, category, language, components."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        button_components = [component for component in components if component.get("type") == "BUTTONS"]
+        if sum(len(component.get("buttons") or []) for component in button_components) > 10:
+            return Response({"success": False, "error": "Meta supports a maximum of 10 buttons per template."}, status=status.HTTP_400_BAD_REQUEST)
 
         waba = resolved["waba"]
         response = requests.post(
@@ -169,3 +172,73 @@ class WhatsAppTemplateManagementView(APIView):
             )
 
         return Response({"success": True, "data": response.json(), "waba_id": waba.waba_id}, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        if not self._authorize(request):
+            return Response({"success": False, "error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        template_id = request.data.get("template_id") or request.data.get("id")
+        if not template_id:
+            return Response({"success": False, "error": "template_id is required to update a template."}, status=status.HTTP_400_BAD_REQUEST)
+
+        resolved, error = self._resolve_account(request, request.data)
+        if error:
+            return error
+
+        components = request.data.get("components")
+        category = request.data.get("category")
+        if not components:
+            return Response({"success": False, "error": "components are required to update a template."}, status=status.HTTP_400_BAD_REQUEST)
+        button_components = [component for component in components if component.get("type") == "BUTTONS"]
+        if sum(len(component.get("buttons") or []) for component in button_components) > 10:
+            return Response({"success": False, "error": "Meta supports a maximum of 10 buttons per template."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = {"components": components}
+        if category:
+            payload["category"] = category
+
+        response = requests.post(
+            f"{GRAPH_API_BASE}/{template_id}",
+            params={"access_token": resolved["token"]},
+            json=payload,
+            timeout=15,
+        )
+        if not response.ok:
+            return Response(
+                {"success": False, "error": "Failed to update template on Meta.", "details": _meta_error(response)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({"success": True, "data": response.json(), "waba_id": resolved["waba"].waba_id}, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        if not self._authorize(request):
+            return Response({"success": False, "error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        template_id = request.query_params.get("template_id") or request.data.get("template_id")
+        template_name = request.query_params.get("name") or request.data.get("name")
+        if not template_id and not template_name:
+            return Response({"success": False, "error": "template_id or name is required to delete a template."}, status=status.HTTP_400_BAD_REQUEST)
+
+        resolved, error = self._resolve_account(request, request.data)
+        if error:
+            return error
+
+        params = {"access_token": resolved["token"]}
+        if template_id:
+            params["hsm_id"] = template_id
+        if template_name:
+            params["name"] = template_name
+
+        response = requests.delete(
+            f"{GRAPH_API_BASE}/{resolved['waba'].waba_id}/message_templates",
+            params=params,
+            timeout=15,
+        )
+        if not response.ok:
+            return Response(
+                {"success": False, "error": "Failed to delete template on Meta.", "details": _meta_error(response)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({"success": True, "data": response.json() if response.content else {}, "waba_id": resolved["waba"].waba_id}, status=status.HTTP_200_OK)
