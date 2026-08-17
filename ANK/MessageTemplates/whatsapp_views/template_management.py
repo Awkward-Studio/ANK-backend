@@ -225,10 +225,13 @@ class WhatsAppTemplateManagementView(APIView):
             return error
 
         params = {"access_token": resolved["token"]}
-        if template_id:
-            params["hsm_id"] = template_id
+        # Prefer WABA-scoped deletion by name. Supplying hsm_id makes Meta
+        # perform an additional object-level ownership check which can reject
+        # otherwise valid WABA tokens with error #100.
         if template_name:
             params["name"] = template_name
+        elif template_id:
+            params["hsm_id"] = template_id
 
         response = requests.delete(
             f"{GRAPH_API_BASE}/{resolved['waba'].waba_id}/message_templates",
