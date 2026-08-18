@@ -8,11 +8,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
-from MessageTemplates.services.meta_reconciliation import reconcile_waba_phone_numbers
 
 logger = logging.getLogger(__name__)
 WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
-GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
+GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
+GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
 
 def _meta_error(response: requests.Response) -> str:
@@ -67,31 +67,6 @@ class WhatsAppTemplateManagementView(APIView):
                 {"success": False, "error": "phone_number_id or waba_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        result = reconcile_waba_phone_numbers(waba)
-        if result.get("fetch_error"):
-            return None, Response(
-                {
-                    "success": False,
-                    "error": "ANK cannot access this WABA on Meta.",
-                    "details": result["fetch_error"],
-                    "waba_id": waba.waba_id,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        if phone_number_id:
-            phone.refresh_from_db()
-            if phone.meta_status != "active":
-                return None, Response(
-                    {
-                        "success": False,
-                        "error": "Selected WhatsApp phone number is not available on Meta.",
-                        "details": phone.meta_status_reason,
-                        "meta_status": phone.meta_status,
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
 
         token = waba.get_token()
         if not token and phone:
