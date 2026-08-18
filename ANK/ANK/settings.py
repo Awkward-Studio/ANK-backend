@@ -324,7 +324,7 @@ if REDIS_URL:
     }
     CACHES = {
         "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "ANK.cache_backend.ResilientRedisCache",
             "LOCATION": REDIS_URL,
             "KEY_PREFIX": "ank",
         }
