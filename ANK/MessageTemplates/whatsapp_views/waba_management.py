@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny
 import os
 import requests
 
+from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
@@ -104,49 +105,130 @@ class WABADetailView(APIView):
 class WABAMetaStatusView(APIView):
     permission_classes = [AllowAny]
 
+    @staticmethod
+    def _cache_timeout(name, default):
+        try:
+            return max(1, int(os.getenv(name, str(default))))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _with_cache_metadata(payload, **metadata):
+        return {**payload, "cache": metadata}
+
     def get(self, request):
         token = request.headers.get("X-Webhook-Token", "")
         if not WEBHOOK_SECRET or token != WEBHOOK_SECRET:
             return Response({"error": "Unauthorized"}, status=403)
 
         waba_id = request.query_params.get("waba_id")
+        force_refresh = str(request.query_params.get("force_refresh") or "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        cache_ttl = self._cache_timeout("META_STATUS_CACHE_TTL_SECONDS", 300)
+        stale_ttl = self._cache_timeout("META_STATUS_STALE_TTL_SECONDS", 3600)
+        cache_suffix = waba_id or "all"
+        cache_key = f"whatsapp:meta-status:{cache_suffix}"
+        stale_key = f"{cache_key}:stale"
+        lock_key = f"{cache_key}:refreshing"
+
+        if not force_refresh:
+            cached_payload = cache.get(cache_key)
+            if cached_payload is not None:
+                return Response(
+                    self._with_cache_metadata(
+                        cached_payload,
+                        hit=True,
+                        stale=False,
+                        ttl_seconds=cache_ttl,
+                    ),
+                    status=status.HTTP_200_OK,
+                )
+
+        stale_payload = cache.get(stale_key)
+        if not cache.add(lock_key, True, timeout=60):
+            if stale_payload is not None:
+                return Response(
+                    self._with_cache_metadata(
+                        stale_payload,
+                        hit=True,
+                        stale=True,
+                        refresh_in_progress=True,
+                    ),
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                {"error": "Meta status refresh is already in progress."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
         if waba_id:
             waba_qs = waba_qs.filter(waba_id=waba_id)
+        wabas = list(waba_qs)
 
-        results = reconcile_all_wabas(waba_qs)
-        payload = []
-        for result in results:
-            waba = next((item for item in waba_qs if item.waba_id == result["waba_id"]), None)
-            if not waba:
-                continue
+        try:
+            results = reconcile_all_wabas(wabas)
+            payload = []
+            for result in results:
+                waba = next((item for item in wabas if item.waba_id == result["waba_id"]), None)
+                if not waba:
+                    continue
 
-            numbers = result["numbers"]
-            meta_details_by_phone_id = result.get("meta_details_by_phone_id", {})
-            serialized_numbers = WhatsAppPhoneNumberSerializer(numbers, many=True).data
-            for number in serialized_numbers:
-                meta_details = meta_details_by_phone_id.get(str(number["phone_number_id"])) or {}
-                number["meta_details"] = meta_details
-                number["identity_verification"] = phone_identity_verification(meta_details)
-            counts = {
-                "active": sum(1 for phone in numbers if phone.meta_status == "active"),
-                "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
-                "logged_out": sum(1 for phone in numbers if phone.meta_status == "logged_out"),
-                "unknown": sum(1 for phone in numbers if phone.meta_status == "unknown"),
-            }
-            payload.append(
-                {
-                    "waba": WhatsAppBusinessAccountSerializer(waba).data,
-                    "fetch_error": result["fetch_error"],
-                    "meta_phone_number_ids": result["meta_phone_number_ids"],
-                    "counts": counts,
-                    "numbers": serialized_numbers,
-                    "template_management": result["template_management"],
-                    "verification": result.get("verification") or {},
+                numbers = result["numbers"]
+                meta_details_by_phone_id = result.get("meta_details_by_phone_id", {})
+                serialized_numbers = WhatsAppPhoneNumberSerializer(numbers, many=True).data
+                for number in serialized_numbers:
+                    meta_details = meta_details_by_phone_id.get(str(number["phone_number_id"])) or {}
+                    number["meta_details"] = meta_details
+                    number["identity_verification"] = phone_identity_verification(meta_details)
+                counts = {
+                    "active": sum(1 for phone in numbers if phone.meta_status == "active"),
+                    "blocked": sum(1 for phone in numbers if phone.meta_status == "blocked"),
+                    "logged_out": sum(1 for phone in numbers if phone.meta_status == "logged_out"),
+                    "unknown": sum(1 for phone in numbers if phone.meta_status == "unknown"),
                 }
-            )
+                payload.append(
+                    {
+                        "waba": WhatsAppBusinessAccountSerializer(waba).data,
+                        "fetch_error": result["fetch_error"],
+                        "meta_phone_number_ids": result["meta_phone_number_ids"],
+                        "counts": counts,
+                        "numbers": serialized_numbers,
+                        "template_management": result["template_management"],
+                        "verification": result.get("verification") or {},
+                    }
+                )
 
-        return Response({"success": True, "wabas": payload}, status=status.HTTP_200_OK)
+            response_payload = {"success": True, "wabas": payload}
+            cache.set(cache_key, response_payload, timeout=cache_ttl)
+            cache.set(stale_key, response_payload, timeout=stale_ttl)
+            return Response(
+                self._with_cache_metadata(
+                    response_payload,
+                    hit=False,
+                    stale=False,
+                    ttl_seconds=cache_ttl,
+                ),
+                status=status.HTTP_200_OK,
+            )
+        except Exception:
+            logger.exception("Meta status reconciliation failed")
+            if stale_payload is not None:
+                return Response(
+                    self._with_cache_metadata(
+                        stale_payload,
+                        hit=True,
+                        stale=True,
+                        refresh_failed=True,
+                    ),
+                    status=status.HTTP_200_OK,
+                )
+            raise
+        finally:
+            cache.delete(lock_key)
 
 
 class PhoneDisplayNameManagementView(APIView):
