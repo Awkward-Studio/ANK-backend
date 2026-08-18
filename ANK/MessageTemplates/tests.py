@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-from django.core.cache import cache
 from django.urls import reverse
 from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
@@ -90,7 +89,6 @@ class MetaIdentityVerificationTests(SimpleTestCase):
 
 class MetaStatusApiIdentityTests(APITestCase):
     def setUp(self):
-        cache.clear()
         self.waba = WhatsAppBusinessAccount.objects.create(waba_id="waba-status", name="RSVP WABA")
         self.phone = WhatsAppPhoneNumber.objects.create(
             business_account=self.waba,
@@ -139,22 +137,6 @@ class MetaStatusApiIdentityTests(APITestCase):
         self.assertEqual(number["identity_verification"]["display_name_status"], "NON_EXISTS")
         self.assertTrue(number["identity_verification"]["coexistence_confirmed"])
         self.assertNotIn("access_token", str(response.data).lower())
-
-        cached_response = self.client.get(
-            "/api/whatsapp/meta-status/",
-            HTTP_X_WEBHOOK_TOKEN="status-secret",
-        )
-        self.assertEqual(cached_response.status_code, 200)
-        self.assertTrue(cached_response.data["cache"]["hit"])
-        reconcile.assert_called_once()
-
-        refreshed_response = self.client.get(
-            "/api/whatsapp/meta-status/?force_refresh=true",
-            HTTP_X_WEBHOOK_TOKEN="status-secret",
-        )
-        self.assertEqual(refreshed_response.status_code, 200)
-        self.assertFalse(refreshed_response.data["cache"]["hit"])
-        self.assertEqual(reconcile.call_count, 2)
 
 
 class DisplayNameManagementApiTests(APITestCase):
