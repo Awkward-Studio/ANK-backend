@@ -322,6 +322,13 @@ if REDIS_URL:
             "CONFIG": {"hosts": [REDIS_URL]},
         }
     }
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "KEY_PREFIX": "ank",
+        }
+    }
 else:
     if not DEBUG:
         raise ImproperlyConfigured("REDIS_URL must be set in production for Channels")
