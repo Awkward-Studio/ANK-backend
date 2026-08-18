@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from time import time
 
 from django.conf import settings
 from django.core.cache import cache
 from django.http import JsonResponse
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,9 @@ class RateLimitMiddleware:
     DRF throttling covers APIView/api_view endpoints. This middleware covers
     csrf-exempt webhook views and public token URLs that bypass DRF throttles.
     For multi-instance production, configure Django CACHES to use Redis/shared cache.
+
+    If the cache backend is unavailable (e.g. Redis is down), the middleware
+    fails open — requests are allowed through and the error is logged.
     """
 
     DEFAULT_RULES = (
@@ -66,15 +72,25 @@ class RateLimitMiddleware:
         return request.META.get("REMOTE_ADDR", "unknown")
 
     def _is_limited(self, request, rule: LimitRule) -> bool:
-        now = int(time())
-        bucket = now // rule.window
-        key = f"rl:{rule.prefix}:{request.method}:{self._client_ip(request)}:{bucket}"
-        added = cache.add(key, 1, timeout=rule.window + 5)
-        if added:
-            return False
         try:
-            count = cache.incr(key)
-        except ValueError:
-            cache.set(key, 1, timeout=rule.window + 5)
+            now = int(time())
+            bucket = now // rule.window
+            key = f"rl:{rule.prefix}:{request.method}:{self._client_ip(request)}:{bucket}"
+            added = cache.add(key, 1, timeout=rule.window + 5)
+            if added:
+                return False
+            try:
+                count = cache.incr(key)
+            except ValueError:
+                cache.set(key, 1, timeout=rule.window + 5)
+                return False
+            return count > rule.limit
+        except Exception:
+            # Cache backend unavailable (e.g. Redis down) — fail open
+            logger.warning(
+                "Rate-limit cache unavailable for %s %s; allowing request",
+                request.method,
+                request.path,
+                exc_info=True,
+            )
             return False
-        return count > rule.limit
