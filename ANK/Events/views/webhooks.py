@@ -416,6 +416,8 @@ def message_status_webhook(request):
             msg_log.failed_at = event_at
         if status == "failed" and errors:
             error_code, error_message, error_details = _meta_error_summary(errors)
+            error_details["pricing"] = body.get("pricing") or {}
+            error_details["status_payload"] = body.get("status_payload") or {}
             msg_log.error_code = error_code
             msg_log.error_message = error_message
             msg_log.error_details = error_details

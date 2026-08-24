@@ -18,6 +18,8 @@ class MessageStatusWebhookTests(TestCase):
             "status": status,
             "timestamp": "2026-08-24T10:17:07Z",
             "errors": errors,
+            "pricing": {"category": "utility", "type": "regular"},
+            "status_payload": {"id": self.wamid, "status": status},
         }
         with patch.dict(os.environ, {"DJANGO_RSVP_SECRET": self.token}):
             return self.client.post(
@@ -48,7 +50,8 @@ class MessageStatusWebhookTests(TestCase):
         self.assertEqual(log.error_code, "131049")
         self.assertIn("Meta chose not to deliver", log.error_message)
         self.assertIn("Maintain healthy ecosystem engagement", log.error_message)
-        self.assertEqual(log.error_details, {"errors": errors})
+        self.assertEqual(log.error_details["errors"], errors)
+        self.assertEqual(log.error_details["pricing"]["category"], "utility")
         self.assertIsNotNone(log.failed_at)
 
         # A delayed tracking write must enrich the row without resetting the
@@ -88,6 +91,7 @@ class MessageStatusWebhookTests(TestCase):
         self.assertEqual(response.status_code, 200)
         statuses = response.json()["statuses"]
         self.assertEqual(statuses[self.wamid]["error_code"], "131049")
-        self.assertEqual(statuses[self.wamid]["error_details"], {"errors": errors})
+        self.assertEqual(statuses[self.wamid]["error_details"]["errors"], errors)
+        self.assertEqual(statuses[self.wamid]["error_details"]["pricing"]["category"], "utility")
         self.assertEqual(statuses["wamid.missing"]["status"], "unknown")
         self.assertEqual(statuses["wamid.missing"]["error_code"], "STATUS_NOT_TRACKED")
