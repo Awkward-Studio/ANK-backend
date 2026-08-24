@@ -83,6 +83,7 @@ class WhatsAppMessageLog(models.Model):
     # Error details (if failed)
     error_code = models.CharField(max_length=50, null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
+    error_details = models.JSONField(default=dict, blank=True)
 
     # Relationships
     event_registration_id = models.CharField(

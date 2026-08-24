@@ -159,7 +159,6 @@ class MessageLogger:
                         wamid=wa_message_id,
                         defaults={
                             "recipient_id": recipient_id,
-                            "status": "sent",
                             "sent_at": timezone.now(),
                             "message_type": log_message_type,
                             "template_name": template_name,

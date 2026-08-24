@@ -35,6 +35,7 @@ class BroadcastCampaignViewSet(viewsets.ModelViewSet):
         
         # Helper to just get stats
         stats = {
+            "accepted": logs_qs.count(),
             "total": logs_qs.count(),
             "sent": logs_qs.filter(status="sent").count(),
             "delivered": logs_qs.filter(status="delivered").count(),

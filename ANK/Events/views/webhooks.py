@@ -33,6 +33,23 @@ def _ensure_aware(dt):
         return dt.replace(tzinfo=tz.utc)
     return dt
 
+
+def _meta_error_summary(errors):
+    """Return a stable code, readable explanation, and complete Meta payload."""
+    error_list = errors if isinstance(errors, list) else ([errors] if isinstance(errors, dict) else [])
+    first = error_list[0] if error_list else {}
+    error_data = first.get("error_data") if isinstance(first.get("error_data"), dict) else {}
+    parts = []
+    for value in (first.get("title"), first.get("message"), error_data.get("details")):
+        text = str(value or "").strip()
+        if text and text not in parts:
+            parts.append(text)
+    return (
+        str(first.get("code") or ""),
+        " — ".join(parts) or "Meta reported that the message failed without an explanation.",
+        {"errors": error_list},
+    )
+
 def _get_header_token(request):
     return request.headers.get("X-Webhook-Token")
 
@@ -313,7 +330,6 @@ def track_send(request):
                 wamid=template_wamid,
                 defaults={
                     "recipient_id": wa_id,
-                    "status": "sent",
                     "sent_at": dj_tz.now(),
                     "message_type": message_type,
                     "template_name": template_name,
@@ -372,17 +388,53 @@ def message_status_webhook(request):
     recipient_id = _norm_digits(body.get("recipient_id", ""))
     errors = body.get("errors")
 
+    valid_statuses = {choice[0] for choice in WhatsAppMessageLog.STATUS_CHOICES}
+    if not wamid or status not in valid_statuses:
+        return JsonResponse({"ok": False, "error": "Missing wamid or invalid status"}, status=400)
+
+    event_at = parse_datetime(str(body.get("timestamp") or "")) or dj_tz.now()
+    event_at = _ensure_aware(event_at)
+
     msg_log, _ = WhatsAppMessageLog.objects.get_or_create(wamid=wamid, defaults={"recipient_id": recipient_id, "status": status})
-    
+
     status_order = {"sent": 1, "delivered": 2, "read": 3, "failed": 0}
-    if status_order.get(status, 0) > status_order.get(msg_log.status, 0) or status == "failed":
+    should_update = status == "failed" or (
+        msg_log.status != "failed"
+        and status_order.get(status, 0) > status_order.get(msg_log.status, 0)
+    )
+    if should_update:
         msg_log.status = status
+        if recipient_id:
+            msg_log.recipient_id = recipient_id
+        if status == "sent":
+            msg_log.sent_at = event_at
+        elif status == "delivered":
+            msg_log.delivered_at = event_at
+        elif status == "read":
+            msg_log.read_at = event_at
+        elif status == "failed":
+            msg_log.failed_at = event_at
         if status == "failed" and errors:
-            msg_log.error_code = str(errors[0].get("code", ""))
-            msg_log.error_message = errors[0].get("title", "")
+            error_code, error_message, error_details = _meta_error_summary(errors)
+            msg_log.error_code = error_code
+            msg_log.error_message = error_message
+            msg_log.error_details = error_details
+            log.warning(
+                "[MESSAGE-DELIVERY-FAILED] wamid=%s recipient=%s code=%s reason=%s payload=%s",
+                wamid,
+                recipient_id,
+                error_code,
+                error_message,
+                json.dumps(error_details, default=str),
+            )
         msg_log.save()
 
-    return JsonResponse({"ok": True, "status": msg_log.status})
+    return JsonResponse({
+        "ok": True,
+        "status": msg_log.status,
+        "error_code": msg_log.error_code,
+        "error_message": msg_log.error_message,
+    })
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -396,7 +448,27 @@ def message_status_lookup(request):
 
     wamids = body.get("wamids", [])
     logs = WhatsAppMessageLog.objects.filter(wamid__in=wamids)
-    statuses = {msg_log.wamid: {"status": msg_log.status, "error": msg_log.error_message} for msg_log in logs}
+    statuses = {
+        msg_log.wamid: {
+            "status": msg_log.status,
+            "error": msg_log.error_message,
+            "error_code": msg_log.error_code,
+            "error_details": msg_log.error_details,
+            "sent_at": msg_log.sent_at.isoformat() if msg_log.sent_at else None,
+            "delivered_at": msg_log.delivered_at.isoformat() if msg_log.delivered_at else None,
+            "read_at": msg_log.read_at.isoformat() if msg_log.read_at else None,
+            "failed_at": msg_log.failed_at.isoformat() if msg_log.failed_at else None,
+        }
+        for msg_log in logs
+    }
+    found_wamids = set(statuses)
+    for missing_wamid in set(wamids) - found_wamids:
+        statuses[missing_wamid] = {
+            "status": "unknown",
+            "error": "No delivery-status record was found for this WhatsApp message ID.",
+            "error_code": "STATUS_NOT_TRACKED",
+            "error_details": {},
+        }
     return JsonResponse({"statuses": statuses})
 
 @api_view(["GET"])

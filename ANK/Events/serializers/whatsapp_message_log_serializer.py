@@ -25,6 +25,7 @@ class WhatsAppMessageLogSerializer(serializers.ModelSerializer):
             "failed_at",
             "error_code",
             "error_message",
+            "error_details",
             "guest_name",
             "event_id",
             "event_registration_id",

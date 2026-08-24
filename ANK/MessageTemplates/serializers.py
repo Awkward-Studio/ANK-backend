@@ -545,6 +545,7 @@ class BroadcastCampaignSerializer(serializers.ModelSerializer):
         sent = logs.filter(status='sent').count()
         
         return {
+            "accepted": total,
             "sent": sent,
             "delivered": delivered,
             "read": read,
