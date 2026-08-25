@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone as tz
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.utils import timezone as dj_tz
@@ -395,41 +396,66 @@ def message_status_webhook(request):
     event_at = parse_datetime(str(body.get("timestamp") or "")) or dj_tz.now()
     event_at = _ensure_aware(event_at)
 
-    msg_log, _ = WhatsAppMessageLog.objects.get_or_create(wamid=wamid, defaults={"recipient_id": recipient_id, "status": status})
+    with transaction.atomic():
+        msg_log, _ = WhatsAppMessageLog.objects.select_for_update().get_or_create(
+            wamid=wamid,
+            defaults={"recipient_id": recipient_id, "status": status},
+        )
 
-    status_order = {"sent": 1, "delivered": 2, "read": 3, "failed": 0}
-    should_update = status == "failed" or (
-        msg_log.status != "failed"
-        and status_order.get(status, 0) > status_order.get(msg_log.status, 0)
-    )
-    if should_update:
-        msg_log.status = status
-        if recipient_id:
-            msg_log.recipient_id = recipient_id
-        if status == "sent":
-            msg_log.sent_at = event_at
-        elif status == "delivered":
-            msg_log.delivered_at = event_at
-        elif status == "read":
-            msg_log.read_at = event_at
-        elif status == "failed":
-            msg_log.failed_at = event_at
-        if status == "failed" and errors:
-            error_code, error_message, error_details = _meta_error_summary(errors)
-            error_details["pricing"] = body.get("pricing") or {}
-            error_details["status_payload"] = body.get("status_payload") or {}
-            msg_log.error_code = error_code
-            msg_log.error_message = error_message
-            msg_log.error_details = error_details
-            log.warning(
-                "[MESSAGE-DELIVERY-FAILED] wamid=%s recipient=%s code=%s reason=%s payload=%s",
+        status_order = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
+        should_update = status == "failed" or (
+            msg_log.status != "failed"
+            and status_order.get(status, 0) > status_order.get(msg_log.status, 0)
+        )
+        if should_update:
+            msg_log.status = status
+            update_fields = {"status"}
+            if recipient_id:
+                msg_log.recipient_id = recipient_id
+                update_fields.add("recipient_id")
+            if status == "sent":
+                msg_log.sent_at = event_at
+                update_fields.add("sent_at")
+            elif status == "delivered":
+                msg_log.delivered_at = event_at
+                update_fields.add("delivered_at")
+            elif status == "read":
+                msg_log.read_at = event_at
+                update_fields.add("read_at")
+            elif status == "failed":
+                msg_log.failed_at = event_at
+                update_fields.add("failed_at")
+            if status == "failed":
+                error_code, error_message, callback_details = _meta_error_summary(errors)
+                callback_details["pricing"] = body.get("pricing") or {}
+                callback_details["status_payload"] = body.get("status_payload") or {}
+                msg_log.error_code = error_code
+                msg_log.error_message = error_message
+                msg_log.error_details = {**(msg_log.error_details or {}), **callback_details}
+                update_fields.update({"error_code", "error_message", "error_details"})
+                log.warning(
+                    "[MESSAGE-DELIVERY-FAILED] wamid=%s recipient=%s code=%s reason=%s payload=%s",
+                    wamid,
+                    recipient_id,
+                    error_code,
+                    error_message,
+                    json.dumps(msg_log.error_details, default=str),
+                )
+            msg_log.save(update_fields=sorted(update_fields))
+
+        # Never acknowledge a failed callback unless the database row really
+        # contains the failure. This makes persistence failure retryable.
+        msg_log.refresh_from_db()
+        if status == "failed" and msg_log.status != "failed":
+            log.error(
+                "[MESSAGE-DELIVERY-PERSISTENCE-ERROR] wamid=%s expected=failed actual=%s",
                 wamid,
-                recipient_id,
-                error_code,
-                error_message,
-                json.dumps(error_details, default=str),
+                msg_log.status,
             )
-        msg_log.save()
+            return JsonResponse(
+                {"ok": False, "error": "Failed delivery status was not persisted"},
+                status=500,
+            )
 
     return JsonResponse({
         "ok": True,

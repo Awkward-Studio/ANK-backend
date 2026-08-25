@@ -44,6 +44,7 @@ class MessageStatusWebhookTests(TestCase):
 
         response = self.post_status("failed", errors)
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "failed")
 
         log = WhatsAppMessageLog.objects.get(wamid=self.wamid)
         self.assertEqual(log.status, "failed")
