@@ -3,3 +3,4 @@ from .event_registration_model import EventRegistration
 from .session_model import Session
 from .session_registration import SessionRegistration
 from .whatsapp_message_log import WhatsAppMessageLog
+from .whatsapp_webhook_receipt import WhatsAppWebhookReceipt

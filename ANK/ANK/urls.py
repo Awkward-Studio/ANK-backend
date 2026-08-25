@@ -38,6 +38,7 @@ from Events.views.webhooks import (
     message_status_webhook,
     resolve_wa,
     track_send,
+    webhook_event_receipt,
     whatsapp_rsvp,
 )
 from MessageTemplates.whatsapp_views.travel_detail_view import whatsapp_travel_webhook
@@ -83,6 +84,11 @@ urlpatterns = [
     # ----------------- Webhook -------------------- #
     path("api/webhooks/whatsapp-rsvp/", whatsapp_rsvp, name="whatsapp_rsvp"),
     path("api/webhooks/track-send/", track_send, name="track_send"),
+    path(
+        "api/webhooks/event-receipt/",
+        webhook_event_receipt,
+        name="webhook_event_receipt",
+    ),
     path("api/webhooks/whatsapp-travel/", whatsapp_travel_webhook),
     path(
         "api/webhooks/message-status/",

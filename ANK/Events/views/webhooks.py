@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import uuid
+from datetime import timedelta
 from datetime import datetime, timezone as tz
 
 from django.conf import settings
@@ -19,6 +21,7 @@ from django.shortcuts import get_object_or_404
 from Events.models.event_registration_model import EventRegistration
 from Events.models.wa_send_map import WaSendMap
 from Events.models.whatsapp_message_log import WhatsAppMessageLog
+from Events.models.whatsapp_webhook_receipt import WhatsAppWebhookReceipt
 from Events.serializers.whatsapp_message_log_serializer import WhatsAppMessageLogSerializer
 from MessageTemplates.models import FlowSession, FlowBlueprint
 from MessageTemplates.services.flow_runner import FlowRunner
@@ -56,6 +59,97 @@ def _get_header_token(request):
 
 def _get_secret():
     return os.getenv("DJANGO_RSVP_SECRET")
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def webhook_event_receipt(request):
+    """Claim or finalize a Meta webhook event using the database as the lock."""
+    token = _get_header_token(request)
+    secret = _get_secret()
+    if not secret or token != secret:
+        return HttpResponseForbidden("invalid token")
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    action = str(body.get("action") or "claim").strip().lower()
+    event_key = str(body.get("event_key") or "").strip()
+    if not event_key or len(event_key) > 512:
+        return JsonResponse({"ok": False, "error": "invalid event_key"}, status=400)
+
+    if action == "claim":
+        now = dj_tz.now()
+        lease_expires_at = now + timedelta(minutes=2)
+        with transaction.atomic():
+            receipt, created = WhatsAppWebhookReceipt.objects.select_for_update().get_or_create(
+                event_key=event_key,
+                defaults={
+                    "wamid": str(body.get("wamid") or "")[:255],
+                    "event_kind": str(body.get("event_kind") or "")[:32],
+                    "event_name": str(body.get("event_name") or "")[:64],
+                    "source_app": str(body.get("source_app") or "")[:64],
+                    "metadata": body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
+                    "state": "processing",
+                    "claim_token": uuid.uuid4(),
+                    "lease_expires_at": lease_expires_at,
+                    "attempts": 1,
+                },
+            )
+
+            if not created:
+                if receipt.state == "completed":
+                    return JsonResponse({"ok": True, "claimed": False, "state": "completed"})
+                if (
+                    receipt.state == "processing"
+                    and receipt.lease_expires_at
+                    and receipt.lease_expires_at > now
+                ):
+                    return JsonResponse({"ok": True, "claimed": False, "state": "processing", "retry": True})
+
+                receipt.state = "processing"
+                receipt.claim_token = uuid.uuid4()
+                receipt.lease_expires_at = lease_expires_at
+                receipt.attempts += 1
+                receipt.source_app = str(body.get("source_app") or receipt.source_app)[:64]
+                receipt.metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else receipt.metadata
+                receipt.completed_at = None
+                receipt.save()
+
+            return JsonResponse({
+                "ok": True,
+                "claimed": True,
+                "state": "processing",
+                "claim_token": str(receipt.claim_token),
+                "attempts": receipt.attempts,
+            })
+
+    if action not in {"complete", "fail"}:
+        return JsonResponse({"ok": False, "error": "invalid action"}, status=400)
+
+    claim_token = str(body.get("claim_token") or "").strip()
+    if not claim_token:
+        return JsonResponse({"ok": False, "error": "missing claim_token"}, status=400)
+
+    with transaction.atomic():
+        receipt = WhatsAppWebhookReceipt.objects.select_for_update().filter(event_key=event_key).first()
+        if not receipt:
+            return JsonResponse({"ok": False, "error": "receipt not found"}, status=404)
+        if str(receipt.claim_token or "") != claim_token:
+            return JsonResponse({"ok": False, "error": "claim token mismatch"}, status=409)
+
+        if action == "complete":
+            receipt.state = "completed"
+            receipt.completed_at = dj_tz.now()
+        else:
+            receipt.state = "failed"
+            receipt.completed_at = None
+        receipt.lease_expires_at = None
+        receipt.save(update_fields=["state", "completed_at", "lease_expires_at", "last_seen_at"])
+
+    return JsonResponse({"ok": True, "state": receipt.state})
 
 @csrf_exempt
 @require_http_methods(["POST"])
