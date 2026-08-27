@@ -16,6 +16,9 @@ from utils.swagger import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_INVOICE_SIGNATORY_NAME = "Divya Jain"
+DEFAULT_INVOICE_SIGNATORY_TITLE = "Manager People & Strategy"
+
 SENSITIVE_PUBLIC_TEMPLATE_FIELDS = {
     "id_number",
     "bank_account_name",
@@ -45,6 +48,31 @@ def safe_public_template_data(template_data):
         for key, value in template_data.items()
         if key not in SENSITIVE_PUBLIC_TEMPLATE_FIELDS
     }
+
+
+def get_invoice_approval_details(invoice):
+    """Return the signature text and date authorized by actuals approval."""
+    if invoice.adjustment.admin_approval_status != "approved":
+        return "Pending Approval", None
+
+    manpower_settings = ManpowerSettings.get_settings()
+    signatory_name = (
+        (manpower_settings.invoice_authorised_signatory_name or "").strip()
+        or DEFAULT_INVOICE_SIGNATORY_NAME
+    )
+    signatory_title = (
+        (manpower_settings.invoice_authorised_signatory_title or "").strip()
+        or DEFAULT_INVOICE_SIGNATORY_TITLE
+    )
+    approval_text = f"Digitally Signed by {signatory_name}"
+    if signatory_title:
+        approval_text = f"{approval_text} - {signatory_title}"
+
+    # Older invoices may not have passed through the separate finance approval
+    # transition. Actuals approval is the signing authority, so use its update
+    # timestamp when no invoice approval timestamp exists.
+    approval_at = invoice.approved_at or invoice.adjustment.updated_at
+    return approval_text, approval_at
 
 
 def num2words_indian(number):
@@ -233,19 +261,12 @@ def generate_invoice_pdf(invoice):
 
     pdf.ln(8)
     pdf.set_font("helvetica", "", 8)
-    manpower_settings = ManpowerSettings.get_settings()
-    signatory_name = manpower_settings.invoice_authorised_signatory_name.strip()
-    signatory_title = manpower_settings.invoice_authorised_signatory_title.strip()
-    approval_text = "Pending Approval"
-    if invoice.approved_at:
-        approval_text = f"Digitally Signed by {signatory_name}"
-        if signatory_title:
-            approval_text = f"{approval_text} - {signatory_title}"
+    approval_text, approval_at = get_invoice_approval_details(invoice)
     pdf.cell(w=epw/3, h=5, txt="", align="C")
     pdf.cell(w=epw/3, h=5, txt="", align="C")
     pdf.cell(w=epw/3, h=5, txt=clean_text(approval_text), align="C", ln=1)
-    if invoice.approved_at:
-        pdf.cell(w=epw, h=5, txt=clean_text(f"Approval Date: {invoice.approved_at.strftime('%d-%m-%Y %H:%M')}"), align="R", ln=1)
+    if approval_at:
+        pdf.cell(w=epw, h=5, txt=clean_text(f"Approval Date: {approval_at.strftime('%d-%m-%Y %H:%M')}"), align="R", ln=1)
 
     pdf.ln(6)
     pdf.set_font("helvetica", "B", 8)

@@ -14,6 +14,7 @@ from .models import (
     PostEventAdjustment,
     FreelancerRating,
     InvoiceWorkflow,
+    ManpowerSettings,
 )
 from .serializers import (
     FreelancerSerializer,
@@ -628,3 +629,76 @@ class ManpowerTestCase(TestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.status, "approved")
         self.assertIsNotNone(invoice.approved_at)
+
+    def test_actuals_approval_authorizes_invoice_signature(self):
+        from .public_views import get_invoice_approval_details
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+        )
+        adjustment = PostEventAdjustment.objects.create(
+            allocation=allocation,
+            admin_approval_status="approved",
+        )
+        invoice = InvoiceWorkflow.objects.create(
+            adjustment=adjustment,
+            event=self.event,
+            event_department=self.event_department,
+            freelancer=self.freelancer,
+            invoice_number="INV-ACTUALS-SIGNED",
+            status="draft",
+        )
+
+        approval_text, approval_at = get_invoice_approval_details(invoice)
+
+        self.assertEqual(
+            approval_text,
+            "Digitally Signed by Divya Jain - Manager People & Strategy",
+        )
+        self.assertEqual(approval_at, adjustment.updated_at)
+
+    def test_invoice_signatory_uses_backend_fallback_for_blank_settings(self):
+        from .public_views import get_invoice_approval_details
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("5000.00"),
+            days_planned=Decimal("3.0"),
+        )
+        adjustment = PostEventAdjustment.objects.create(
+            allocation=allocation,
+            admin_approval_status="approved",
+        )
+        invoice = InvoiceWorkflow.objects.create(
+            adjustment=adjustment,
+            event=self.event,
+            event_department=self.event_department,
+            freelancer=self.freelancer,
+            invoice_number="INV-SIGNATORY-FALLBACK",
+            status="draft",
+        )
+        settings = ManpowerSettings.get_settings()
+        settings.invoice_authorised_signatory_name = "   "
+        settings.invoice_authorised_signatory_title = "   "
+        settings.save()
+
+        approval_text, _ = get_invoice_approval_details(invoice)
+
+        self.assertEqual(
+            approval_text,
+            "Digitally Signed by Divya Jain - Manager People & Strategy",
+        )
