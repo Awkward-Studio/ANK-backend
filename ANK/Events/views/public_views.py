@@ -67,6 +67,8 @@ class ClientViewAPIView(APIView):
                 "name": reg.guest.name if reg.guest else "Unknown",
                 "rsvp_status": reg.rsvp_status or "not_sent",
                 "estimated_pax": reg.estimated_pax or 1,
+                "guest_group": reg.guest_group or "",
+                "sub_guest_group": reg.sub_guest_group or "",
             })
 
         # Calculate summary statistics
