@@ -195,7 +195,9 @@ class GuestList(DepartmentAccessMixin, APIView):
 
     def get(self, request):
         try:
-            qs = self.get_queryset()
+            # GuestSerializer includes event and session relationship IDs.
+            # Prefetch them once instead of issuing two queries per guest.
+            qs = self.get_queryset().prefetch_related("events", "sessions")
             return Response(GuestSerializer(qs, many=True, context=self.get_serializer_context()).data)
         except Exception as e:
             return Response(
