@@ -3,7 +3,7 @@ import io
 import zipfile
 import json
 from pathlib import Path
-from datetime import timedelta
+from datetime import date, timedelta
 from django.utils import timezone
 from rest_framework import status, filters, generics
 from rest_framework.views import APIView
@@ -248,6 +248,19 @@ def _create_revision(adjustment, action_type, user=None, comments=""):
         )
     except Exception:
         pass
+
+
+def _allocation_has_finalized_records(allocation):
+    """Return True when deleting/reusing an allocation would erase signed or financial history."""
+    if allocation.mous.filter(status="accepted").exists():
+        return True
+    try:
+        adjustment = allocation.adjustment
+    except PostEventAdjustment.DoesNotExist:
+        return False
+    if adjustment.freelancer_submitted_at or adjustment.admin_approval_status == "approved":
+        return True
+    return InvoiceWorkflow.objects.filter(adjustment=adjustment).exists()
 
 
 
@@ -571,7 +584,18 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, event_id)
             if denied:
                 return denied
-            
+
+            if obj.allocations.filter(
+                Q(mous__status="accepted")
+                | Q(adjustment__freelancer_submitted_at__isnull=False)
+                | Q(adjustment__admin_approval_status="approved")
+                | Q(adjustment__invoice_workflow__isnull=False)
+            ).exists():
+                return Response(
+                    {"detail": "This requirement is referenced by a signed or financial record and can no longer be edited."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             # Allow update if existing is extra OR new data marks it as extra
             if not obj.is_extra and not request.data.get("is_extra"):
                 lock_error = _check_lock_or_override(request, event_id)
@@ -605,6 +629,12 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
                 lock_error = _check_lock_or_override(request, event_id)
                 if lock_error:
                     return lock_error
+
+            if any(_allocation_has_finalized_records(allocation) for allocation in obj.allocations.all()):
+                return Response(
+                    {"detail": "This role has signed or financial records and cannot be deleted."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             
             obj.delete()
             _log_action(request, "requirement_deleted", obj, event_id=event_id)
@@ -761,6 +791,14 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             if denied:
                 return denied
             
+            if _allocation_has_finalized_records(obj):
+                protected_fields = set(request.data.keys()) - {"is_adjustment_editable"}
+                if protected_fields:
+                    return Response(
+                        {"detail": "Signed assignment terms cannot be changed here. Reopen and edit the actuals instead."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
             # Allow update if existing is extra OR new data marks it as extra
             if not obj.is_extra and not request.data.get("is_extra"):
                 lock_error = _check_lock_or_override(request, event_id)
@@ -958,6 +996,11 @@ class FreelancerAllocationDetail(DepartmentAccessMixin, APIView):
             lock_error = _check_lock_or_override(request, event_id)
             if lock_error:
                 return lock_error
+            if _allocation_has_finalized_records(obj):
+                return Response(
+                    {"detail": "This allocation has signed or financial records. Release it instead of deleting it."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             obj.delete()
             _log_action(request, "allocation_deleted", obj, event_id=event_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -1018,6 +1061,20 @@ def release_allocation(request, pk):
             lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
             if lock_error:
                 return lock_error
+
+        try:
+            adjustment = allocation.adjustment
+        except PostEventAdjustment.DoesNotExist:
+            adjustment = None
+        if adjustment and (
+            adjustment.freelancer_submitted_at
+            or adjustment.admin_approval_status == "approved"
+            or InvoiceWorkflow.objects.filter(adjustment=adjustment).exists()
+        ):
+            return Response(
+                {"detail": "This allocation has submitted actuals or an invoice and can no longer be released."},
+                status=status.HTTP_409_CONFLICT,
+            )
             
         allocation.status = "released"
         allocation.save()
@@ -1052,11 +1109,25 @@ def generate_mou(request, pk):
             lock_error = _check_lock_or_override(request, allocation.event_department.event_id)
             if lock_error:
                 return lock_error
+
+        if allocation.status != "confirmed":
+            return Response(
+                {"detail": "Only confirmed allocations can be issued an MoU."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not hasattr(allocation, "cost_sheet"):
+            return Response(
+                {"detail": "Create the freelancer cost sheet before issuing an MoU."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
             
-        mou, created = MoU.objects.get_or_create(
-            allocation=allocation,
-            defaults={"status": "draft", "template_data": {"terms": "Standard MoU terms..."}}
-        )
+        mou = allocation.mous.order_by("-created_at").first()
+        if mou is None:
+            mou = MoU.objects.create(
+                allocation=allocation,
+                status="draft",
+                template_data={"terms": "Standard MoU terms..."},
+            )
         
         # Reset to sent if it was draft or rejected
         if mou.status in ["draft", "rejected"]:
@@ -1216,6 +1287,12 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
             if denied:
                 return denied
             
+            if obj.allocation.mous.filter(status="accepted").exists() or hasattr(obj.allocation, "adjustment"):
+                return Response(
+                    {"detail": "This cost sheet is already referenced by signed terms or actuals and cannot be edited."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             # Bypass lock if allocation is extra
             if not obj.allocation.is_extra:
                 lock_error = _check_lock_or_override(request, event_id)
@@ -1249,6 +1326,11 @@ class EventCostSheetDetail(DepartmentAccessMixin, APIView):
                 lock_error = _check_lock_or_override(request, event_id)
                 if lock_error:
                     return lock_error
+            if obj.allocation.mous.exists() or hasattr(obj.allocation, "adjustment"):
+                return Response(
+                    {"detail": "This cost sheet is already referenced by an MoU or actuals record."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             
             obj.delete()
             _log_action(request, "cost_sheet_deleted", obj, event_id=event_id)
@@ -1382,7 +1464,19 @@ class MoUDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
             if denied:
                 return denied
-            ser = MoUSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
+            if obj.status == "accepted":
+                return Response(
+                    {"detail": "An accepted MoU is a signed record and cannot be edited."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            allowed_fields = {"expires_at", "access_code", "template_data"}
+            update_data = {key: value for key, value in request.data.items() if key in allowed_fields}
+            if not update_data:
+                return Response(
+                    {"detail": "MoU status can only be changed through the freelancer response link."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            ser = MoUSerializer(obj, data=update_data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
             updated = ser.save()
             _log_action(request, "mou_updated", updated, event_id=updated.allocation.event_department.event_id)
@@ -1402,6 +1496,11 @@ class MoUDetail(DepartmentAccessMixin, APIView):
             denied = _require_manpower_event_access(request, obj.allocation.event_department.event_id)
             if denied:
                 return denied
+            if obj.status == "accepted":
+                return Response(
+                    {"detail": "An accepted MoU is a signed record and cannot be deleted."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             obj.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Http404:
@@ -1548,9 +1647,61 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
                 if lock_error:
                     return lock_error
             
+            confirmation_fields = {
+                "actual_days_worked",
+                "total_engagement_days",
+                "engagement_periods",
+                "travel_adjustments",
+                "other_adjustments",
+                "override_negotiated_rate",
+            }
+            requested_status = request.data.get("admin_approval_status")
+            if InvoiceWorkflow.objects.filter(adjustment=obj).exists() and (
+                confirmation_fields.intersection(request.data.keys())
+                or (requested_status and requested_status != obj.admin_approval_status)
+            ):
+                return Response(
+                    {"detail": "This actuals record already has an invoice and its commercial values/status can no longer be changed."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            reopens_confirmation = bool(
+                obj.freelancer_submitted_at
+                and confirmation_fields.intersection(request.data.keys())
+            )
+            approving = request.data.get("admin_approval_status") == "approved"
+            if approving and (
+                not obj.freelancer_submitted_at
+                or not (obj.freelancer_digital_signature or "").strip()
+            ):
+                return Response(
+                    {"detail": "Freelancer confirmation and signature are required before approval."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             ser = PostEventAdjustmentSerializer(obj, data=request.data, partial=True, context=self.get_serializer_context())
             ser.is_valid(raise_exception=True)
-            updated = ser.save()
+            with transaction.atomic():
+                if reopens_confirmation:
+                    updated = ser.save(
+                        freelancer_submitted_at=None,
+                        freelancer_digital_signature="",
+                        admin_approval_status=request.data.get("admin_approval_status") or "pending",
+                    )
+                else:
+                    updated = ser.save()
+                if approving:
+                    InvoiceWorkflow.objects.get_or_create(
+                        adjustment=updated,
+                        defaults={
+                            "event": updated.allocation.event_department.event,
+                            "event_department": updated.allocation.event_department,
+                            "freelancer": updated.allocation.freelancer,
+                            "invoice_number": f"INV-{timezone.now().strftime('%Y%m%d')}-{str(updated.id)[:8].upper()}",
+                            "payable_amount": updated.revised_total,
+                            "status": "draft",
+                        },
+                    )
+                    _create_revision(updated, "approval", user=request.user)
             # If it's being marked as disputed, log it as a dispute revision
             if request.data.get("admin_approval_status") == "disputed":
                 _create_revision(updated, "dispute", user=request.user)
@@ -1578,6 +1729,15 @@ class PostEventAdjustmentDetail(DepartmentAccessMixin, APIView):
                 lock_error = _check_lock_or_override(request, event_id)
                 if lock_error:
                     return lock_error
+            if (
+                obj.freelancer_submitted_at
+                or obj.admin_approval_status == "approved"
+                or hasattr(obj, "invoice_workflow")
+            ):
+                return Response(
+                    {"detail": "Submitted or invoiced actuals cannot be deleted."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             
             obj.delete()
             _log_action(request, "adjustment_deleted", obj, event_id=event_id)
@@ -1960,6 +2120,14 @@ class InvoiceWorkflowList(DepartmentAccessMixin, APIView):
                 {"detail": "Invoice can only be created from approved adjustments."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if (
+            not adjustment.freelancer_submitted_at
+            or not (adjustment.freelancer_digital_signature or "").strip()
+        ):
+            return Response(
+                {"detail": "Freelancer confirmation and signature are required before invoice creation."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         existing = InvoiceWorkflow.objects.filter(adjustment=adjustment).first()
         if existing:
             return Response(InvoiceWorkflowSerializer(existing).data, status=status.HTTP_200_OK)
@@ -2005,7 +2173,9 @@ class InvoiceWorkflowDetail(DepartmentAccessMixin, APIView):
         if denied:
             return denied
         obj = get_object_or_404(_filter_to_accounts_scope(request, self.get_queryset(), "event_id"), pk=pk)
-        ser = InvoiceWorkflowSerializer(obj, data=request.data, partial=True)
+        editable_fields = {"due_date", "notes"}
+        updates = {key: value for key, value in request.data.items() if key in editable_fields}
+        ser = InvoiceWorkflowSerializer(obj, data=updates, partial=True)
         ser.is_valid(raise_exception=True)
         updated = ser.save()
         _log_action(request, "invoice_updated", updated, event_id=updated.event_id)
@@ -2098,6 +2268,21 @@ def issue_adjustment_secure_link(request, allocation_id):
     denied = _require_manpower_event_access(request, allocation.event_department.event_id)
     if denied:
         return denied
+    if allocation.status != "confirmed":
+        return Response(
+            {"detail": "Actuals can only be issued for a confirmed allocation."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not allocation.mous.filter(status="accepted").exists():
+        return Response(
+            {"detail": "The freelancer must accept the MoU before actuals can be issued."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not hasattr(allocation, "cost_sheet"):
+        return Response(
+            {"detail": "A cost sheet is required before actuals can be issued."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     adjustment, created = PostEventAdjustment.objects.get_or_create(allocation=allocation)
     # Only prefill on first issuance. Reissuing an existing adjustment must be idempotent
     # and never rewrite saved draft/submitted values.
@@ -2146,6 +2331,12 @@ def public_adjustment_interaction(request, token):
     except (PostEventAdjustment.DoesNotExist, ValueError):
         return Response({"error": "Invalid token"}, status=status.HTTP_404_NOT_FOUND)
 
+    if adjustment.allocation.status == "released":
+        return Response(
+            {"error": "This freelancer assignment has been released."},
+            status=status.HTTP_410_GONE,
+        )
+
     if request.method == "GET":
         from .serializers import AllocationDailyMealSerializer
         from Events.serializers.session_serializers import SessionSerializer
@@ -2155,6 +2346,18 @@ def public_adjustment_interaction(request, token):
         sessions_data = []
         if adjustment.allocation.requirement:
             sessions_data = SessionSerializer(adjustment.allocation.requirement.sessions.all(), many=True).data
+
+        saved_detail_fields = (
+            freelancer.email,
+            freelancer.address,
+            freelancer.pan_number,
+            freelancer.aadhaar_number,
+            freelancer.bank_account_name,
+            freelancer.bank_name,
+            freelancer.bank_account_number,
+            freelancer.bank_branch,
+            freelancer.bank_ifsc,
+        )
 
         return Response(
             {
@@ -2172,6 +2375,9 @@ def public_adjustment_interaction(request, token):
                 "has_aadhaar_number": bool((freelancer.aadhaar_number or "").strip()),
                 "masked_aadhaar_number": mask_public_value(freelancer.aadhaar_number),
                 "has_aadhaar_document": bool(freelancer.aadhaar_document),
+                "has_complete_saved_details": all(
+                    bool(str(value or "").strip()) for value in saved_detail_fields
+                ),
                 "banking_details": {
                     "has_bank_account_name": bool((freelancer.bank_account_name or "").strip()),
                     "has_bank_name": bool((freelancer.bank_name or "").strip()),
@@ -2191,9 +2397,11 @@ def public_adjustment_interaction(request, token):
                 "travel_adjustments": adjustment.travel_adjustments,
                 "other_adjustments": adjustment.other_adjustments,
                 "override_negotiated_rate": adjustment.override_negotiated_rate,
+                "revised_total": adjustment.revised_total,
                 "freelancer_comments": adjustment.freelancer_comments,
                 "freelancer_submitted_at": adjustment.freelancer_submitted_at,
                 "status": adjustment.admin_approval_status,
+                "actual_meal_allowance": adjustment.actual_meal_allowance,
                 "total_meal_allowance": adjustment.allocation.total_meal_allowance,
                 "daily_meals": AllocationDailyMealSerializer(adjustment.allocation.daily_meals.all(), many=True).data,
                 "sessions": sessions_data,
@@ -2205,6 +2413,21 @@ def public_adjustment_interaction(request, token):
             {"error": "Adjustment has already been submitted."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    decision = str(request.data.get("status") or "").strip().lower()
+    if decision == "disputed":
+        comments = str(request.data.get("freelancer_comments") or "").strip()
+        if not comments:
+            return Response(
+                {"error": "Please explain the disputed actuals."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        adjustment.freelancer_comments = comments
+        adjustment.freelancer_submitted_at = timezone.now()
+        adjustment.admin_approval_status = "disputed"
+        adjustment.save()
+        _create_revision(adjustment, "dispute", comments=comments)
+        return Response({"status": "disputed", "adjustment_id": adjustment.id})
 
     adjustment_fields = {
         "actual_days_worked",
@@ -2229,13 +2452,25 @@ def public_adjustment_interaction(request, token):
         "aadhaar_number",
     )
 
-    bank_updates = {
+    requested_bank_updates = {
         field: str(request.data.get(field) or "").strip()
         for field in bank_fields
     }
-    profile_updates = {
+    requested_profile_updates = {
         field: str(request.data.get(field) or "").strip()
         for field in profile_fields
+    }
+    confirm_existing_details = str(
+        request.data.get("confirm_existing_details") or ""
+    ).lower() in {"1", "true", "yes", "on"}
+    freelancer = adjustment.allocation.freelancer
+    bank_updates = {
+        field: value or (str(getattr(freelancer, field) or "").strip() if confirm_existing_details else "")
+        for field, value in requested_bank_updates.items()
+    }
+    profile_updates = {
+        field: value or (str(getattr(freelancer, field) or "").strip() if confirm_existing_details else "")
+        for field, value in requested_profile_updates.items()
     }
     digital_signature = str(request.data.get("digital_signature") or "").strip()
     missing_bank_fields = [
@@ -2255,6 +2490,7 @@ def public_adjustment_interaction(request, token):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+
     document_errors = [
         error
         for error in (
@@ -2286,14 +2522,65 @@ def public_adjustment_interaction(request, token):
                 {"error": "Engagement periods must be valid JSON."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+    # Commercial terms belong to the admin unless this adjustment was explicitly
+    # unlocked. Even when unlocked, the freelancer may revise dates only; rates
+    # and monetary adjustments remain protected from request tampering.
+    if adjustment.allocation.is_adjustment_editable:
+        allowed_public_fields = {
+            "actual_days_worked",
+            "total_engagement_days",
+            "engagement_periods",
+            "freelancer_comments",
+        }
+    else:
+        allowed_public_fields = {"freelancer_comments"}
+    updates = {key: value for key, value in updates.items() if key in allowed_public_fields}
+
+    if "engagement_periods" in updates:
+        periods = updates["engagement_periods"]
+        if not isinstance(periods, list) or not periods:
+            return Response(
+                {"error": "At least one engagement period is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        normalized_periods = []
+        ranges = []
+        try:
+            for period in periods:
+                start = date.fromisoformat(str(period.get("start") or ""))
+                end = date.fromisoformat(str(period.get("end") or ""))
+                if end < start:
+                    raise ValueError
+                days = (end - start).days + 1
+                normalized_periods.append({
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "days": days,
+                })
+                ranges.append((start, end))
+        except (AttributeError, TypeError, ValueError):
+            return Response(
+                {"error": "Every engagement period must have valid start and end dates."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ranges.sort()
+        if any(current_start <= previous_end for (_, previous_end), (current_start, _) in zip(ranges, ranges[1:])):
+            return Response(
+                {"error": "Engagement periods cannot overlap."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        total_days = sum(period["days"] for period in normalized_periods)
+        updates["engagement_periods"] = normalized_periods
+        updates["actual_days_worked"] = total_days
+        updates["total_engagement_days"] = total_days
     ser = PostEventAdjustmentSerializer(adjustment, data=updates, partial=True)
     ser.is_valid(raise_exception=True)
     with transaction.atomic():
         ser.save(
             freelancer_submitted_at=timezone.now(),
             freelancer_digital_signature=digital_signature,
+            admin_approval_status="pending",
         )
-        freelancer = adjustment.allocation.freelancer
         for field, value in {**bank_updates, **profile_updates}.items():
             setattr(freelancer, field, value)
         freelancer.id_type = "PAN"

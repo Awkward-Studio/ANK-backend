@@ -1,5 +1,9 @@
 import uuid
 import logging
+import base64
+import binascii
+import io
+from datetime import date
 from django.utils import timezone
 from django.http import HttpResponse
 from rest_framework import status
@@ -20,6 +24,7 @@ DEFAULT_INVOICE_SIGNATORY_NAME = "Divya Jain"
 DEFAULT_INVOICE_SIGNATORY_TITLE = "Manager People & Strategy"
 
 SENSITIVE_PUBLIC_TEMPLATE_FIELDS = {
+    "acceptance_snapshot",
     "id_number",
     "bank_account_name",
     "bank_name",
@@ -335,9 +340,11 @@ def generate_mou_pdf(mou):
     pdf.add_page()
     epw = pdf.epw
     
-    # Get dates with fallback
-    start_date = mou.allocation.start_date
-    end_date = mou.allocation.end_date
+    snapshot = (mou.template_data or {}).get("acceptance_snapshot", {})
+
+    # Accepted MoUs render the exact terms that were signed, not mutable profile data.
+    start_date = date.fromisoformat(snapshot["start_date"]) if snapshot.get("start_date") else mou.allocation.start_date
+    end_date = date.fromisoformat(snapshot["end_date"]) if snapshot.get("end_date") else mou.allocation.end_date
     if (not start_date or not end_date) and mou.allocation.requirement:
         req = mou.allocation.requirement
         start_date = start_date or getattr(req, 'start_date', None)
@@ -347,7 +354,7 @@ def generate_mou_pdf(mou):
     if start_date and end_date:
         date_range_str = f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
     
-    duration = str(mou.allocation.cost_sheet.days_planned)
+    duration = str(snapshot.get("days_planned") or mou.allocation.cost_sheet.days_planned)
 
     pdf.set_font("helvetica", "B", 16)
     pdf.set_x(pdf.l_margin)
@@ -380,10 +387,11 @@ def generate_mou_pdf(mou):
     
     f = mou.allocation.freelancer
     pdf.set_font("helvetica", "B", 10)
-    f_info = (f"{f.name},\n"
-              f"S/o / D/o {f.parent_name or '____________________'}\n"
-              f"Residing at {f.address or '____________________'}\n"
-              f"Bearing PAN / Aadhar No. {f.id_number or '____________________'} (hereinafter referred to as the \"Freelancer\").")
+    freelancer_name = snapshot.get("freelancer_name") or f.name
+    f_info = (f"{freelancer_name},\n"
+              f"S/o / D/o {snapshot.get('parent_name') or f.parent_name or '____________________'}\n"
+              f"Residing at {snapshot.get('address') or f.address or '____________________'}\n"
+              f"Bearing PAN / Aadhar No. {snapshot.get('id_number') or f.id_number or '____________________'} (hereinafter referred to as the \"Freelancer\").")
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(w=epw, h=6, txt=clean_text(f_info))
     pdf.ln(6)
@@ -394,7 +402,7 @@ def generate_mou_pdf(mou):
     pdf.ln(8)
     
     sections = [
-        ("1. Purpose, Scope & Applicability", f"1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered for the event '{mou.allocation.event_department.event.name}' during the period of {date_range_str} (Total Duration: {duration} days).\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
+        ("1. Purpose, Scope & Applicability", f"1.1 This MOU outlines the understanding between the Company and the Freelancer for services to be rendered for the event '{snapshot.get('event_name') or mou.allocation.event_department.event.name}' during the period of {date_range_str} (Total Duration: {duration} days).\n1.2 Each confirmed event engagement shall be deemed an individual assignment under the framework of this MOU.\n1.3 This MOU establishes the professional expectations, confidentiality obligations, and conduct standards applicable to all assignments mutually decided and accepted during the period of engagement.\n1.4 The Company reserves the right to discontinue the engagement if the Freelancer fails to adhere to the terms of this MOU, breaches confidentiality, or conducts themselves in a manner inconsistent with the Company's values."),
         ("2. Payment Terms", "The Freelancer shall be compensated at a pre-agreed rate for each confirmed event. Payment shall be processed within 30 days of invoice submission post-event completion, subject to satisfactory performance. Travel Days will be compensated only if active work is assigned. Non-working travel days will not be billable."),
         ("3. Confidentiality & Non-Disclosure Agreement (NDA)", "3.1 The Freelancer acknowledges that they may have access to confidential information, including event concepts, client data, guest lists, creative plans, and budgets.\n3.2 The Freelancer agrees to maintain complete confidentiality, refrain from unauthorized recording or sharing of event content, and handle client property responsibly."),
         ("4. Professional Conduct During Events", "No unauthorized photography or videography. No sharing of event material on social media. Maintain strict confidentiality. Focus on assigned responsibilities. Maintain professional grooming and body language. Mobile phones must be on silent mode. Consumption of alcohol or tobacco in guest areas is strictly prohibited."),
@@ -426,9 +434,16 @@ def generate_mou_pdf(mou):
     
     # Right Column
     pdf.set_xy(pdf.l_margin + epw/2 + 5, y_before)
+    if mou.freelancer_digital_signature:
+        try:
+            encoded_signature = mou.freelancer_digital_signature.split(",", 1)[1]
+            signature_bytes = base64.b64decode(encoded_signature, validate=True)
+            pdf.image(io.BytesIO(signature_bytes), x=pdf.l_margin + epw/2 + 18, y=y_before + 14, w=45, h=16)
+        except (IndexError, ValueError, binascii.Error, OSError):
+            logger.warning("Could not render stored signature for MoU %s", mou.pk)
     accepted_date = mou.accepted_at.strftime("%d/%m/%Y") if mou.accepted_at else "[Pending]"
     sig_text = "[Digitally Accepted]" if mou.accepted_at else "________________________"
-    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"For Freelancer / Consultant\nName: {f.name}\nSignature: {sig_text}\nDate: {accepted_date}"))
+    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"For Freelancer / Consultant\nName: {freelancer_name}\nSignature: {sig_text}\nDate: {accepted_date}"))
     
     return bytes(pdf.output())
 
@@ -464,6 +479,11 @@ def public_mou_interaction(request, token):
         mou = MoU.objects.select_related("allocation__freelancer", "allocation__event_department__event", "allocation__event_department__department", "allocation__cost_sheet", "allocation__requirement").get(secure_token=token)
     except (MoU.DoesNotExist, ValueError):
         return Response({"error": "Invalid or expired token"}, status=status.HTTP_404_NOT_FOUND)
+    if mou.allocation.status == "released":
+        return Response(
+            {"error": "This freelancer assignment has been released."},
+            status=status.HTTP_410_GONE,
+        )
     if mou.expires_at and mou.expires_at < timezone.now():
         return Response({"error": "MoU link has expired"}, status=status.HTTP_410_GONE)
     expected_code = (mou.access_code or "").strip()
@@ -471,6 +491,11 @@ def public_mou_interaction(request, token):
     if expected_code and provided_code != expected_code:
         return Response({"error": "Access code required or invalid"}, status=status.HTTP_403_FORBIDDEN)
     if request.method == "GET":
+        signed_snapshot = (
+            (mou.template_data or {}).get("acceptance_snapshot", {})
+            if mou.status == "accepted"
+            else {}
+        )
         # Fallback to requirement dates if allocation dates are missing
         start_date = mou.allocation.start_date
         end_date = mou.allocation.end_date
@@ -487,7 +512,7 @@ def public_mou_interaction(request, token):
             "id": mou.id, 
             "status": mou.status, 
             "template_data": safe_public_template_data(mou.template_data),
-            "freelancer_name": mou.allocation.freelancer.name, 
+            "freelancer_name": signed_snapshot.get("freelancer_name") or mou.allocation.freelancer.name,
             "id_type": freelancer.id_type,
             "has_id_number": bool((freelancer.id_number or "").strip()),
             "masked_id_number": mask_public_value(freelancer.id_number),
@@ -502,12 +527,19 @@ def public_mou_interaction(request, token):
             },
             "requirement_name": mou.allocation.requirement.name if mou.allocation.requirement else None,
             "skill_category": mou.allocation.freelancer.skill_category,
-            "event_name": mou.allocation.event_department.event.name, 
+            "event_name": signed_snapshot.get("event_name") or mou.allocation.event_department.event.name,
             "department_name": mou.allocation.event_department.department.name,
-            "start_date": start_date, 
-            "end_date": end_date,
+            "start_date": signed_snapshot.get("start_date") or start_date,
+            "end_date": signed_snapshot.get("end_date") or end_date,
             "cost_sheet": {
-                "days_planned": mou.allocation.cost_sheet.days_planned,
+                "days_planned": signed_snapshot.get("days_planned") or mou.allocation.cost_sheet.days_planned,
+                "negotiated_rate": signed_snapshot.get("negotiated_rate") or mou.allocation.cost_sheet.negotiated_rate,
+                "total_estimated_cost": signed_snapshot.get("total_estimated_cost") or mou.allocation.cost_sheet.total_estimated_cost,
+                "daily_allowance": signed_snapshot.get("daily_allowance") or (
+                    mou.allocation.total_meal_allowance / mou.allocation.cost_sheet.days_planned
+                    if mou.allocation.cost_sheet.days_planned
+                    else 0
+                ),
             },
             "expires_at": mou.expires_at, 
             "requires_access_code": bool(expected_code),
@@ -526,10 +558,22 @@ def public_mou_interaction(request, token):
             if action == "accept":
                 id_type = request.data.get("id_type")
                 id_number = str(request.data.get("id_number") or "").strip()
+                digital_signature = str(request.data.get("digital_signature") or "").strip()
                 if id_type not in ["PAN", "AADHAR"]:
                     return Response({"error": "Valid ID type is required"}, status=status.HTTP_400_BAD_REQUEST)
                 if not id_number:
                     return Response({"error": "ID number is required"}, status=status.HTTP_400_BAD_REQUEST)
+                if not digital_signature.startswith("data:image/png;base64,"):
+                    return Response({"error": "A valid drawn signature is required"}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    decoded_signature = base64.b64decode(digital_signature.split(",", 1)[1], validate=True)
+                except (IndexError, ValueError, binascii.Error):
+                    return Response({"error": "A valid drawn signature is required"}, status=status.HTTP_400_BAD_REQUEST)
+                if (
+                    not decoded_signature.startswith(b"\x89PNG\r\n\x1a\n")
+                    or len(decoded_signature) > 1024 * 1024
+                ):
+                    return Response({"error": "Signature image must be 1 MB or smaller"}, status=status.HTTP_400_BAD_REQUEST)
                 update_fields = []
                 freelancer.id_type = id_type
                 update_fields.append("id_type")
@@ -539,8 +583,34 @@ def public_mou_interaction(request, token):
                     freelancer.save(update_fields=update_fields)
 
             if action == "accept":
+                start_date = mou.allocation.start_date
+                end_date = mou.allocation.end_date
+                if (not start_date or not end_date) and mou.allocation.requirement:
+                    start_date = start_date or mou.allocation.requirement.start_date
+                    end_date = end_date or mou.allocation.requirement.end_date
+                template_data = dict(mou.template_data or {})
+                template_data["acceptance_snapshot"] = {
+                    "freelancer_name": freelancer.name,
+                    "parent_name": freelancer.parent_name,
+                    "address": freelancer.address,
+                    "id_type": id_type,
+                    "id_number": id_number,
+                    "event_name": mou.allocation.event_department.event.name,
+                    "start_date": start_date.isoformat() if start_date else None,
+                    "end_date": end_date.isoformat() if end_date else None,
+                    "days_planned": str(mou.allocation.cost_sheet.days_planned),
+                    "negotiated_rate": str(mou.allocation.cost_sheet.negotiated_rate),
+                    "total_estimated_cost": str(mou.allocation.cost_sheet.total_estimated_cost),
+                    "daily_allowance": str(
+                        mou.allocation.total_meal_allowance / mou.allocation.cost_sheet.days_planned
+                        if mou.allocation.cost_sheet.days_planned
+                        else 0
+                    ),
+                }
                 mou.status = "accepted"
                 mou.accepted_at = timezone.now()
+                mou.freelancer_digital_signature = digital_signature
+                mou.template_data = template_data
                 # Automatically confirm the allocation
                 mou.allocation.status = "confirmed"
                 mou.allocation.save()
