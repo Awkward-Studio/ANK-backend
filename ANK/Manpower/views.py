@@ -1098,7 +1098,7 @@ def release_allocation(request, pk):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def generate_mou(request, pk):
-    """Generate or update MoU for an allocation and transition it to sent."""
+    """Generate, reissue, or resend an expired MoU for an allocation."""
     try:
         allocation = get_object_or_404(FreelancerAllocation, pk=pk)
         denied = _require_manpower_event_access(request, allocation.event_department.event_id)
@@ -1129,16 +1129,23 @@ def generate_mou(request, pk):
                 template_data={"terms": "Standard MoU terms..."},
             )
         
-        # Reset to sent if it was draft or rejected
-        if mou.status in ["draft", "rejected"]:
-            if not getattr(mou, "expires_at", None) or mou.status == "rejected":
-                mou.expires_at = timezone.now() + timedelta(days=7)
+        now = timezone.now()
+        is_expired_resend = bool(
+            mou.status == "sent" and mou.expires_at and mou.expires_at <= now
+        )
+
+        # Reissues and expired resends receive a new token so a previously shared
+        # link cannot become valid again when the new seven-day window starts.
+        if mou.status in ["draft", "rejected"] or is_expired_resend:
+            if mou.status == "rejected" or is_expired_resend:
+                mou.secure_token = uuid.uuid4()
+            mou.expires_at = now + timedelta(days=7)
             mou.status = "sent"
             mou.save()
             
         _log_action(
             request,
-            "mou_generated",
+            "mou_resent" if is_expired_resend else "mou_generated",
             mou,
             event_id=allocation.event_department.event_id,
             details={"allocation_id": str(allocation.id), "status": mou.status},
@@ -1147,7 +1154,9 @@ def generate_mou(request, pk):
             "status": mou.status,
             "mou_id": mou.id,
             "secure_token": str(mou.secure_token),
-            "secure_link": f"/mou/{mou.secure_token}"
+            "secure_link": f"/mou/{mou.secure_token}",
+            "expires_at": mou.expires_at,
+            "resent": is_expired_resend,
         })
     except Http404:
         return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)

@@ -206,6 +206,49 @@ class ManpowerTestCase(TestCase):
         )
         self.assertEqual(cost_sheet.total_estimated_cost, Decimal("19000.00"))
 
+    def test_expired_mou_can_be_resent_with_fresh_token_and_expiry(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import generate_mou
+
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("4500.00"),
+            days_planned=Decimal("4.0"),
+        )
+        old_expiry = timezone.now() - timedelta(hours=1)
+        mou = MoU.objects.create(
+            allocation=allocation,
+            status="sent",
+            expires_at=old_expiry,
+        )
+        old_token = mou.secure_token
+
+        serialized = FreelancerAllocationSerializer(allocation).data
+        self.assertTrue(serialized["mou_is_expired"])
+        self.assertIsNotNone(serialized["mou_expires_at"])
+
+        request = APIRequestFactory().post(
+            f"/api/manpower/allocations/{allocation.id}/generate-mou/"
+        )
+        force_authenticate(request, user=self.user)
+        response = generate_mou(request, pk=allocation.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["resent"])
+        mou.refresh_from_db()
+        self.assertEqual(mou.status, "sent")
+        self.assertNotEqual(mou.secure_token, old_token)
+        self.assertGreater(mou.expires_at, timezone.now() + timedelta(days=6))
+        self.assertFalse(FreelancerAllocationSerializer(allocation).data["mou_is_expired"])
+
     def test_allocation_overlap_validation(self):
         # First confirmed allocation
         FreelancerAllocation.objects.create(

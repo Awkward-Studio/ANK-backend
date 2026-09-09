@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from Departments.models import EventDepartment
 from .models import (
     Freelancer,
@@ -146,6 +147,8 @@ class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
     event_name = serializers.ReadOnlyField(source="event_department.event.name")
     mou_status = serializers.SerializerMethodField()
     mou_token = serializers.SerializerMethodField()
+    mou_expires_at = serializers.SerializerMethodField()
+    mou_is_expired = serializers.SerializerMethodField()
     cost_sheet = EventCostSheetSerializer(read_only=True)
     adjustment = PostEventAdjustmentSerializer(read_only=True)
     daily_meals = AllocationDailyMealSerializer(many=True, read_only=True)
@@ -177,6 +180,8 @@ class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
             "is_adjustment_editable",
             "mou_status",
             "mou_token",
+            "mou_expires_at",
+            "mou_is_expired",
             "assigned_by",
             "cost_sheet",
             "adjustment",
@@ -196,6 +201,19 @@ class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
     def get_mou_token(self, obj):
         mou = obj.mous.order_by("-created_at").first()
         return mou.secure_token if mou else None
+
+    def get_mou_expires_at(self, obj):
+        mou = obj.mous.order_by("-created_at").first()
+        return mou.expires_at if mou else None
+
+    def get_mou_is_expired(self, obj):
+        mou = obj.mous.order_by("-created_at").first()
+        return bool(
+            mou
+            and mou.status == "sent"
+            and mou.expires_at
+            and mou.expires_at <= timezone.now()
+        )
 
 
 class MoUSerializer(serializers.ModelSerializer):
