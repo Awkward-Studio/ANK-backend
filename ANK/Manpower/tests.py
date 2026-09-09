@@ -228,6 +228,8 @@ class ManpowerTestCase(TestCase):
             allocation=allocation,
             status="sent",
             expires_at=old_expiry,
+            access_code="482913",
+            template_data={"terms": "Keep these agreed commercial terms."},
         )
         old_token = mou.secure_token
 
@@ -245,6 +247,9 @@ class ManpowerTestCase(TestCase):
         self.assertTrue(response.data["resent"])
         mou.refresh_from_db()
         self.assertEqual(mou.status, "sent")
+        self.assertEqual(mou.allocation_id, allocation.id)
+        self.assertEqual(mou.access_code, "482913")
+        self.assertEqual(mou.template_data, {"terms": "Keep these agreed commercial terms."})
         self.assertNotEqual(mou.secure_token, old_token)
         self.assertGreater(mou.expires_at, timezone.now() + timedelta(days=6))
         self.assertFalse(FreelancerAllocationSerializer(allocation).data["mou_is_expired"])
