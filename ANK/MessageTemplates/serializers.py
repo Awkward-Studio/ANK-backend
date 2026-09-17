@@ -359,8 +359,6 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         if not waba_id:
             waba_id = phone_number_id  # Last resort fallback
 
-        normalized_display = _normalize_display_phone_number(display_phone_number)
-
         def _existing_duplicate(normalized_number: str):
             if not normalized_number:
                 return None
@@ -375,18 +373,6 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
                     ),
                     None,
                 )
-            )
-
-        existing_duplicate = _existing_duplicate(normalized_display)
-        if existing_duplicate:
-            raise serializers.ValidationError(
-                {
-                    "display_phone_number": (
-                        "This WhatsApp number is already registered in ANK "
-                        f"under WABA {existing_duplicate.waba_id}. Delete the existing record before "
-                        "onboarding the same number again."
-                    )
-                }
             )
 
         existing_waba = WhatsAppBusinessAccount.objects.filter(waba_id=waba_id).first()
@@ -412,16 +398,6 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         meta_display_phone_number = meta_phone.get("display_phone_number") or display_phone_number
         normalized_meta_display = _normalize_display_phone_number(meta_display_phone_number)
         existing_duplicate = _existing_duplicate(normalized_meta_display)
-        if existing_duplicate:
-            raise serializers.ValidationError(
-                {
-                    "display_phone_number": (
-                        "Meta returned a WhatsApp number already registered in ANK "
-                        f"under WABA {existing_duplicate.waba_id}. Delete the existing record before "
-                        "onboarding the same number again."
-                    )
-                }
-            )
 
         platform_type = str(meta_phone.get("platform_type") or "").upper()
         if not platform_type:
@@ -471,6 +447,22 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
                 )
         else:
             logger.info(f"[STORE_PHONE] No access_token provided for WABA {waba_id}")
+
+        # Meta has verified that the submitted WABA owns this display number. If
+        # ANK knows it under an older Meta ID, retain the local record and relink it.
+        if existing_duplicate:
+            if WhatsAppPhoneNumber.objects.filter(phone_number_id=phone_number_id).exists():
+                raise serializers.ValidationError(
+                    {"display_phone_number": "ANK has conflicting records for this WhatsApp number."}
+                )
+            logger.info(
+                "[STORE_PHONE] Relinking %s from phone ID %s to %s",
+                normalized_meta_display,
+                existing_duplicate.phone_number_id,
+                phone_number_id,
+            )
+            existing_duplicate.phone_number_id = phone_number_id
+            existing_duplicate.save(update_fields=["phone_number_id", "updated_at"])
 
         # Create or update phone number (this always succeeds regardless of token storage)
         phone, created = WhatsAppPhoneNumber.objects.update_or_create(

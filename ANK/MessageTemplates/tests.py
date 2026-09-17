@@ -6,7 +6,7 @@ from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
-from MessageTemplates.serializers import WhatsAppPhoneNumberSerializer
+from MessageTemplates.serializers import WhatsAppPhoneNumberSerializer, WhatsAppPhoneNumberWriteSerializer
 from MessageTemplates.services.hosted_reconciliation import apply_comparison
 from MessageTemplates.services.meta_reconciliation import (
     _subscription_audit,
@@ -272,6 +272,51 @@ class HostedReconciliationApiTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 409)
+
+
+class PhoneNumberOnboardingTests(APITestCase):
+    @patch("MessageTemplates.serializers._fetch_meta_phone_numbers")
+    def test_relinks_existing_display_number_to_meta_selected_identity(self, fetch_numbers):
+        old_waba = WhatsAppBusinessAccount.objects.create(waba_id="old-waba", name="Old WABA")
+        old_phone = WhatsAppPhoneNumber.objects.create(
+            business_account=old_waba,
+            phone_number_id="old-phone-id",
+            asset_id="old-waba",
+            waba_id="old-waba",
+            display_phone_number="+91 96196 11453",
+            normalized_display_phone_number="919619611453",
+            verified_name="Old Event",
+            is_active=False,
+        )
+        fetch_numbers.return_value = [
+            {
+                "id": "new-phone-id",
+                "display_phone_number": "+91 96196 11453",
+                "verified_name": "New Event",
+                "quality_rating": "GREEN",
+                "platform_type": "CLOUD_API",
+            }
+        ]
+
+        serializer = WhatsAppPhoneNumberWriteSerializer(
+            data={
+                "phone_number_id": "new-phone-id",
+                "waba_id": "new-waba",
+                "asset_id": "new-waba",
+                "access_token": "valid-meta-token",
+                "display_phone_number": "+91 96196 11453",
+            }
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        phone = serializer.save()
+
+        old_phone.refresh_from_db()
+        self.assertEqual(phone.pk, old_phone.pk)
+        self.assertEqual(phone.phone_number_id, "new-phone-id")
+        self.assertEqual(phone.waba_id, "new-waba")
+        self.assertEqual(phone.verified_name, "New Event")
+        self.assertTrue(phone.is_active)
+        self.assertEqual(WhatsAppPhoneNumber.objects.count(), 1)
 
 
 class HostedReconciliationApplyTests(APITestCase):
