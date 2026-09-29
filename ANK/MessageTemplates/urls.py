@@ -14,6 +14,7 @@ from MessageTemplates.whatsapp_views.hosted_reconciliation import (
     HostedReconciliationPreviewView,
     HostedReconciliationSnapshotView,
 )
+from MessageTemplates.whatsapp_views.media_upload import WhatsAppMediaUploadView
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
     MessageTemplateList,
@@ -68,6 +69,7 @@ urlpatterns = [
         name="whatsapp-phone-display-name",
     ),
     path("whatsapp/templates/", WhatsAppTemplateManagementView.as_view(), name="whatsapp-template-management"),
+    path("whatsapp/media-upload/", WhatsAppMediaUploadView.as_view(), name="whatsapp-media-upload"),
     path(
         "whatsapp/reconciliation/snapshot/",
         HostedReconciliationSnapshotView.as_view(),

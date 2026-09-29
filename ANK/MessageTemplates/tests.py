@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
@@ -86,6 +87,78 @@ class MetaIdentityVerificationTests(SimpleTestCase):
         self.assertTrue(result["subscribed"])
         self.assertEqual(result["apps"], [{"id": "app-1", "name": "ANK"}])
         self.assertNotIn("never-return-this-token", str(result))
+
+
+class WhatsAppMediaUploadTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="media-uploader@example.com",
+            password="password",
+            role="admin",
+        )
+        self.url = reverse("whatsapp-media-upload")
+
+    def test_upload_requires_authentication(self):
+        document = SimpleUploadedFile("brief.pdf", b"pdf", content_type="application/pdf")
+
+        response = self.client.post(self.url, {"file": document}, format="multipart")
+
+        self.assertEqual(response.status_code, 401)
+
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.get")
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.post")
+    @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
+    def test_large_document_is_forwarded_to_meta_in_one_request(
+        self,
+        get_credentials,
+        meta_post,
+        meta_get,
+    ):
+        get_credentials.return_value = ("secret-access-token", "phone-1")
+        upload_response = MagicMock(status_code=200, content=b'{"id":"media-1"}')
+        upload_response.json.return_value = {"id": "media-1"}
+        meta_post.return_value = upload_response
+        url_response = MagicMock(status_code=200)
+        url_response.json.return_value = {"url": "https://meta.example/media-1"}
+        meta_get.return_value = url_response
+        self.client.force_authenticate(self.user)
+        document = SimpleUploadedFile(
+            "Event Brief 2026.pdf",
+            b"x" * (15 * 1024 * 1024),
+            content_type="application/pdf",
+        )
+
+        response = self.client.post(
+            self.url,
+            {"file": document, "phone_number_id": "phone-1"},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["mediaId"], "media-1")
+        self.assertEqual(response.data["mediaType"], "document")
+        get_credentials.assert_called_once_with("phone-1")
+        self.assertEqual(meta_post.call_count, 1)
+        post_kwargs = meta_post.call_args.kwargs
+        self.assertEqual(post_kwargs["data"], {"messaging_product": "whatsapp"})
+        self.assertEqual(post_kwargs["files"]["file"][0], "Event_Brief_2026.pdf")
+        self.assertEqual(post_kwargs["files"]["file"][2], "application/pdf")
+        self.assertNotIn("secret-access-token", str(response.data))
+
+    @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
+    def test_unsupported_document_type_is_rejected_before_credential_lookup(self, get_credentials):
+        self.client.force_authenticate(self.user)
+        document = SimpleUploadedFile(
+            "archive.zip",
+            b"not-supported",
+            content_type="application/zip",
+        )
+
+        response = self.client.post(self.url, {"file": document}, format="multipart")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported file type", response.data["error"])
+        get_credentials.assert_not_called()
 
 
 class MetaStatusApiIdentityTests(APITestCase):
