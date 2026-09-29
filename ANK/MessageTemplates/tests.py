@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import requests
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
@@ -13,6 +14,7 @@ from MessageTemplates.services.meta_reconciliation import (
     _subscription_audit,
     _token_audit,
     phone_identity_verification,
+    reconcile_waba_phone_numbers,
 )
 from Staff.models import User
 
@@ -260,6 +262,110 @@ class WhatsAppMediaUploadTests(APITestCase):
         self.assertEqual(meta_post.call_count, 2)
 
 
+@patch.dict("os.environ", {"WABA_ACCESS_TOKEN": "template-system-token"}, clear=False)
+@patch("MessageTemplates.whatsapp_views.template_management.WEBHOOK_SECRET", "template-secret")
+class WhatsAppTemplateManagementTests(APITestCase):
+    def setUp(self):
+        self.waba = WhatsAppBusinessAccount.objects.create(
+            waba_id="waba-templates",
+            name="Template WABA",
+        )
+        self.phone = WhatsAppPhoneNumber.objects.create(
+            business_account=self.waba,
+            phone_number_id="phone-templates",
+            asset_id="phone-templates",
+            waba_id="waba-templates",
+            display_phone_number="+919999999998",
+            verified_name="Template sender",
+            platform_type="CLOUD_API",
+        )
+        self.url = reverse("whatsapp-template-management")
+        self.headers = {
+            "HTTP_X_WEBHOOK_TOKEN": "template-secret",
+            "HTTP_X_REQUEST_ID": "request-template-test",
+        }
+
+    @patch("MessageTemplates.whatsapp_views.template_management.requests.get")
+    def test_template_list_retries_one_transient_meta_failure(self, meta_get):
+        unavailable = MagicMock(status_code=503, ok=False, text="unavailable")
+        unavailable.json.return_value = {"error": {"message": "Meta unavailable"}}
+        success = MagicMock(status_code=200, ok=True)
+        success.json.return_value = {"data": [{"id": "template-1", "name": "welcome"}]}
+        meta_get.side_effect = [unavailable, success]
+
+        response = self.client.get(
+            self.url,
+            {"phone_number_id": self.phone.phone_number_id},
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["templates"][0]["name"], "welcome")
+        self.assertEqual(response.data["request_id"], "request-template-test")
+        self.assertEqual(meta_get.call_count, 2)
+
+    @patch("MessageTemplates.whatsapp_views.template_management.requests.get")
+    def test_template_list_returns_structured_retryable_transport_error(self, meta_get):
+        meta_get.side_effect = requests.Timeout("Meta read timed out")
+
+        response = self.client.get(
+            self.url,
+            {"phone_number_id": self.phone.phone_number_id},
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 503, response.data)
+        self.assertEqual(response.data["code"], "META_UNREACHABLE")
+        self.assertTrue(response.data["retryable"])
+        self.assertEqual(response.data["request_id"], "request-template-test")
+        self.assertEqual(meta_get.call_count, 2)
+
+    @patch("MessageTemplates.whatsapp_views.template_management.requests.post")
+    def test_create_rejects_media_header_without_verified_handle(self, meta_post):
+        response = self.client.post(
+            self.url,
+            {
+                "phone_number_id": self.phone.phone_number_id,
+                "name": "missing_media",
+                "category": "UTILITY",
+                "language": "en_US",
+                "components": [
+                    {"type": "HEADER", "format": "DOCUMENT"},
+                    {"type": "BODY", "text": "Your document is ready."},
+                ],
+            },
+            format="json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("verified document header upload", response.data["error"])
+        meta_post.assert_not_called()
+
+    @patch("MessageTemplates.whatsapp_views.template_management.requests.post")
+    def test_create_does_not_repeat_ambiguous_mutation(self, meta_post):
+        unavailable = MagicMock(status_code=503, ok=False, text="unavailable")
+        unavailable.json.return_value = {"error": {"message": "Meta unavailable"}}
+        meta_post.return_value = unavailable
+
+        response = self.client.post(
+            self.url,
+            {
+                "phone_number_id": self.phone.phone_number_id,
+                "name": "safe_create",
+                "category": "UTILITY",
+                "language": "en_US",
+                "components": [{"type": "BODY", "text": "Your update is ready."}],
+            },
+            format="json",
+            **self.headers,
+        )
+
+        self.assertEqual(response.status_code, 503, response.data)
+        self.assertTrue(response.data["retryable"])
+        self.assertEqual(meta_post.call_count, 1)
+
+
 class MetaStatusApiIdentityTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -327,6 +433,57 @@ class MetaStatusApiIdentityTests(APITestCase):
         self.assertEqual(refreshed_response.status_code, 200)
         self.assertFalse(refreshed_response.data["cache"]["hit"])
         self.assertEqual(reconcile.call_count, 2)
+
+
+class SenderReconciliationTests(APITestCase):
+    def setUp(self):
+        self.waba = WhatsAppBusinessAccount.objects.create(
+            waba_id="waba-sender",
+            name="Sender WABA",
+        )
+        self.phone = WhatsAppPhoneNumber.objects.create(
+            business_account=self.waba,
+            phone_number_id="phone-sender",
+            asset_id="phone-sender",
+            waba_id="waba-sender",
+            display_phone_number="+919999999999",
+            verified_name="Old sender name",
+        )
+
+    @patch("MessageTemplates.services.meta_reconciliation.build_waba_verification")
+    @patch("MessageTemplates.services.meta_reconciliation._template_management_capability")
+    @patch("MessageTemplates.services.meta_reconciliation._fetch_waba_phone_numbers")
+    def test_live_sender_refresh_skips_status_page_audits(
+        self,
+        fetch_numbers,
+        template_capability,
+        build_verification,
+    ):
+        fetch_numbers.return_value = (
+            [
+                {
+                    "id": "phone-sender",
+                    "display_phone_number": "+918888888888",
+                    "verified_name": "Current sender name",
+                    "quality_rating": "GREEN",
+                    "platform_type": "CLOUD_API",
+                    "name_status": "APPROVED",
+                }
+            ],
+            "",
+            "",
+        )
+
+        reconcile_waba_phone_numbers(self.waba, audit_capabilities=False)
+
+        fetch_numbers.assert_called_once_with(self.waba, include_coexistence=False)
+        template_capability.assert_not_called()
+        build_verification.assert_not_called()
+        self.phone.refresh_from_db()
+        self.assertEqual(self.phone.display_phone_number, "+918888888888")
+        self.assertEqual(self.phone.verified_name, "Current sender name")
+        self.assertEqual(self.phone.meta_status, "active")
+        self.assertTrue(self.phone.is_usable)
 
 
 class DisplayNameManagementApiTests(APITestCase):

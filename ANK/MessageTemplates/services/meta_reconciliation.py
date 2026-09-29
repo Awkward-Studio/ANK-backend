@@ -359,7 +359,11 @@ def build_waba_verification(waba: WhatsAppBusinessAccount) -> dict:
     }
 
 
-def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict], str, str]:
+def _fetch_waba_phone_numbers(
+    waba: WhatsAppBusinessAccount,
+    *,
+    include_coexistence: bool = True,
+) -> Tuple[List[dict], str, str]:
     token = _get_waba_token(waba)
     if not token:
         return [], "No access token available for this WABA", "logged_out"
@@ -404,17 +408,18 @@ def _fetch_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Tuple[List[dict]
         numbers.extend(payload.get("data") or [])
         url = (payload.get("paging") or {}).get("next")
 
-    for number in numbers:
-        phone_id = number.get("id")
-        if not phone_id:
-            continue
-        coexistence_payload, coexistence_error = _meta_get(
-            str(phone_id), token, {"fields": "is_on_biz_app"}
-        )
-        if coexistence_error:
-            number["is_on_biz_app_error"] = coexistence_error
-        elif "is_on_biz_app" in coexistence_payload:
-            number["is_on_biz_app"] = coexistence_payload["is_on_biz_app"]
+    if include_coexistence:
+        for number in numbers:
+            phone_id = number.get("id")
+            if not phone_id:
+                continue
+            coexistence_payload, coexistence_error = _meta_get(
+                str(phone_id), token, {"fields": "is_on_biz_app"}
+            )
+            if coexistence_error:
+                number["is_on_biz_app_error"] = coexistence_error
+            elif "is_on_biz_app" in coexistence_payload:
+                number["is_on_biz_app"] = coexistence_payload["is_on_biz_app"]
 
     return numbers, "", ""
 
@@ -493,20 +498,35 @@ def phone_identity_verification(meta_phone: dict) -> dict:
     }
 
 
-def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, object]:
+def reconcile_waba_phone_numbers(
+    waba: WhatsAppBusinessAccount,
+    *,
+    audit_capabilities: bool = True,
+) -> Dict[str, object]:
     """
     Compare local phone numbers for one WABA with Meta's current phone list.
     Missing numbers are treated as logged_out because embedded signup numbers can
     disappear from a WABA after Meta/business-side changes.
     """
     local_numbers = list(waba.phone_numbers.all())
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        numbers_future = executor.submit(_fetch_waba_phone_numbers, waba)
-        template_future = executor.submit(_template_management_capability, waba)
-        verification_future = executor.submit(build_waba_verification, waba)
-        meta_numbers, fetch_error, fetch_status = numbers_future.result()
-        template_management = template_future.result()
-        waba_verification = verification_future.result()
+    if audit_capabilities:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            numbers_future = executor.submit(_fetch_waba_phone_numbers, waba)
+            template_future = executor.submit(_template_management_capability, waba)
+            verification_future = executor.submit(build_waba_verification, waba)
+            meta_numbers, fetch_error, fetch_status = numbers_future.result()
+            template_management = template_future.result()
+            waba_verification = verification_future.result()
+    else:
+        # Sender selectors only need Meta's current phone-number records. The
+        # status page owns the slower template, token, subscription, and
+        # coexistence audits.
+        meta_numbers, fetch_error, fetch_status = _fetch_waba_phone_numbers(
+            waba,
+            include_coexistence=False,
+        )
+        template_management = {}
+        waba_verification = {}
     checked_at = timezone.now()
 
     if fetch_error:
@@ -581,11 +601,22 @@ def reconcile_waba_phone_numbers(waba: WhatsAppBusinessAccount) -> Dict[str, obj
     }
 
 
-def reconcile_all_wabas(wabas: Iterable[WhatsAppBusinessAccount] = None) -> List[Dict[str, object]]:
+def _reconcile_wabas(
+    wabas: Iterable[WhatsAppBusinessAccount] = None,
+    *,
+    audit_capabilities: bool,
+) -> List[Dict[str, object]]:
     queryset = wabas if wabas is not None else WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers").all()
-    waba_ids = [str(waba.waba_id) for waba in queryset]
+    waba_list = list(queryset)
+    waba_ids = [str(waba.waba_id) for waba in waba_list]
     if len(waba_ids) <= 1:
-        return [reconcile_waba_phone_numbers(waba) for waba in queryset]
+        return [
+            reconcile_waba_phone_numbers(
+                waba,
+                audit_capabilities=audit_capabilities,
+            )
+            for waba in waba_list
+        ]
 
     def reconcile_by_id(waba_id: str) -> Dict[str, object]:
         close_old_connections()
@@ -593,10 +624,22 @@ def reconcile_all_wabas(wabas: Iterable[WhatsAppBusinessAccount] = None) -> List
             waba = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers").get(
                 waba_id=waba_id
             )
-            return reconcile_waba_phone_numbers(waba)
+            return reconcile_waba_phone_numbers(
+                waba,
+                audit_capabilities=audit_capabilities,
+            )
         finally:
             close_old_connections()
 
     max_workers = min(8, len(waba_ids))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(reconcile_by_id, waba_ids))
+
+
+def reconcile_all_wabas(wabas: Iterable[WhatsAppBusinessAccount] = None) -> List[Dict[str, object]]:
+    return _reconcile_wabas(wabas, audit_capabilities=True)
+
+
+def reconcile_sender_wabas(wabas: Iterable[WhatsAppBusinessAccount] = None) -> List[Dict[str, object]]:
+    """Live-refresh sender records without running the full status-page audit."""
+    return _reconcile_wabas(wabas, audit_capabilities=False)

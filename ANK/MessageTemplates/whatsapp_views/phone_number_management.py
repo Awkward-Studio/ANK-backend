@@ -13,7 +13,7 @@ from MessageTemplates.serializers import (
     WhatsAppPhoneNumberSerializer,
     WhatsAppPhoneNumberWriteSerializer,
 )
-from MessageTemplates.services.meta_reconciliation import reconcile_all_wabas
+from MessageTemplates.services.meta_reconciliation import reconcile_sender_wabas
 
 logger = logging.getLogger(__name__)
 WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
@@ -133,7 +133,7 @@ class ListPhoneNumbersView(APIView):
             waba_qs = WhatsAppBusinessAccount.objects.prefetch_related("phone_numbers")
             if waba_id:
                 waba_qs = waba_qs.filter(waba_id=waba_id)
-            reconcile_all_wabas(waba_qs)
+            reconcile_sender_wabas(waba_qs)
 
         # Build query
         queryset = WhatsAppPhoneNumber.objects.all()
