@@ -11,6 +11,9 @@ resource "aws_lb" "main" {
 
   enable_deletion_protection = false
   enable_http2               = true
+  # Keep the client connection alive while Django streams a large media file
+  # onward to Meta. The AWS default (60s) is too tight for slower connections.
+  idle_timeout = 300
 
   tags = {
     Name = "${var.project_name}-${var.environment}-alb"

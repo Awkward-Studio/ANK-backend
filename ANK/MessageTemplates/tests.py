@@ -160,6 +160,105 @@ class WhatsAppMediaUploadTests(APITestCase):
         self.assertIn("Unsupported file type", response.data["error"])
         get_credentials.assert_not_called()
 
+    @patch.dict("os.environ", {"META_APP_ID": "app-1"}, clear=False)
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.post")
+    @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
+    def test_large_template_video_returns_header_handle_without_temp_session(
+        self,
+        get_credentials,
+        meta_post,
+    ):
+        get_credentials.return_value = ("secret-access-token", "phone-1")
+        session_response = MagicMock(status_code=200)
+        session_response.json.return_value = {"id": "upload-session-1"}
+        upload_response = MagicMock(status_code=200)
+        upload_response.json.return_value = {"h": "template-header-handle"}
+        meta_post.side_effect = [session_response, upload_response]
+        self.client.force_authenticate(self.user)
+        video = SimpleUploadedFile(
+            "Wedding Film.mp4",
+            b"v" * (15 * 1024 * 1024),
+            content_type="video/mp4",
+        )
+
+        response = self.client.post(
+            self.url,
+            {
+                "file": video,
+                "phone_number_id": "phone-1",
+                "upload_type": "template",
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["mediaId"], "template-header-handle")
+        self.assertEqual(response.data["headerHandle"], "template-header-handle")
+        self.assertEqual(response.data["mediaType"], "video")
+        self.assertEqual(meta_post.call_count, 2)
+
+        session_call, upload_call = meta_post.call_args_list
+        self.assertEqual(session_call.kwargs["params"]["file_length"], 15 * 1024 * 1024)
+        self.assertEqual(session_call.kwargs["params"]["file_type"], "video/mp4")
+        self.assertEqual(session_call.kwargs["params"]["file_name"], "Wedding_Film.mp4")
+        self.assertEqual(upload_call.kwargs["headers"]["file_offset"], "0")
+        self.assertEqual(upload_call.kwargs["headers"]["Content-Length"], str(15 * 1024 * 1024))
+        self.assertEqual(upload_call.kwargs["data"].size, 15 * 1024 * 1024)
+
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.get")
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.post")
+    @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
+    def test_known_extension_recovers_generic_browser_content_type(
+        self,
+        get_credentials,
+        meta_post,
+        meta_get,
+    ):
+        get_credentials.return_value = ("secret-access-token", "phone-1")
+        upload_response = MagicMock(status_code=200)
+        upload_response.json.return_value = {"id": "media-2"}
+        meta_post.return_value = upload_response
+        meta_get.return_value = MagicMock(status_code=404)
+        self.client.force_authenticate(self.user)
+        document = SimpleUploadedFile(
+            "supplier-list.docx",
+            b"docx-data",
+            content_type="application/octet-stream",
+        )
+
+        response = self.client.post(self.url, {"file": document}, format="multipart")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["mediaType"], "document")
+        self.assertEqual(
+            meta_post.call_args.kwargs["files"]["file"][2],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.get")
+    @patch("MessageTemplates.whatsapp_views.media_upload.requests.post")
+    @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
+    def test_transient_meta_failure_is_retried_once(
+        self,
+        get_credentials,
+        meta_post,
+        meta_get,
+    ):
+        get_credentials.return_value = ("secret-access-token", "phone-1")
+        unavailable_response = MagicMock(status_code=503)
+        successful_response = MagicMock(status_code=200)
+        successful_response.json.return_value = {"id": "media-after-retry"}
+        meta_post.side_effect = [unavailable_response, successful_response]
+        meta_get.return_value = MagicMock(status_code=404)
+        self.client.force_authenticate(self.user)
+        document = SimpleUploadedFile("brief.pdf", b"pdf-data", content_type="application/pdf")
+
+        response = self.client.post(self.url, {"file": document}, format="multipart")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["mediaId"], "media-after-retry")
+        self.assertEqual(meta_post.call_count, 2)
+
 
 class MetaStatusApiIdentityTests(APITestCase):
     def setUp(self):
