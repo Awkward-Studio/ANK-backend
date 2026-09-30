@@ -880,6 +880,79 @@ class ManpowerTestCase(TestCase):
         response = FreelancerAllocationDetail.as_view()(request, pk=allocation.id)
         self.assertEqual(response.status_code, 200, response.data)
 
+    def test_requirement_delete_preserves_released_signed_allocation(self):
+        from django.urls import resolve
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import ManpowerRequirementDetail
+
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department, name="Coordinator"
+        )
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            requirement=requirement,
+            status="released",
+            assigned_by=self.user,
+        )
+        cost_sheet = EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("4000.00"),
+            days_planned=Decimal("2.0"),
+        )
+        mou = MoU.objects.create(
+            allocation=allocation,
+            status="accepted",
+            template_data={"terms": "Original signed terms"},
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+        path = f"/api/manpower/requirements/{requirement.id}/"
+        request = APIRequestFactory().delete(path)
+        request.resolver_match = resolve(path)
+        force_authenticate(request, user=self.user)
+
+        response = ManpowerRequirementDetail.as_view()(request, pk=requirement.id)
+
+        self.assertEqual(response.status_code, 204, response.data)
+        self.assertFalse(ManpowerRequirement.objects.filter(pk=requirement.id).exists())
+        allocation.refresh_from_db()
+        self.assertIsNone(allocation.requirement_id)
+        self.assertEqual(allocation.status, "released")
+        self.assertEqual(allocation.event_department_id, self.event_department.id)
+        self.assertTrue(EventCostSheet.objects.filter(pk=cost_sheet.id).exists())
+        self.assertTrue(PostEventAdjustment.objects.filter(pk=adjustment.id).exists())
+        mou.refresh_from_db()
+        self.assertEqual(mou.status, "accepted")
+        self.assertEqual(mou.template_data, {"terms": "Original signed terms"})
+
+    def test_requirement_delete_still_blocks_active_signed_allocation(self):
+        from django.urls import resolve
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import ManpowerRequirementDetail
+
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department, name="Coordinator"
+        )
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            requirement=requirement,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        MoU.objects.create(allocation=allocation, status="accepted")
+        path = f"/api/manpower/requirements/{requirement.id}/"
+        request = APIRequestFactory().delete(path)
+        request.resolver_match = resolve(path)
+        force_authenticate(request, user=self.user)
+
+        response = ManpowerRequirementDetail.as_view()(request, pk=requirement.id)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(ManpowerRequirement.objects.filter(pk=requirement.id).exists())
+        allocation.refresh_from_db()
+        self.assertEqual(allocation.requirement_id, requirement.id)
+
     def test_actuals_approval_requires_signature_and_atomically_creates_invoice(self):
         from django.urls import resolve
         from django.utils import timezone
