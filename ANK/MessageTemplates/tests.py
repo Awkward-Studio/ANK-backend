@@ -1,10 +1,13 @@
+import tracemalloc
+from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import requests
 from django.core.cache import cache
-from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.uploadedfile import SimpleUploadedFile, TemporaryUploadedFile
 from django.urls import reverse
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from rest_framework.test import APITestCase
 
 from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
@@ -17,6 +20,7 @@ from MessageTemplates.services.meta_reconciliation import (
     reconcile_waba_phone_numbers,
 )
 from Staff.models import User
+from MessageTemplates.whatsapp_views.media_upload import WhatsAppMediaUploadView, _upload_slot
 
 
 class MetaIdentityVerificationTests(SimpleTestCase):
@@ -142,9 +146,12 @@ class WhatsAppMediaUploadTests(APITestCase):
         get_credentials.assert_called_once_with("phone-1")
         self.assertEqual(meta_post.call_count, 1)
         post_kwargs = meta_post.call_args.kwargs
-        self.assertEqual(post_kwargs["data"], {"messaging_product": "whatsapp"})
-        self.assertEqual(post_kwargs["files"]["file"][0], "Event_Brief_2026.pdf")
-        self.assertEqual(post_kwargs["files"]["file"][2], "application/pdf")
+        fields = post_kwargs["data"].body.fields
+        self.assertEqual(fields["messaging_product"], "whatsapp")
+        self.assertEqual(fields["file"][0], "Event_Brief_2026.pdf")
+        self.assertEqual(fields["file"][2], "application/pdf")
+        self.assertNotIn("files", post_kwargs)
+        self.assertIn("multipart/form-data; boundary=", post_kwargs["headers"]["Content-Type"])
         self.assertNotIn("secret-access-token", str(response.data))
 
     @patch("MessageTemplates.whatsapp_views.media_upload._get_credentials")
@@ -205,7 +212,7 @@ class WhatsAppMediaUploadTests(APITestCase):
         self.assertEqual(session_call.kwargs["params"]["file_name"], "Wedding_Film.mp4")
         self.assertEqual(upload_call.kwargs["headers"]["file_offset"], "0")
         self.assertEqual(upload_call.kwargs["headers"]["Content-Length"], str(15 * 1024 * 1024))
-        self.assertEqual(upload_call.kwargs["data"].size, 15 * 1024 * 1024)
+        self.assertEqual(upload_call.kwargs["data"].len, 15 * 1024 * 1024)
 
     @patch("MessageTemplates.whatsapp_views.media_upload.requests.get")
     @patch("MessageTemplates.whatsapp_views.media_upload.requests.post")
@@ -233,7 +240,7 @@ class WhatsAppMediaUploadTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["mediaType"], "document")
         self.assertEqual(
-            meta_post.call_args.kwargs["files"]["file"][2],
+            meta_post.call_args.kwargs["data"].body.fields["file"][2],
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
@@ -260,6 +267,154 @@ class WhatsAppMediaUploadTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["mediaId"], "media-after-retry")
         self.assertEqual(meta_post.call_count, 2)
+
+
+@override_settings(WHATSAPP_MEDIA_MAX_CONCURRENT_UPLOADS=1)
+class WhatsAppMediaStreamingTests(SimpleTestCase):
+    def test_daphne_leaves_multipart_parsing_to_django(self):
+        from ANK.daphne_uploads import configure_daphne_uploads
+        from daphne import http_protocol
+
+        configure_daphne_uploads()
+        configured_class = http_protocol.WebRequest
+        configure_daphne_uploads()
+        self.assertIs(http_protocol.WebRequest, configured_class)
+        request = configured_class(MagicMock())
+        request.content = BytesIO(b"multipart body handled by Django")
+        request.requestHeaders.addRawHeader(b"Content-Type", b"multipart/form-data; boundary=test")
+        with (
+            patch.object(request, "process") as process,
+            patch("twisted.web.http._getMultiPartArgs") as parse,
+        ):
+            request.requestReceived(b"POST", b"/api/whatsapp/media-upload/", b"HTTP/1.1")
+        parse.assert_not_called()
+        process.assert_called_once()
+        self.assertFalse(request._parsePOSTFormSubmission)
+
+    def upload(self, size, meta_post):
+        document = TemporaryUploadedFile("Large Brief.pdf", "application/pdf", size, None)
+        # A sparse temporary file exercises real disk reads without allocating
+        # the entire fixture in memory.
+        document.file.truncate(size)
+        request = SimpleNamespace(FILES={"file": document}, data={"phone_number_id": "phone-1"})
+        try:
+            with (
+                patch("MessageTemplates.whatsapp_views.media_upload._get_credentials", return_value=("test-token", "phone-1")),
+                patch("MessageTemplates.whatsapp_views.media_upload.requests.post", side_effect=meta_post),
+                patch("MessageTemplates.whatsapp_views.media_upload.requests.get", return_value=MagicMock(status_code=404)),
+            ):
+                return WhatsAppMediaUploadView().post(request)
+        finally:
+            document.close()
+
+    def test_documents_up_to_100_mb_stream_with_bounded_memory(self):
+        for size in (26 * 1024 * 1024, 50 * 1024 * 1024, 96 * 1024 * 1024, 100 * 1024 * 1024):
+            with self.subTest(document_bytes=size):
+                observed = {}
+
+                def meta_post(url, **kwargs):
+                    # Prepare through Requests too. Its normal files= path used
+                    # to allocate more than twice the document size here.
+                    request_kwargs = {k: v for k, v in kwargs.items() if k != "timeout"}
+                    prepared = requests.Request("POST", url, **request_kwargs).prepare()
+                    self.assertIs(prepared.body, kwargs["data"])
+                    self.assertNotIn("Transfer-Encoding", prepared.headers)
+                    expected_length = int(prepared.headers["Content-Length"])
+                    count = 0
+                    first = prepared.body.read(64 * 1024)
+                    self.assertIn(b'name="messaging_product"', first)
+                    self.assertIn(b'filename="Large_Brief.pdf"', first)
+                    self.assertIn(b"Content-Type: application/pdf", first)
+                    count += len(first)
+                    while chunk := prepared.body.read(64 * 1024):
+                        self.assertLessEqual(len(chunk), 64 * 1024)
+                        count += len(chunk)
+                    self.assertEqual(count, expected_length)
+                    self.assertGreater(count, size)
+                    observed["bytes"] = count
+                    response = MagicMock(status_code=200)
+                    response.json.return_value = {"id": f"media-{size}"}
+                    return response
+
+                tracemalloc.start()
+                try:
+                    response = self.upload(size, meta_post)
+                    _, peak = tracemalloc.get_traced_memory()
+                finally:
+                    tracemalloc.stop()
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(response.data["mediaId"], f"media-{size}")
+                self.assertIn("bytes", observed)
+                self.assertLess(peak, 4 * 1024 * 1024)
+
+    def test_above_100_mb_is_rejected_without_calling_meta(self):
+        meta_post = MagicMock()
+        response = self.upload(100 * 1024 * 1024 + 1, meta_post)
+        self.assertEqual(response.status_code, 400)
+        meta_post.assert_not_called()
+
+    def test_meta_size_rejection_is_a_validation_error_without_retry(self):
+        meta_post = MagicMock(return_value=MagicMock(status_code=413))
+        response = self.upload(100 * 1024 * 1024, meta_post)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("choose a smaller file", response.data["error"])
+        meta_post.assert_called_once()
+
+    def test_retry_rebuilds_consumed_multipart_body(self):
+        attempts = []
+
+        def meta_post(url, **kwargs):
+            body = kwargs["data"]
+            count = 0
+            while chunk := body.read(64 * 1024):
+                count += len(chunk)
+            attempts.append((body, count))
+            response = MagicMock(status_code=503 if len(attempts) == 1 else 200)
+            response.json.return_value = {"id": "media-after-retry"}
+            return response
+
+        response = self.upload(26 * 1024 * 1024, meta_post)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(attempts), 2)
+        self.assertIsNot(attempts[0][0], attempts[1][0])
+        self.assertEqual(attempts[0][1], attempts[1][1])
+        self.assertGreater(attempts[1][1], 26 * 1024 * 1024)
+
+    def test_busy_upload_is_rejected_and_slot_is_reusable(self):
+        with _upload_slot() as acquired:
+            self.assertTrue(acquired)
+            response = WhatsAppMediaUploadView().post(SimpleNamespace())
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response["Retry-After"], "10")
+        with _upload_slot() as acquired:
+            self.assertTrue(acquired)
+
+    def test_timeout_is_bounded_and_releases_upload_slot(self):
+        calls = []
+
+        def meta_post(url, **kwargs):
+            calls.append(kwargs)
+            raise requests.Timeout("upstream stalled")
+
+        response = self.upload(26 * 1024 * 1024, meta_post)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(len(calls), 2)
+        with _upload_slot() as acquired:
+            self.assertTrue(acquired)
+
+    def test_expired_deadline_stops_reading_and_prevents_retry(self):
+        calls = []
+        clock = [1000]
+
+        def meta_post(url, **kwargs):
+            calls.append(kwargs)
+            clock[0] += 300
+            kwargs["data"].read(64 * 1024)
+
+        with patch("MessageTemplates.whatsapp_views.media_upload.time.monotonic", side_effect=lambda: clock[0]):
+            response = self.upload(26 * 1024 * 1024, meta_post)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(len(calls), 1)
 
 
 @patch.dict("os.environ", {"WABA_ACCESS_TOKEN": "template-system-token"}, clear=False)
