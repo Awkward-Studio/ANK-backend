@@ -508,6 +508,32 @@ class BroadcastCampaign(models.Model):
         return f"{self.name} ({self.status})"
 
 
+class BroadcastRecipient(models.Model):
+    """An intended recipient, saved before any request is made to Meta."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(BroadcastCampaign, on_delete=models.CASCADE, related_name="recipients")
+    client_id = models.CharField(max_length=255)
+    phone = models.CharField(max_length=50)
+    name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, default="pending", choices=[
+        (value, value) for value in ("pending", "sending", "sent", "failed", "unknown", "flow_started")
+    ])
+    wamid = models.CharField(max_length=255, blank=True)
+    error_code = models.CharField(max_length=50, blank=True)
+    error_message = models.TextField(blank=True)
+    error_details = models.JSONField(default=dict, blank=True)
+    parameters = models.JSONField(default=list, blank=True)
+    attempted_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [models.UniqueConstraint(fields=["campaign", "client_id"], name="broadcast_unique_recipient")]
+
+
 class FlowBlueprint(models.Model):
     """
     Stores a visual conversation flow (DAG) built via React Flow.

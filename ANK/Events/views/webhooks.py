@@ -436,6 +436,17 @@ def track_send(request):
                 }
             )
 
+        # A second durable path repairs a missing attempt completion after Meta
+        # accepted, without changing an already-recorded delivery webhook status.
+        if campaign_id and body.get("campaign_recipient_id") and template_wamid:
+            from MessageTemplates.models import BroadcastRecipient
+            BroadcastRecipient.objects.filter(
+                campaign_id=campaign_id, client_id=str(body["campaign_recipient_id"]),
+                phone=wa_id, campaign__sender_phone_number_id=sender_phone_number_id,
+                status__in=["sending", "unknown"], wamid="",
+            ).update(status="sent", wamid=template_wamid, sent_at=dj_tz.now(),
+                     error_code="", error_message="", error_details={})
+
         return JsonResponse({"ok": True})
     except Exception as e:
         log.exception(f"[track-send] Failed: {e}")

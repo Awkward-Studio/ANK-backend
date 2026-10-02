@@ -500,7 +500,14 @@ class WhatsAppPhoneNumberWriteSerializer(serializers.Serializer):
         return phone
 
 
+class BroadcastRecipientInputSerializer(serializers.Serializer):
+    id = serializers.CharField(max_length=255)
+    phone = serializers.RegexField(r"^\+?[0-9]{7,15}$", max_length=50)
+    name = serializers.CharField(max_length=255, allow_blank=True, required=False, default="")
+
+
 class BroadcastCampaignSerializer(serializers.ModelSerializer):
+    recipients = BroadcastRecipientInputSerializer(many=True, write_only=True, required=False)
     stats = serializers.SerializerMethodField()
 
     class Meta:
@@ -515,35 +522,36 @@ class BroadcastCampaignSerializer(serializers.ModelSerializer):
             "created_at",
             "metadata",
             "stats",
+            "recipients",
         ]
         read_only_fields = ["id", "created_at", "stats"]
 
-    def get_stats(self, obj):
-        # Perform aggregation if this is a detail view or if needed
-        # For list views, we might want to prefetch or annotate, 
-        # but for now, let's just do a simple aggregation.
-        # This might be costly for large lists, so viewset should invoke annotations.
-        
-        # If the object has 'annotated_stats', use it (optimization for list view)
-        if hasattr(obj, 'annotated_stats'):
-            return obj.annotated_stats
+    def validate_recipients(self, values):
+        if not values or len({value["id"] for value in values}) != len(values):
+            raise serializers.ValidationError("Recipients must have unique IDs and cannot be empty.")
+        return values
 
-        # Fallback to query
-        logs = obj.logs.all()
-        total = logs.count()
-        delivered = logs.filter(status='delivered').count()
-        read = logs.filter(status='read').count()
-        failed = logs.filter(status='failed').count()
-        sent = logs.filter(status='sent').count()
-        
-        return {
-            "accepted": total,
-            "sent": sent,
-            "delivered": delivered,
-            "read": read,
-            "failed": failed,
-            "total": total
-        }
+    def validate(self, values):
+        if self.instance and "recipients" in values:
+            raise serializers.ValidationError("Use the recipients endpoint to verify the saved list.")
+        return values
+
+    @transaction.atomic
+    def create(self, validated_data):
+        recipients = validated_data.pop("recipients", None)
+        if recipients is not None:
+            validated_data["total_recipients"] = len(recipients)
+        campaign = super().create(validated_data)
+        if recipients:
+            MessageTemplates.models.BroadcastRecipient.objects.bulk_create([
+                MessageTemplates.models.BroadcastRecipient(campaign=campaign, client_id=value["id"], phone=value["phone"].lstrip("+"), name=value["name"])
+                for value in recipients
+            ])
+        return campaign
+
+    def get_stats(self, obj):
+        from MessageTemplates.services.campaign_reporting import campaign_rows, campaign_stats
+        return campaign_stats(campaign_rows(obj))
 
 
 class FlowBlueprintSerializer(serializers.ModelSerializer):
