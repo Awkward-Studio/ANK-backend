@@ -16,7 +16,7 @@ from rest_framework.pagination import PageNumberPagination
 
 from MessageTemplates.models import BroadcastCampaign, BroadcastRecipient
 from MessageTemplates.serializers import BroadcastCampaignSerializer, BroadcastRecipientInputSerializer
-from MessageTemplates.services.campaign_reporting import campaign_rows, campaign_stats
+from MessageTemplates.services.campaign_reporting import campaign_rows, campaign_stats, campaign_summary_stats
 
 
 class CampaignAttemptPermission(BasePermission):
@@ -45,10 +45,20 @@ class BroadcastCampaignViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.action in ("list", "retrieve", "export"):
+        if self.action in ("retrieve", "export"):
             qs = qs.prefetch_related("recipients", "logs")
         sender_id = self.request.query_params.get("sender_phone_number_id")
         return qs.filter(sender_phone_number_id=sender_id) if sender_id else qs
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        campaigns = list(page if page is not None else queryset)
+        summaries = campaign_summary_stats(campaigns)
+        for campaign in campaigns:
+            campaign._summary_stats = summaries[campaign.pk]
+        data = self.get_serializer(campaigns, many=True).data
+        return self.get_paginated_response(data) if page is not None else Response(data)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()

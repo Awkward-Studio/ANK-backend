@@ -186,3 +186,37 @@ class BroadcastTrackingTests(APITestCase):
         self.assertEqual(len(detail["logs"]), 33)
         csv_rows = list(csv.DictReader(io.StringIO(self.client.get(self.url + "export/").content.decode("utf-8-sig"))))
         self.assertEqual(len(csv_rows), 33)
+
+    def test_summary_counts_match_full_reports_for_roster_and_legacy(self):
+        from MessageTemplates.services.campaign_reporting import campaign_rows, campaign_stats, campaign_summary_stats
+        self.save_roster()
+        self.attempt()
+        self.attempt(operation="finish", status="sent", wamid="summary-real")
+        WhatsAppMessageLog.objects.create(wamid="summary-real", recipient_id=self.roster[0]["phone"], sender_phone_number_id="sender-1", status="read")
+        self.attempt(client_id="r1")
+        self.campaign.recipients.filter(client_id="r1").update(attempted_at=timezone.now() - timedelta(minutes=2))
+        legacy = BroadcastCampaign.objects.create(name="Legacy", sender_phone_number_id="sender-1", total_recipients=5)
+        WhatsAppMessageLog.objects.create(campaign=legacy, wamid="legacy-summary", recipient_id="919000000000", sender_phone_number_id="sender-1", status="failed", error_code="131026")
+        summaries = campaign_summary_stats([self.campaign, legacy])
+        for campaign in (self.campaign, legacy):
+            self.assertEqual(summaries[campaign.pk], campaign_stats(campaign_rows(campaign)))
+
+    def test_campaign_list_has_constant_query_count_and_never_builds_reports(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        self.save_roster()
+        for index in range(20):
+            campaign = BroadcastCampaign.objects.create(name=f"Large {index}", sender_phone_number_id="sender-1", total_recipients=100)
+            WhatsAppMessageLog.objects.bulk_create([
+                WhatsAppMessageLog(campaign=campaign, wamid=f"large-{index}-{recipient}", recipient_id="919000000000", sender_phone_number_id="sender-1", status="delivered", body="x" * 1024, error_details={"data": "x" * 1024})
+                for recipient in range(100)
+            ])
+        with patch("MessageTemplates.services.campaign_reporting.campaign_rows", side_effect=AssertionError("List must not load full recipient reports")):
+            with CaptureQueriesContext(connection) as queries:
+                response = self.client.get("/api/whatsapp/campaigns/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertLessEqual(len(queries), 4)
+        self.assertTrue(all('"error_details"' not in query["sql"] for query in queries))
+        rows = response.data if isinstance(response.data, list) else response.data["results"]
+        self.assertEqual(len(rows), 21)
+        self.assertEqual(next(row for row in rows if row["name"] == "Large 0")["stats"]["delivered"], 100)

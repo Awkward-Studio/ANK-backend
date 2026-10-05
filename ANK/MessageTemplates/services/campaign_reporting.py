@@ -58,3 +58,55 @@ def campaign_stats(rows):
     stats["accepted"] = sum(bool(row.get("wamid")) for row in rows)
     stats["total"] = len(rows)
     return stats
+
+
+REPORT_STATES = ("pending", "sending", "sent", "delivered", "read", "failed", "unknown", "not_recorded", "flow_started")
+
+
+def campaign_summary_stats(campaigns):
+    """Count statuses in SQL without loading names, bodies, parameters, or errors."""
+    from django.db.models import Case, Count, F, OuterRef, Subquery, Value, When, CharField
+    from django.db.models.functions import Coalesce
+    from MessageTemplates.models import BroadcastRecipient
+
+    campaigns = list(campaigns)
+    summaries = {campaign.pk: {**dict.fromkeys(REPORT_STATES, 0), "accepted": 0, "total": 0} for campaign in campaigns}
+    if not campaigns:
+        return summaries
+    ids = list(summaries)
+    matched_log = WhatsAppMessageLog.objects.filter(
+        wamid=OuterRef("wamid"), recipient_id=OuterRef("phone"),
+        sender_phone_number_id=OuterRef("campaign__sender_phone_number_id"),
+    ).order_by()
+    recipients = BroadcastRecipient.objects.filter(campaign_id__in=ids).annotate(
+        effective_status=Coalesce(Subquery(matched_log.values("status")[:1]), Case(
+            When(status="sending", attempted_at__lt=timezone.now() - timedelta(seconds=90), then=Value("unknown")),
+            default=F("status"), output_field=CharField(),
+        )),
+        has_wamid=Case(When(wamid="", then=Value(0)), default=Value(1)),
+    ).order_by().values("campaign_id", "effective_status", "has_wamid").annotate(count=Count("id"))
+    roster_ids = set()
+    for group in recipients:
+        roster_ids.add(group["campaign_id"])
+        stats = summaries[group["campaign_id"]]
+        state = group["effective_status"] if group["effective_status"] in REPORT_STATES else "unknown"
+        stats[state] += group["count"]
+        stats["total"] += group["count"]
+        stats["accepted"] += group["count"] if group["has_wamid"] else 0
+    legacy_ids = set(ids) - roster_ids
+    if legacy_ids:
+        logs = WhatsAppMessageLog.objects.filter(campaign_id__in=legacy_ids).annotate(
+            has_wamid=Case(When(wamid="", then=Value(0)), default=Value(1)),
+        ).order_by().values("campaign_id", "status", "has_wamid").annotate(count=Count("id"))
+        for group in logs:
+            stats = summaries[group["campaign_id"]]
+            state = group["status"] if group["status"] in REPORT_STATES else "unknown"
+            stats[state] += group["count"]
+            stats["total"] += group["count"]
+            stats["accepted"] += group["count"] if group["has_wamid"] else 0
+    for campaign in campaigns:
+        stats = summaries[campaign.pk]
+        missing = max(0, campaign.total_recipients - stats["total"])
+        stats["not_recorded"] += missing
+        stats["total"] += missing
+    return summaries

@@ -550,6 +550,8 @@ class BroadcastCampaignSerializer(serializers.ModelSerializer):
         return campaign
 
     def get_stats(self, obj):
+        if hasattr(obj, "_summary_stats"):
+            return obj._summary_stats
         from MessageTemplates.services.campaign_reporting import campaign_rows, campaign_stats
         return campaign_stats(campaign_rows(obj))
 
