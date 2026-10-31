@@ -50,8 +50,8 @@ class UserSerializer(serializers.ModelSerializer):
         role = validated_data.pop("role", "staff")
         department = validated_data.pop("department", None)
         
-        # Validate: admin and super_admin should not have a department
-        if role in ["admin", "super_admin"]:
+        # Administrative and security users are not assigned to a department.
+        if role in ["admin", "super_admin", "security"]:
             department = None
 
         user = User(**validated_data, role=role, department=department)
@@ -67,9 +67,9 @@ class UserSerializer(serializers.ModelSerializer):
         # Handle password separately - it needs to be hashed
         password = validated_data.pop("password", None)
         
-        # Validate: admin and super_admin should not have a department
+        # Administrative and security users are not assigned to a department.
         role = validated_data.get("role", instance.role)
-        if role in ["admin", "super_admin"]:
+        if role in ["admin", "super_admin", "security"]:
             validated_data["department"] = None
             # Also clear it on the instance if role is being changed
             if role != instance.role:
