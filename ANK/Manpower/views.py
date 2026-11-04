@@ -630,7 +630,12 @@ class ManpowerRequirementDetail(DepartmentAccessMixin, APIView):
                 if lock_error:
                     return lock_error
 
-            if any(_allocation_has_finalized_records(allocation) for allocation in obj.allocations.all()):
+            # Released allocations retain their agreements and financial history.
+            # Deleting the requirement only clears their nullable requirement FK.
+            if any(
+                _allocation_has_finalized_records(allocation)
+                for allocation in obj.allocations.exclude(status="released")
+            ):
                 return Response(
                     {"detail": "This role has signed or financial records and cannot be deleted."},
                     status=status.HTTP_409_CONFLICT,

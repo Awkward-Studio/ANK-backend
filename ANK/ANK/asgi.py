@@ -4,6 +4,9 @@ import os
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application
+from ANK.daphne_uploads import configure_daphne_uploads
+
+configure_daphne_uploads()
 
 logger = logging.getLogger(__name__)
 logger.info("ASGI module loaded; DJANGO_SETTINGS_MODULE=%s", os.environ.get("DJANGO_SETTINGS_MODULE"))

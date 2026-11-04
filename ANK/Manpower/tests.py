@@ -880,6 +880,79 @@ class ManpowerTestCase(TestCase):
         response = FreelancerAllocationDetail.as_view()(request, pk=allocation.id)
         self.assertEqual(response.status_code, 200, response.data)
 
+    def test_requirement_delete_preserves_released_signed_allocation(self):
+        from django.urls import resolve
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import ManpowerRequirementDetail
+
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department, name="Coordinator"
+        )
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            requirement=requirement,
+            status="released",
+            assigned_by=self.user,
+        )
+        cost_sheet = EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("4000.00"),
+            days_planned=Decimal("2.0"),
+        )
+        mou = MoU.objects.create(
+            allocation=allocation,
+            status="accepted",
+            template_data={"terms": "Original signed terms"},
+        )
+        adjustment = PostEventAdjustment.objects.create(allocation=allocation)
+        path = f"/api/manpower/requirements/{requirement.id}/"
+        request = APIRequestFactory().delete(path)
+        request.resolver_match = resolve(path)
+        force_authenticate(request, user=self.user)
+
+        response = ManpowerRequirementDetail.as_view()(request, pk=requirement.id)
+
+        self.assertEqual(response.status_code, 204, response.data)
+        self.assertFalse(ManpowerRequirement.objects.filter(pk=requirement.id).exists())
+        allocation.refresh_from_db()
+        self.assertIsNone(allocation.requirement_id)
+        self.assertEqual(allocation.status, "released")
+        self.assertEqual(allocation.event_department_id, self.event_department.id)
+        self.assertTrue(EventCostSheet.objects.filter(pk=cost_sheet.id).exists())
+        self.assertTrue(PostEventAdjustment.objects.filter(pk=adjustment.id).exists())
+        mou.refresh_from_db()
+        self.assertEqual(mou.status, "accepted")
+        self.assertEqual(mou.template_data, {"terms": "Original signed terms"})
+
+    def test_requirement_delete_still_blocks_active_signed_allocation(self):
+        from django.urls import resolve
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import ManpowerRequirementDetail
+
+        requirement = ManpowerRequirement.objects.create(
+            event_department=self.event_department, name="Coordinator"
+        )
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            requirement=requirement,
+            status="confirmed",
+            assigned_by=self.user,
+        )
+        MoU.objects.create(allocation=allocation, status="accepted")
+        path = f"/api/manpower/requirements/{requirement.id}/"
+        request = APIRequestFactory().delete(path)
+        request.resolver_match = resolve(path)
+        force_authenticate(request, user=self.user)
+
+        response = ManpowerRequirementDetail.as_view()(request, pk=requirement.id)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(ManpowerRequirement.objects.filter(pk=requirement.id).exists())
+        allocation.refresh_from_db()
+        self.assertEqual(allocation.requirement_id, requirement.id)
+
     def test_actuals_approval_requires_signature_and_atomically_creates_invoice(self):
         from django.urls import resolve
         from django.utils import timezone
@@ -1268,3 +1341,74 @@ class ManpowerTestCase(TestCase):
             approval_text,
             "Digitally Signed by Divya Jain - Manager People & Strategy",
         )
+
+    def test_invoice_pdf_wraps_columns_and_preserves_section_spacing(self):
+        from unittest.mock import patch
+        from .public_views import INVOICE_PDF, generate_invoice_pdf
+
+        self.freelancer.address = "Apartment 706, Long Building Name, Mumbai. " * 6
+        self.freelancer.save()
+        self.event.name = "Wedding celebration with multiple ceremonies and hospitality services"
+        self.event.venue = "Reception halls and event spaces at a venue with a long name"
+        self.event.save()
+        allocation = FreelancerAllocation.objects.create(
+            freelancer=self.freelancer,
+            event_department=self.event_department,
+            assigned_by=self.user,
+            status="confirmed",
+        )
+        EventCostSheet.objects.create(
+            allocation=allocation,
+            negotiated_rate=Decimal("8000.00"),
+            days_planned=Decimal("3.0"),
+        )
+        adjustment = PostEventAdjustment.objects.create(
+            allocation=allocation,
+            total_engagement_days=Decimal("3.0"),
+            admin_approval_status="approved",
+        )
+        invoice = InvoiceWorkflow.objects.create(
+            adjustment=adjustment,
+            event=self.event,
+            event_department=self.event_department,
+            freelancer=self.freelancer,
+            invoice_number="INV-LAYOUT-TEST",
+            payable_amount=Decimal("24000.00"),
+        )
+        blocks = []
+
+        class RecordingPDF(INVOICE_PDF):
+            measuring = False
+
+            def multi_cell(self, *args, **kwargs):
+                start = (self.page_no(), self.get_x(), self.get_y())
+                previously_measuring = self.measuring
+                self.measuring = self.measuring or bool(kwargs.get("dry_run"))
+                try:
+                    result = super().multi_cell(*args, **kwargs)
+                finally:
+                    self.measuring = previously_measuring
+                if not previously_measuring and not kwargs.get("dry_run"):
+                    blocks.append({
+                        "text": kwargs.get("text", kwargs.get("txt", "")),
+                        "width": kwargs.get("w"),
+                        "start": start,
+                        "end": (self.page_no(), self.get_y()),
+                    })
+                return result
+
+        with patch("Manpower.public_views.INVOICE_PDF", RecordingPDF):
+            content = generate_invoice_pdf(invoice)
+
+        self.assertTrue(content.startswith(b"%PDF"))
+        provider = next(b for b in blocks if b["text"].startswith("NAME:"))
+        metadata = next(b for b in blocks if b["text"].startswith("INV.NO."))
+        self.assertGreaterEqual(metadata["start"][2], provider["end"][1] + 8)
+        self.assertEqual(metadata["start"][0], provider["end"][0])
+        service = next(b for b in blocks if b["text"].startswith(self.event.name))
+        self.assertGreater(service["end"][1] - service["start"][2], 8)
+        subtotal = next(b for b in blocks if b["text"] == "SUB TOTAL")
+        self.assertGreaterEqual(subtotal["start"][2], service["end"][1])
+        approval = next(b for b in blocks if b["text"].startswith("Digitally Signed by Divya"))
+        self.assertLessEqual(approval["width"], 170 / 3 + 0.01)
+        self.assertGreaterEqual(approval["start"][1], 20 + 170 * 2 / 3 - 0.01)

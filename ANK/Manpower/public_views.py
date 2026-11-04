@@ -140,8 +140,57 @@ class INVOICE_PDF(FPDF):
 def generate_invoice_pdf(invoice):
     pdf = INVOICE_PDF(orientation="P", unit="mm", format="A4")
     pdf.set_margins(20, 20, 20)
+    pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
+    pdf.set_text_color(0)
     epw = pdf.epw
+
+    def wrapped_text(width, text, align="L", line_height=5):
+        pdf.multi_cell(
+            w=width, h=line_height, text=clean_text(text), align=align,
+            new_x="LMARGIN", new_y="NEXT",
+        )
+
+    def columns(texts, widths, aligns, gap=0):
+        """Advance below the tallest column, with each block kept on one page."""
+        heights = [
+            pdf.multi_cell(
+                w=width, h=5, text=clean_text(text), align=align,
+                dry_run=True, output="HEIGHT",
+            )
+            for text, width, align in zip(texts, widths, aligns)
+        ]
+        height = max(heights)
+        if pdf.will_page_break(height):
+            pdf.add_page()
+            pdf.set_text_color(0)
+        y = pdf.get_y()
+        x = pdf.l_margin
+        for text, width, align in zip(texts, widths, aligns):
+            pdf.set_xy(x, y)
+            wrapped_text(width, text, align)
+            x += width + gap
+        pdf.set_xy(pdf.l_margin, y + height)
+
+    def table_row(texts, widths, aligns, min_height=8, fill=False):
+        height = max(
+            min_height,
+            max(pdf.multi_cell(
+                w=width, h=5, text=clean_text(text), align=align,
+                dry_run=True, output="HEIGHT",
+            ) for text, width, align in zip(texts, widths, aligns)) + 2,
+        )
+        if pdf.will_page_break(height):
+            pdf.add_page()
+            pdf.set_text_color(0)
+        y = pdf.get_y()
+        x = pdf.l_margin
+        for text, width, align in zip(texts, widths, aligns):
+            pdf.rect(x, y, width, height, style="DF" if fill else "D")
+            pdf.set_xy(x, y + 1)
+            wrapped_text(width, text, align)
+            x += width
+        pdf.set_xy(pdf.l_margin, y + height)
 
     f = invoice.freelancer
     adj = invoice.adjustment
@@ -149,83 +198,57 @@ def generate_invoice_pdf(invoice):
 
     # 1. Parties Section
     pdf.set_font("helvetica", "B", 10)
-    y_parties = pdf.get_y()
-
-    # LEFT: Freelancer (Provider)
-    pdf.set_x(pdf.l_margin)
     pan_number = getattr(f, "pan_number", "") or (f.id_number if f.id_type == "PAN" else "")
     aadhaar_number = getattr(f, "aadhaar_number", "") or (f.id_number if f.id_type == "AADHAR" else "")
-    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text(f"NAME: {f.name}\nADDRESS: {f.address or 'N/A'}\nMOBILE: {f.contact_phone or 'N/A'}\nE-MAIL: {f.email or 'N/A'}\nPAN.NO: {pan_number or 'N/A'}\nAADHAAR.NO: {aadhaar_number or 'N/A'}"))
-
-    # RIGHT: Company (Receiver)
-    pdf.set_xy(pdf.l_margin + epw/2 + 5, y_parties)
-    pdf.multi_cell(w=epw/2 - 5, h=5, txt=clean_text("ANK ENTERTAINMENT LLP\n802, Sun Paradise Business Plaza,\nSenapati Bapat Marg, Opp. Kamla Mills,\nRailway Colony, Lower Parel, Mumbai - 400013"), align="R")
-    pdf.ln(10)
+    provider = (f"NAME: {f.name}\nADDRESS: {f.address or 'N/A'}\n"
+                f"MOBILE: {f.contact_phone or 'N/A'}\nE-MAIL: {f.email or 'N/A'}\n"
+                f"PAN.NO: {pan_number or 'N/A'}\nAADHAAR.NO: {aadhaar_number or 'N/A'}")
+    receiver = ("ANK ENTERTAINMENT LLP\n802, Sun Paradise Business Plaza,\n"
+                "Senapati Bapat Marg, Opp. Kamla Mills,\n"
+                "Railway Colony, Lower Parel, Mumbai - 400013")
+    columns([provider, receiver], [epw / 2 - 5] * 2, ["L", "R"], gap=10)
+    pdf.ln(8)
 
     # 2. Metadata Section
     pdf.set_font("helvetica", "B", 9)
-    pdf.cell(w=epw*0.5, h=6, txt=clean_text(f"INV.NO .: {invoice.invoice_number}"))
-    pdf.cell(w=epw*0.5, h=6, txt=clean_text(f"DATE: {invoice.created_at.strftime('%d-%m-%Y')}"), align="R", ln=1)
-
+    columns(
+        [f"INV.NO.: {invoice.invoice_number}", f"DATE: {invoice.created_at.strftime('%d-%m-%Y')}"],
+        [epw * 0.65, epw * 0.35], ["L", "R"],
+    )
     pdf.set_font("helvetica", "", 9)
-    pdf.cell(w=epw, h=6, txt=clean_text(f"NAME OF DEPARTMENT: {invoice.event_department.department.name.upper()}"), ln=1)
-
+    wrapped_text(epw, f"NAME OF DEPARTMENT: {invoice.event_department.department.name.upper()}")
     periods_str = ", ".join([f"{p['start']} to {p['end']}" for p in adj.engagement_periods]) if adj.engagement_periods else "N/A"
-    pdf.cell(w=epw, h=6, txt=clean_text(f"PERIOD OF SERVICE ( DATES ): {periods_str}"), ln=1)
-    pdf.cell(w=epw, h=6, txt=clean_text(f"NO.OF WORKING DAYS: {adj.total_engagement_days}"), ln=1)
-
+    wrapped_text(epw, f"PERIOD OF SERVICE (DATES): {periods_str}")
+    wrapped_text(epw, f"NO. OF WORKING DAYS: {adj.total_engagement_days}")
     rate = adj.override_negotiated_rate if adj.override_negotiated_rate else cost.negotiated_rate
-    pdf.cell(w=epw, h=6, txt=clean_text(f"Rs.{float(rate):,.2f}/- per day"), ln=1)
+    wrapped_text(epw, f"Rs.{float(rate):,.2f}/- per day")
     pdf.ln(4)
 
-    # 3. Main Service Table
+    # 3. Main Service Table. Wrap descriptions without crossing numeric columns.
     pdf.set_font("helvetica", "B", 9)
     pdf.set_fill_color(245, 245, 245)
-    pdf.cell(w=epw*0.5, h=8, txt="NATURE OF SERVICE", border=1, fill=True)
-    pdf.cell(w=epw*0.15, h=8, txt="DAYS", border=1, fill=True, align="C")
-    pdf.cell(w=epw*0.15, h=8, txt="RATE", border=1, fill=True, align="C")
-    pdf.cell(w=epw*0.2, h=8, txt="TOTAL", border=1, fill=True, align="R")
-    pdf.ln()
-
+    table_row(["NATURE OF SERVICE", "DAYS", "RATE", "TOTAL"],
+              [epw * 0.5, epw * 0.15, epw * 0.15, epw * 0.2],
+              ["L", "C", "C", "R"], fill=True)
     pdf.set_font("helvetica", "", 9)
-    # Line 1: Professional Fees
-    pdf.cell(w=epw*0.5, h=8, txt=clean_text(f"{invoice.event.name} @ {invoice.event.venue or 'Venue TBD'}"), border=1)
-    pdf.cell(w=epw*0.15, h=8, txt=str(adj.total_engagement_days), border=1, align="C")
-    pdf.cell(w=epw*0.15, h=8, txt=f"{float(rate):,.2f}", border=1, align="C")
     fees_total = float(adj.total_engagement_days * rate)
-    pdf.cell(w=epw*0.2, h=8, txt=f"{fees_total:,.2f}", border=1, align="R")
-    pdf.ln()
-
-    # Sub Total (Professional Fees only)
+    table_row([f"{invoice.event.name} @ {invoice.event.venue or 'Venue TBD'}",
+               str(adj.total_engagement_days), f"{float(rate):,.2f}", f"{fees_total:,.2f}"],
+              [epw * 0.5, epw * 0.15, epw * 0.15, epw * 0.2], ["L", "C", "C", "R"])
     pdf.set_font("helvetica", "B", 9)
-    pdf.cell(w=epw*0.8, h=8, txt="SUB TOTAL", border=1, align="R")
-    pdf.cell(w=epw*0.2, h=8, txt=f"{fees_total:,.2f}", border=1, align="R")
-    pdf.ln()
-
-    # Travelling
+    table_row(["SUB TOTAL", f"{fees_total:,.2f}"], [epw * 0.8, epw * 0.2], ["R", "R"])
     pdf.set_font("helvetica", "", 9)
     total_travel = float(cost.travel_costs) + float(adj.travel_adjustments)
-    pdf.cell(w=epw*0.8, h=8, txt="TRAVELLING - Reimbursments & Adjustments (Supporting must)", border=1)
-    pdf.cell(w=epw*0.2, h=8, txt=f"{total_travel:,.2f}", border=1, align="R")
-    pdf.ln()
-
-    # F & B
-    pdf.cell(w=epw*0.8, h=8, txt="F & B - Meal Logistics & Per Diem (Supporting must)", border=1)
-    pdf.cell(w=epw*0.2, h=8, txt=f"{float(adj.actual_meal_allowance):,.2f}", border=1, align="R")
-    pdf.ln()
-
-    # Misc
+    table_row(["TRAVELLING - Reimbursements & Adjustments (Supporting must)", f"{total_travel:,.2f}"],
+              [epw * 0.8, epw * 0.2], ["L", "R"])
+    table_row(["F & B - Meal Logistics & Per Diem (Supporting must)", f"{float(adj.actual_meal_allowance):,.2f}"],
+              [epw * 0.8, epw * 0.2], ["L", "R"])
     if float(adj.other_adjustments) != 0:
-        pdf.cell(w=epw*0.8, h=8, txt="MISCELLANEOUS / PENALTIES", border=1)
-        pdf.cell(w=epw*0.2, h=8, txt=f"{float(adj.other_adjustments):,.2f}", border=1, align="R")
-        pdf.ln()
-
-    # Grand Total
+        table_row(["MISCELLANEOUS / PENALTIES", f"{float(adj.other_adjustments):,.2f}"],
+                  [epw * 0.8, epw * 0.2], ["L", "R"])
     pdf.set_font("helvetica", "B", 10)
-    pdf.cell(w=epw*0.8, h=10, txt="GRAND TOTAL", border=1, align="R")
-    pdf.cell(w=epw*0.2, h=10, txt=f"{float(invoice.payable_amount):,.2f}", border=1, align="R")
-    pdf.ln(8)
-
+    table_row(["GRAND TOTAL", f"{float(invoice.payable_amount):,.2f}"],
+              [epw * 0.8, epw * 0.2], ["R", "R"], min_height=10)
     # Amount in words
     pdf.ln(2)
     pdf.set_font("helvetica", "B", 9)
@@ -235,17 +258,12 @@ def generate_invoice_pdf(invoice):
     pdf.ln(10)
 
     # 4. Bank Details & Signature
-    y_bank = pdf.get_y()
     pdf.set_font("helvetica", "", 9)
     bank_text = (f"A/C. NAME: {f.bank_account_name or 'N/A'}\n"
                  f"NAME OF BANK: {f.bank_name or 'N/A'}\n"
                  f"A/C. NO.: {f.bank_account_number or 'N/A'}\n"
                  f"BRANCH: {f.bank_branch or 'N/A'}\n"
                  f"IFSC CODE: {f.bank_ifsc or 'N/A'}")
-    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(bank_text))
-
-    pdf.set_xy(pdf.l_margin + epw/2, y_bank)
-    pdf.set_font("helvetica", "B", 9)
     freelancer_signature = (adj.freelancer_digital_signature or "").strip()
     if freelancer_signature:
         freelancer_signature_text = (
@@ -255,23 +273,28 @@ def generate_invoice_pdf(invoice):
         )
     else:
         freelancer_signature_text = "SIGNATURE OF FREELANCER\n\nMANDATORY"
-    pdf.multi_cell(w=epw/2, h=5, txt=clean_text(freelancer_signature_text), align="R")
+    columns([bank_text, freelancer_signature_text], [epw / 2 - 4] * 2, ["L", "R"], gap=8)
     pdf.ln(15)
 
-    # 5. Approvals Footer
+    # 5. Approvals Footer. Keep the signature within its third of the page.
+    approval_text, approval_at = get_invoice_approval_details(invoice)
+    approval_details = approval_text
+    if approval_at:
+        approval_details += f"\nApproval Date: {approval_at.strftime('%d-%m-%Y %H:%M')}"
+    pdf.set_font("helvetica", "", 8)
+    approval_height = pdf.multi_cell(w=epw / 3, h=5, text=clean_text(approval_details),
+                                    dry_run=True, output="HEIGHT")
+    if pdf.will_page_break(6 + 8 + approval_height + 6 + 6):
+        pdf.add_page()
+        pdf.set_text_color(0)
     pdf.set_font("helvetica", "B", 8)
+    pdf.set_x(pdf.l_margin)
     pdf.cell(w=epw/3, h=6, txt="Hired By", border="T", align="C")
     pdf.cell(w=epw/3, h=6, txt="Sanctioned By", border="T", align="C")
     pdf.cell(w=epw/3, h=6, txt="Approved By", border="T", align="C", ln=1)
-
     pdf.ln(8)
     pdf.set_font("helvetica", "", 8)
-    approval_text, approval_at = get_invoice_approval_details(invoice)
-    pdf.cell(w=epw/3, h=5, txt="", align="C")
-    pdf.cell(w=epw/3, h=5, txt="", align="C")
-    pdf.cell(w=epw/3, h=5, txt=clean_text(approval_text), align="C", ln=1)
-    if approval_at:
-        pdf.cell(w=epw, h=5, txt=clean_text(f"Approval Date: {approval_at.strftime('%d-%m-%Y %H:%M')}"), align="R", ln=1)
+    columns(["", "", approval_details], [epw / 3] * 3, ["C"] * 3)
 
     pdf.ln(6)
     pdf.set_font("helvetica", "B", 8)
