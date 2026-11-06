@@ -15,7 +15,8 @@ from MessageTemplates.whatsapp_views.hosted_reconciliation import (
     HostedReconciliationSnapshotView,
 )
 from MessageTemplates.whatsapp_views.media_upload import WhatsAppMediaUploadView
-from MessageTemplates.whatsapp_views.qr_test_media import issue_qr_test_media
+# TEMPORARY_MESSAGING_INTEGRATION: remove with MessageTemplates/temporary_tools.
+from MessageTemplates.temporary_tools.qr_test_media import issue_qr_test_media
 from MessageTemplates.views import (
     EventMessageTemplatesAPIView,
     MessageTemplateList,
@@ -71,6 +72,7 @@ urlpatterns = [
     ),
     path("whatsapp/templates/", WhatsAppTemplateManagementView.as_view(), name="whatsapp-template-management"),
     path("whatsapp/media-upload/", WhatsAppMediaUploadView.as_view(), name="whatsapp-media-upload"),
+    # TEMPORARY_MESSAGING_INTEGRATION: QR test endpoint.
     path("whatsapp/qr-test-media/", issue_qr_test_media, name="whatsapp-qr-test-media"),
     path(
         "whatsapp/reconciliation/snapshot/",
