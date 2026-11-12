@@ -116,6 +116,22 @@ class RoleAuthorizationTestCase(TestCase):
         self.assertEqual(admin_response.status_code, 201)
         self.assertEqual(staff_response.status_code, 403)
 
+    def test_admin_can_create_security_user_without_department(self):
+        payload = {
+            "email": "security@example.com",
+            "password": "password123",
+            "name": "Security User",
+            "role": "security",
+        }
+
+        request = self.factory.post("/api/users/", payload, format="json")
+        force_authenticate(request, user=self.admin)
+        response = UserList.as_view()(request)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["role"], "security")
+        self.assertIsNone(response.data["department"])
+
     def test_department_head_requires_department_on_create(self):
         serializer = UserSerializer(data={
             "email": "new-head@example.com",

@@ -44,6 +44,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ("staff", "Staff"),  # regular operational user
         ("super_admin", "Super Admin"),  # can assign staff and super admin
         ("department_head", "Department Head"),  # can assign staff and department head
+        ("security", "Security"),  # security operations user
     ]
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
 
