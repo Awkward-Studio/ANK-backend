@@ -79,7 +79,16 @@
         {
           "name": "WHATSAPP_ENCRYPTION_KEY",
           "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/WHATSAPP_ENCRYPTION_KEY:WHATSAPP_ENCRYPTION_KEY:AWSCURRENT:"
+        },
+        {
+          "name": "GOOGLE_CALENDAR_CLIENT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/GOOGLE_CALENDAR_CLIENT_SECRET-Sr8xWb"
+        },
+        {
+          "name": "GOOGLE_CALENDAR_CLIENT_ID",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:912448661225:secret:ank/prod/GOOGLE_CALENDAR_CLIENT_ID-4l76CY"
         }
+        
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
