@@ -45,6 +45,9 @@ from Staff.models import (
 )
 
 
+from Staff.team_tasks import ImportSerializer, mark_saved_steps, save_meeting_steps
+
+
 ATTEMPT_LIFETIME = timedelta(minutes=10)
 ADMIN_ROLES = {"admin", "super_admin"}
 SCHEDULER_ROLES = ADMIN_ROLES | {"department_head"}
@@ -345,7 +348,7 @@ def event_data(event, meeting, user):
         "description": "" if private else event.get("description", ""),
         "location": "" if private else event.get("location", ""),
         "attendees": [] if private else [
-            {"email": guest["email"], "response": guest.get("responseStatus")}
+            {"email": guest["email"], "name": guest.get("displayName", ""), "response": guest.get("responseStatus")}
             for guest in event.get("attendees", []) if guest.get("email")
         ],
         "html_link": "" if private else link,
@@ -461,16 +464,25 @@ def google_calendar_event(request, event_id):
 
 
 @never_cache
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def google_calendar_meeting_notes(request, event_id):
     if not can_preview_notes(request.user):
         raise PermissionDenied()
     try:
-        return Response(preview_meeting_notes(
+        document = preview_meeting_notes(
             access_token(notes=True), event_id, calendar_token=access_token(),
             document_id=request.query_params.get("document"),
-        ))
+        )
+        if request.method == "POST":
+            serializer = ImportSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            return Response(save_meeting_steps(
+                request.user, settings.GOOGLE_CALENDAR_ID, event_id,
+                document, serializer.validated_data["steps"],
+            ))
+        mark_saved_steps(settings.GOOGLE_CALENDAR_ID, event_id, document.get("suggested_steps", []))
+        return Response(document)
     except CalendarError as error:
         if error.status_code == 424:
             raise CalendarError(

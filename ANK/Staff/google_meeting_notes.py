@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from Staff.google_calendar_service import CalendarError, calendar_request, google_request
+from Staff.google_docs_content import render_content, suggested_steps
 
 
 NOTES_SCOPES = (
@@ -138,7 +139,7 @@ def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None):
 
     attached = attached_notes_documents(event)
     if attached:
-        return select_notes_document(token, attached, document_id)
+        return {**select_notes_document(token, attached, document_id), "meeting_title": event.get("summary", "")}
 
     start, end = event_times(event)
     if end < timezone.now() - timedelta(days=30):
@@ -180,30 +181,31 @@ def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None):
 
     if not documents:
         raise CalendarError("Google Meet has no generated Gemini notes for this call.", 404)
-    return select_notes_document(token, documents, document_id)
+    return {**select_notes_document(token, documents, document_id), "meeting_title": event.get("summary", "")}
+
+
+def document_link(link, document_url):
+    if link.get("url"):
+        return link["url"]
+    if link.get("tabId"):
+        return f"{document_url}?{urlencode({'tab': link['tabId']})}"
+    for kind in ("heading", "bookmark"):
+        if target := link.get(kind):
+            query = f"?{urlencode({'tab': target['tabId']})}" if target.get("tabId") else ""
+            return f"{document_url}{query}#{urlencode({kind: target.get('id', '')})}"
+    return ""
 
 
 def notes_links(runs, document_url):
     labels = {}
     for run in runs:
-        link = run.get("textStyle", {}).get("link", {})
-        url = link.get("url") or ""
-        if not url and link.get("tabId"):
-            url = f"{document_url}?{urlencode({'tab': link['tabId']})}"
-        elif not url and link.get("heading"):
-            heading = link["heading"]
-            url = f"{document_url}?{urlencode({'tab': heading.get('tabId', '')})}"
-            url += f"#{urlencode({'heading': heading.get('id', '')})}"
-        elif not url and link.get("bookmark"):
-            bookmark = link["bookmark"]
-            url = f"{document_url}?{urlencode({'tab': bookmark.get('tabId', '')})}"
-            url += f"#{urlencode({'bookmark': bookmark.get('id', '')})}"
+        url = document_link(run.get("textStyle", {}).get("link", {}), document_url)
         if url.startswith(("https://docs.google.com/", "https://drive.google.com/")):
             labels[url] = labels.get(url, "") + run.get("content", "")
     return [
         {"title": label.strip(), "url": url}
         for url, label in labels.items()
-        if re.search(r"\b(?:notes?|next steps|action items|details)\b", label, re.IGNORECASE)
+        if re.search(r"\b(?:notes?|next steps|action items|details|transcript)\b", label, re.IGNORECASE)
     ]
 
 
@@ -226,17 +228,56 @@ def full_notes_label(title):
     return re.search(r"\bfull (?:meeting )?notes\b", title, re.IGNORECASE)
 
 
-def read_notes_document(token, document_id):
-    document = google_request(
+def fetch_document(token, document_id):
+    return google_request(
         "GET", f"{DOCS_API}/documents/{document_id}", token=token,
         params={"includeTabsContent": "true"},
     )
+
+
+
+def render_tab(data, document_url):
+    return render_content(
+        data.get("body", {}).get("content", []),
+        lambda link: document_link(link, document_url), data.get("lists", {}),
+    )
+
+
+def linked_document_tab(token, link, kind, current_id):
+    target = urlsplit(link["url"])
+    match = re.fullmatch(r"/document/(?:u/\d+/)?d/([A-Za-z0-9_-]+)(?:/[^/]*)?/?", target.path)
+    if target.netloc != "docs.google.com" or not match or match[1] == current_id:
+        return None
+    try:
+        document = fetch_document(token, match[1])
+    except CalendarError:
+        return None
+    tabs = list(document_tabs(document.get("tabs", [])))
+    requested = parse_qs(target.query).get("tab", [None])[0]
+    if requested:
+        tab = next((item for item in tabs if item.get("tabProperties", {}).get("tabId") == requested), None)
+    elif kind == "transcript":
+        tab = next((item for item in tabs if "transcript" in tab_title(item)), tabs[0] if tabs else None)
+    else:
+        tab = next((item for item in tabs if full_notes_label(tab_title(item))), tabs[0] if tabs else None)
+    data = tab.get("documentTab", {}) if tab else document
+    return {
+        "id": f"linked-{kind}",
+        "title": link["title"],
+        "kind": kind,
+        "url": link["url"],
+        "html": render_tab(data, notes_url(match[1])),
+    }, list(text_runs(data.get("body", {}).get("content", [])))
+
+
+def read_notes_document(token, document_id):
+    document = fetch_document(token, document_id)
     url = notes_url(document_id)
     original_url = url
-    tabs = [
-        tab for tab in document_tabs(document.get("tabs", []))
-        if "transcript" not in tab_title(tab)
-    ]
+    all_tabs = list(document_tabs(document.get("tabs", [])))
+    tabs = [tab for tab in all_tabs if "transcript" not in tab_title(tab)]
+    full_tab = None
+    notes_tab = None
     links = []
     if tabs:
         notes_tab = next((tab for tab in tabs if "notes" in tab_title(tab)), tabs[0])
@@ -272,7 +313,54 @@ def read_notes_document(token, document_id):
 
     links_by_url = {link["url"]: link for link in links + notes_links(runs, url)}
     text = "".join(run.get("content", "") for run in runs).strip()
+    sections = []
+    if not all_tabs:
+        all_tabs = [{"tabProperties": {"title": "Full notes"}, "documentTab": document}]
+    for index, tab in enumerate(all_tabs):
+        props = tab.get("tabProperties", {})
+        tab_id = props.get("tabId")
+        title = props.get("title") or f"Document tab {index + 1}"
+        if "transcript" in title.casefold():
+            kind = "transcript"
+        elif tab is full_tab or (tab is notes_tab and full_tab is None) or not document.get("tabs"):
+            kind = "full"
+        elif tab is notes_tab or re.search(r"quick|summary", title, re.IGNORECASE):
+            kind = "quick"
+        else:
+            kind = "other"
+        data = tab.get("documentTab", {})
+        sections.append({
+            "id": tab_id or f"tab-{index}",
+            "title": title,
+            "kind": kind,
+            "url": f"{url}?{urlencode({'tab': tab_id})}" if tab_id else url,
+            "html": render_tab(data, url),
+        })
+    for kind in ("full", "transcript"):
+        if (kind == "full" and full_tab is not None) or (
+            kind == "transcript" and any(section["kind"] == kind for section in sections)
+        ):
+            continue
+        matches = (link for link in links_by_url.values() if (
+            full_notes_label(link["title"]) if kind == "full" else link["title"].casefold() == "transcript"
+        ))
+        link = next(matches, None)
+        if link:
+            linked = linked_document_tab(token, link, kind, document_id)
+            if not linked:
+                continue
+            section, linked_runs = linked
+            if kind == "full":
+                for existing in sections:
+                    if existing["kind"] == "full":
+                        existing["kind"] = "quick"
+                original_url = section["url"]
+                text = "".join(run.get("content", "") for run in linked_runs).strip()
+            sections.append(section)
     return {
+        "document_id": document_id,
+        "tabs": sections,
+        "suggested_steps": suggested_steps(text),
         "title": document.get("title", "Gemini notes"),
         "text": text[:24000],
         "truncated": len(text) > 24000,

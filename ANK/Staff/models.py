@@ -101,3 +101,27 @@ class GoogleCalendarMeeting(models.Model):
                 name="staff_google_calendar_event_unique",
             )
         ]
+
+
+class TeamTask(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        TODO = "todo", "To do"
+        IN_PROGRESS = "in_progress", "In progress"
+        DONE = "done", "Done"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    suggested_owner = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    due_date = models.DateField(null=True, blank=True)
+    assignee = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="team_tasks")
+    created_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="created_team_tasks")
+    source_key = models.CharField(max_length=64, unique=True)
+    meeting_title = models.CharField(max_length=500, blank=True)
+    notes_url = models.URLField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "id"]

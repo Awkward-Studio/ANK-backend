@@ -6,9 +6,9 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from Staff.google_calendar_service import EVENT_SCOPE, cipher
+from Staff.google_calendar_service import CalendarError, EVENT_SCOPE, cipher
 from Staff.google_meeting_notes import NOTES_SCOPES
-from Staff.models import GoogleCalendarConnection, User
+from Staff.models import GoogleCalendarConnection, TeamTask, User
 
 
 BASE = "/api/team-calendar/"
@@ -177,11 +177,11 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(self.client.get(NOTES, {"document": "unrelated"}).status_code, 404)
         google.assert_not_called()
 
-        google.return_value = {"body": {"content": [{"paragraph": {"elements": [
+        google.side_effect = [{"body": {"content": [{"paragraph": {"elements": [
             {"textRun": {"content": "Open full ", "textStyle": {"link": {"url": first_url}}}},
             {"textRun": {"content": "notes", "textStyle": {"link": {"url": first_url}}}},
             {"textRun": {"content": "\nSuggested next steps\nReview the schedule.\n"}},
-        ]}}]}}
+        ]}}]}}, CalendarError("Document inaccessible", 424)]
         response = self.client.get(NOTES, {"document": "second"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["url"], second_url)
@@ -238,3 +238,89 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(preview["text"], "Suggested next steps\nReview the schedule.")
         self.assertEqual(preview["url"], full_url)
         self.assertEqual(preview["links"], [{"title": "View the full notes", "url": full_url}])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_full_notes_drafts_are_idempotent_and_assignable_without_an_ank_event(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event, "summary": "Partner meeting",
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes/edit"}],
+        }
+
+        def tab(tab_id, title, paragraphs):
+            return {
+                "tabProperties": {"tabId": tab_id, "title": title},
+                "documentTab": {"body": {"content": [{"paragraph": {
+                    "elements": [{"textRun": {"content": line + "\n", "textStyle": {"bold": True}}}],
+                }} for line in paragraphs]}},
+            }
+
+        google.return_value = {"tabs": [
+            tab("quick", "Quick notes", ["Summary", "<script>unsafe markup</script>"]),
+            tab("full", "Full notes", [
+                "Decisions",
+                "Partnership tiers",
+                "Next steps",
+                "[Internal Staff] Send Partnership Details: Send project details for review.",
+                "[External Contact] Check Celebrity Availability: Verify scheduling.",
+                "[External Contact] Review Event Proposal: Provide feedback on commercials.",
+                "Details",
+                "Partnership Next Steps: Narrative discussion outside the list.",
+            ]),
+            tab("transcript", "Transcript", ["(00:01:18) Internal Staff: Have you seen the proposal?"]),
+        ]}
+        payload = self.client.get(NOTES).json()
+        tabs = {tab["kind"]: tab["html"] for tab in payload["tabs"]}
+        self.assertIn("&lt;script&gt;", tabs["quick"])
+        self.assertIn("<strong>Next steps</strong>", tabs["full"])
+        self.assertIn("(00:01:18)", tabs["transcript"])
+        self.assertEqual([step["title"] for step in payload["suggested_steps"]], [
+            "Send Partnership Details", "Check Celebrity Availability", "Review Event Proposal",
+        ])
+        step = payload["suggested_steps"][0]
+        self.assertFalse(step["saved"])
+        self.assertEqual(self.client.post(NOTES, {"steps": ["0" * 64]}, format="json").status_code, 400)
+        for _ in range(2):
+            self.assertEqual(self.client.post(NOTES, {"steps": [step["id"]]}, format="json").status_code, 200)
+        self.assertEqual(TeamTask.objects.count(), 1)
+        self.assertTrue(self.client.get(NOTES).json()["suggested_steps"][0]["saved"])
+        task = TeamTask.objects.get()
+        self.assertEqual(task.status, TeamTask.Status.DRAFT)
+        self.assertIsNone(task.due_date)
+        self.assertIsNone(task.assignee)
+        self.assertEqual(task.meeting_title, "Partner meeting")
+        self.assertTrue(task.notes_url.endswith("?tab=full"))
+
+        assignee = User.objects.create_user("staff@example.com", role="staff")
+        endpoint = f"/api/team-tasks/{task.pk}/"
+        self.client.force_authenticate(assignee)
+        self.assertEqual(self.client.get("/api/team-tasks/").json()["tasks"], [])
+        self.assertEqual(self.client.patch(endpoint, {"status": "todo"}, format="json").status_code, 404)
+        self.client.force_authenticate(self.owner)
+        response = self.client.patch(endpoint, {"assignee": str(assignee.pk), "status": "todo"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.client.force_authenticate(assignee)
+        self.assertEqual(self.client.get("/api/team-tasks/").json()["tasks"][0]["title"], step["title"])
+        self.assertEqual(self.client.patch(endpoint, {"title": "Edited"}, format="json").status_code, 403)
+        self.assertEqual(self.client.patch(endpoint, {"status": "done"}, format="json").status_code, 200)
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_reads_transcript_document_linked_from_meeting_records(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        target_url = "https://docs.google.com/document/d/recording-transcript/edit"
+        google.side_effect = [
+            {"body": {"content": [{"paragraph": {"elements": [
+                {"textRun": {"content": "Meeting records "}},
+                {"textRun": {"content": "Transcript", "textStyle": {"link": {"url": target_url}}}},
+            ]}}]}},
+            {"body": {"content": [{"paragraph": {"elements": [
+                {"textRun": {"content": "00:01:18 Speaker: Project details."}},
+            ]}}]}},
+        ]
+        payload = read_notes_document("access", "notes")
+        transcript = next(tab for tab in payload["tabs"] if tab["kind"] == "transcript")
+        self.assertEqual(transcript["url"], target_url)
+        self.assertIn("00:01:18 Speaker: Project details.", transcript["html"])
+        self.assertEqual(payload["suggested_steps"], [])
