@@ -153,3 +153,60 @@ class GoogleMeetingNotesTests(TestCase):
             "GET", "https://docs.googleapis.com/v1/documents/notes-id",
             token="access", params={"includeTabsContent": "true"},
         )
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_lists_distinct_documents_and_previews_only_event_documents(self, google, calendar, _token):
+        first_url = "https://docs.google.com/document/d/first/edit"
+        second_url = "https://docs.google.com/document/d/second/edit"
+        calendar.return_value = {
+            **self.event,
+            "description": f'<a href="{first_url}">Notes</a>',
+            "attachments": [
+                {"title": "Summary notes", "fileUrl": first_url},
+                {"title": "Full notes", "fileUrl": second_url},
+            ],
+        }
+        response = self.client.get(NOTES)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["documents"], [
+            {"id": "first", "title": "Summary notes", "url": first_url},
+            {"id": "second", "title": "Full notes", "url": second_url},
+        ])
+        self.assertEqual(self.client.get(NOTES, {"document": "unrelated"}).status_code, 404)
+        google.assert_not_called()
+
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [
+            {"textRun": {"content": "Open full ", "textStyle": {"link": {"url": first_url}}}},
+            {"textRun": {"content": "notes", "textStyle": {"link": {"url": first_url}}}},
+            {"textRun": {"content": "\nSuggested next steps\nReview the schedule.\n"}},
+        ]}}]}}
+        response = self.client.get(NOTES, {"document": "second"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["url"], second_url)
+        self.assertEqual(response.json()["links"], [{"title": "Open full notes", "url": first_url}])
+        self.assertIn("Suggested next steps\nReview the schedule.", response.json()["text"])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_lists_generated_documents_across_meet_pages(self, google, calendar, _token):
+        calendar.return_value = self.event
+        first = {"state": "FILE_GENERATED", "docsDestination": {"document": "first"}}
+        second = {"state": "FILE_GENERATED", "docsDestination": {"document": "second"}}
+        google.side_effect = [
+            {"conferenceRecords": [{
+                "name": "conferenceRecords/call",
+                "endTime": self.end.isoformat(),
+            }]},
+            {"smartNotes": [first], "nextPageToken": "next"},
+            {"smartNotes": [first, second]},
+        ]
+
+        response = self.client.get(NOTES)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([doc["id"] for doc in response.json()["documents"]], ["first", "second"])
+        self.assertEqual(google.call_count, 3)
+        self.assertEqual(google.call_args.kwargs["params"]["pageToken"], "next")

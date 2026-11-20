@@ -469,6 +469,7 @@ def google_calendar_meeting_notes(request, event_id):
     try:
         return Response(preview_meeting_notes(
             access_token(notes=True), event_id, calendar_token=access_token(),
+            document_id=request.query_params.get("document"),
         ))
     except CalendarError as error:
         if error.status_code == 424:

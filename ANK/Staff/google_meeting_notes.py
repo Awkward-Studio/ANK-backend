@@ -1,7 +1,7 @@
 import re
 from datetime import timedelta
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from django.conf import settings
 from django.utils import timezone
@@ -76,7 +76,7 @@ def attached_notes_documents(event):
         (attachment.get("title", ""), attachment.get("fileUrl", ""))
         for attachment in event.get("attachments", [])
     ]
-    document_ids = set()
+    documents = {}
     for title, url in candidates:
         if not re.search(r"\b(gemini|notes?)\b", title or "", re.IGNORECASE):
             continue
@@ -85,8 +85,8 @@ def attached_notes_documents(event):
             url or "",
         )
         if match:
-            document_ids.add(match[1])
-    return document_ids
+            documents[match[1]] = title.strip()
+    return documents
 
 
 def can_lookup_event(event):
@@ -105,22 +105,40 @@ def text_runs(value):
             yield from text_runs(child)
     elif isinstance(value, dict):
         if "textRun" in value:
-            yield value["textRun"].get("content", "")
+            yield value["textRun"]
+        elif "richLink" in value:
+            link = value["richLink"].get("richLinkProperties", {})
+            yield {"content": link.get("title") or "", "textStyle": {"link": {"url": link.get("uri")}}}
         else:
             for child in value.values():
                 yield from text_runs(child)
 
 
-def preview_meeting_notes(token, event_id, *, calendar_token):
+def notes_url(document_id):
+    return f"https://docs.google.com/document/d/{document_id}/edit"
+
+
+def select_notes_document(token, documents, document_id):
+    if document_id is not None:
+        if document_id not in documents:
+            raise CalendarError("This notes document is not linked to the event.", 404)
+        return read_notes_document(token, document_id)
+    if len(documents) == 1:
+        return read_notes_document(token, next(iter(documents)))
+    return {"documents": [
+        {"id": key, "title": title, "url": notes_url(key)}
+        for key, title in documents.items()
+    ]}
+
+
+def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None):
     event = calendar_request("GET", calendar_token, event_id)
     if not can_lookup_event(event):
         raise CalendarError("Choose a past Team Calendar event with Gemini notes or a Google Meet link.", 404)
 
     attached = attached_notes_documents(event)
-    if len(attached) == 1:
-        return read_notes_document(token, attached.pop())
-    if len(attached) > 1 and not meeting_code(event):
-        raise CalendarError("This event has multiple notes documents. Open them in Google Calendar.", 409)
+    if attached:
+        return select_notes_document(token, attached, document_id)
 
     start, end = event_times(event)
     if end < timezone.now() - timedelta(days=30):
@@ -146,21 +164,47 @@ def preview_meeting_notes(token, event_id, *, calendar_token):
     if not candidates:
         raise CalendarError("Google Meet returned no completed call matching this event.", 404)
 
-    response = google_request(
-        "GET", f"{MEET_API}/{candidates[0]}/smartNotes", token=token, params={"pageSize": 100},
-    )
-    document_ids = []
-    for note in response.get("smartNotes", []):
-        document = note.get("docsDestination", {}).get("document", "")
-        if note.get("state") == "FILE_GENERATED" and re.fullmatch(r"[A-Za-z0-9_-]+", document):
-            if document not in document_ids:
-                document_ids.append(document)
-    if not document_ids:
-        raise CalendarError("Google Meet has no generated Gemini notes for this call.", 404)
-    if response.get("nextPageToken") or len(document_ids) != 1:
-        raise CalendarError("This call has multiple notes documents. Open them in Google Meet.", 409)
+    documents = {}
+    params = {"pageSize": 100}
+    while True:
+        response = google_request(
+            "GET", f"{MEET_API}/{candidates[0]}/smartNotes", token=token, params=params,
+        )
+        for note in response.get("smartNotes", []):
+            document = note.get("docsDestination", {}).get("document", "")
+            if note.get("state") == "FILE_GENERATED" and re.fullmatch(r"[A-Za-z0-9_-]+", document):
+                documents.setdefault(document, f"Gemini notes document {len(documents) + 1}")
+        if not response.get("nextPageToken"):
+            break
+        params = {**params, "pageToken": response["nextPageToken"]}
 
-    return read_notes_document(token, document_ids[0])
+    if not documents:
+        raise CalendarError("Google Meet has no generated Gemini notes for this call.", 404)
+    return select_notes_document(token, documents, document_id)
+
+
+def notes_links(runs, document_url):
+    labels = {}
+    for run in runs:
+        link = run.get("textStyle", {}).get("link", {})
+        url = link.get("url") or ""
+        if not url and link.get("tabId"):
+            url = f"{document_url}?{urlencode({'tab': link['tabId']})}"
+        elif not url and link.get("heading"):
+            heading = link["heading"]
+            url = f"{document_url}?{urlencode({'tab': heading.get('tabId', '')})}"
+            url += f"#{urlencode({'heading': heading.get('id', '')})}"
+        elif not url and link.get("bookmark"):
+            bookmark = link["bookmark"]
+            url = f"{document_url}?{urlencode({'tab': bookmark.get('tabId', '')})}"
+            url += f"#{urlencode({'bookmark': bookmark.get('id', '')})}"
+        if url.startswith(("https://docs.google.com/", "https://drive.google.com/")):
+            labels[url] = labels.get(url, "") + run.get("content", "")
+    return [
+        {"title": label.strip(), "url": url}
+        for url, label in labels.items()
+        if re.search(r"\b(?:notes?|next steps|action items|details)\b", label, re.IGNORECASE)
+    ]
 
 
 def read_notes_document(token, document_id):
@@ -177,10 +221,13 @@ def read_notes_document(token, document_id):
         )
         title = notes_tab.get("tabProperties", {}).get("title", "").lower()
         body = {} if "transcript" in title else notes_tab.get("documentTab", {}).get("body", {})
-    text = "".join(text_runs(body.get("content", []))).strip()
+    runs = list(text_runs(body.get("content", [])))
+    text = "".join(run.get("content", "") for run in runs).strip()
+    url = notes_url(document_id)
     return {
         "title": document.get("title", "Gemini notes"),
         "text": text[:24000],
         "truncated": len(text) > 24000,
-        "url": f"https://docs.google.com/document/d/{document_id}/edit",
+        "url": url,
+        "links": notes_links(runs, url),
     }
