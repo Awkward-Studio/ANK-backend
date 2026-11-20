@@ -423,6 +423,7 @@ class GoogleMeetingNotesTests(TestCase):
             "Details\n"
         )}}]}}]}}
         steps = self.client.get(NOTES).json()["suggested_steps"]
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 0})
         saved = self.client.post(NOTES, {"steps": [step["id"] for step in steps]}, format="json")
         self.assertEqual(saved.status_code, 200)
         converted_id = saved.json()[1]["id"]
@@ -434,6 +435,7 @@ class GoogleMeetingNotesTests(TestCase):
         drafts = {task["title"] for task in queue["tasks"] if task["status"] == "draft"}
         self.assertTrue(queue["can_manage"])
         self.assertEqual([step["task_status"] for step in notes], ["draft", "todo", "draft"])
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 3})
         self.assertEqual(drafts, {"Send Partnership Details", "Review Event Proposal"})
 
     def test_import_preassigns_only_unique_active_owners_and_keeps_reviewed_assignment(self):
@@ -464,3 +466,22 @@ class GoogleMeetingNotesTests(TestCase):
         queue = self.client.get("/api/team-tasks/").json()["tasks"]
         suggestion = next(item for item in queue if item["id"] == str(legacy.pk))
         self.assertEqual(suggestion["suggested_assignee"], str(shoeb.pk))
+
+    def test_full_suggested_name_prefills_unique_short_account(self):
+        from Staff.team_tasks import save_meeting_steps, step_key, unique_active_assignees
+
+        shoeb = User.objects.create_user("shoeb@example.com", name="shoeb", role="staff")
+        legacy = TeamTask.objects.create(source_key="short-owner", title="Legacy draft", suggested_owner="Shoeb Khan")
+        tasks = self.client.get("/api/team-tasks/").json()["tasks"]
+        self.assertEqual(next(task for task in tasks if task["id"] == str(legacy.pk))["suggested_assignee"], str(shoeb.pk))
+
+        step = {"owner": "Shoeb Khan", "title": "Send partnership details", "description": ""}
+        save_meeting_steps(self.owner, "calendar", "meeting", {
+            "title": "Partner meeting", "url": "", "suggested_steps": [step],
+        }, [step_key(step)])
+        self.assertEqual(TeamTask.objects.get(title=step["title"]).assignee, shoeb)
+
+        User.objects.create_user("shoeb.patel@example.com", name="Shoeb Patel", role="staff")
+        self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {})
+        exact = User.objects.create_user("shoeb.khan@example.com", name="Shoeb Khan", role="staff")
+        self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {"shoeb khan": exact.pk})

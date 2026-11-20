@@ -487,10 +487,11 @@ def google_calendar_event(request, event_id):
 def google_calendar_meeting_notes(request, event_id):
     if not can_preview_notes(request.user):
         raise PermissionDenied()
+    summary = request.method == "GET" and request.query_params.get("summary") == "steps"
     try:
         document = preview_meeting_notes(
             access_token(notes=True), event_id, calendar_token=access_token(),
-            document_id=request.query_params.get("document"),
+            document_id=request.query_params.get("document"), steps_only=summary,
         )
         if request.method == "POST":
             serializer = ImportSerializer(data=request.data)
@@ -499,7 +500,14 @@ def google_calendar_meeting_notes(request, event_id):
                 request.user, settings.GOOGLE_CALENDAR_ID, event_id,
                 document, serializer.validated_data["steps"],
             ))
-        mark_saved_steps(settings.GOOGLE_CALENDAR_ID, event_id, document.get("suggested_steps", []))
+        steps = document.get("suggested_steps", [])
+        mark_saved_steps(settings.GOOGLE_CALENDAR_ID, event_id, steps)
+        if summary:
+            unique = {step["id"]: step for step in steps}
+            return Response({
+                "total": len(unique),
+                "saved": sum(step["saved"] for step in unique.values()),
+            })
         return Response(document)
     except CalendarError as error:
         if error.status_code == 424:

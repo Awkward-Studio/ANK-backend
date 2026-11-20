@@ -21,12 +21,38 @@ def owner_key(value):
 
 def unique_active_assignees(owners):
     owner_keys = {owner_key(owner) for owner in owners if owner.strip()}
-    matches = {}
-    if owner_keys:
-        for user_id, name, email in User.objects.filter(is_active=True).values_list("pk", "name", "email"):
-            for key in {owner_key(name), owner_key(email)} & owner_keys:
-                matches.setdefault(key, set()).add(user_id)
-    return {key: next(iter(ids)) for key, ids in matches.items() if len(ids) == 1}
+    if not owner_keys:
+        return {}
+
+    exact = {}
+    first_names = {}
+    short_accounts = {}
+    for user_id, name, email in User.objects.filter(is_active=True).values_list("pk", "name", "email"):
+        name, email = owner_key(name), owner_key(email)
+        for key in {name, email} & owner_keys:
+            exact.setdefault(key, set()).add(user_id)
+
+        email_handle, _, _ = email.partition("@")
+        first_name = name.split(" ", 1)[0] or email_handle
+        if first_name:
+            first_names.setdefault(first_name, set()).add(user_id)
+        if name and " " not in name:
+            short_accounts.setdefault(name, set()).add(user_id)
+        elif not name and email_handle:
+            short_accounts.setdefault(email_handle, set()).add(user_id)
+
+    resolved = {}
+    for key in owner_keys:
+        ids = exact.get(key)
+        if ids is None:
+            first_name, separator, _ = key.partition(" ")
+            if separator and "@" not in key:
+                possible = first_names.get(first_name, set())
+                if len(possible) == 1 and possible == short_accounts.get(first_name):
+                    ids = possible
+        if ids and len(ids) == 1:
+            resolved[key] = next(iter(ids))
+    return resolved
 
 
 def can_manage_tasks(user):

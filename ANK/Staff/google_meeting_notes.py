@@ -119,7 +119,12 @@ def notes_url(document_id):
     return f"https://docs.google.com/document/d/{document_id}/edit"
 
 
-def select_notes_document(token, documents, document_id):
+def select_notes_document(token, documents, document_id, *, steps_only=False):
+    if steps_only:
+        steps = []
+        for key in documents:
+            steps.extend(read_notes_document(token, key, steps_only=True)["suggested_steps"])
+        return {"suggested_steps": steps}
     if document_id is not None:
         if document_id not in documents:
             raise CalendarError("This notes document is not linked to the event.", 404)
@@ -132,14 +137,14 @@ def select_notes_document(token, documents, document_id):
     ]}
 
 
-def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None):
+def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None, steps_only=False):
     event = calendar_request("GET", calendar_token, event_id)
     if not can_lookup_event(event):
         raise CalendarError("Choose a past Team Calendar event with Gemini notes or a Google Meet link.", 404)
 
     attached = attached_notes_documents(event)
     if attached:
-        return {**select_notes_document(token, attached, document_id), "meeting_title": event.get("summary", "")}
+        return {**select_notes_document(token, attached, document_id, steps_only=steps_only), "meeting_title": event.get("summary", "")}
 
     start, end = event_times(event)
     if end < timezone.now() - timedelta(days=30):
@@ -181,7 +186,7 @@ def preview_meeting_notes(token, event_id, *, calendar_token, document_id=None):
 
     if not documents:
         raise CalendarError("Google Meet has no generated Gemini notes for this call.", 404)
-    return {**select_notes_document(token, documents, document_id), "meeting_title": event.get("summary", "")}
+    return {**select_notes_document(token, documents, document_id, steps_only=steps_only), "meeting_title": event.get("summary", "")}
 
 
 def document_link(link, document_url):
@@ -243,7 +248,7 @@ def render_tab(data, document_url):
     )
 
 
-def linked_document_tab(token, link, kind, current_id):
+def linked_document_tab(token, link, kind, current_id, *, steps_only=False):
     target = urlsplit(link["url"])
     match = re.fullmatch(r"/document/(?:u/\d+/)?d/([A-Za-z0-9_-]+)(?:/[^/]*)?/?", target.path)
     if target.netloc != "docs.google.com" or not match or match[1] == current_id:
@@ -251,6 +256,8 @@ def linked_document_tab(token, link, kind, current_id):
     try:
         document = fetch_document(token, match[1])
     except CalendarError:
+        if steps_only:
+            raise
         return None
     tabs = list(document_tabs(document.get("tabs", [])))
     requested = parse_qs(target.query).get("tab", [None])[0]
@@ -266,11 +273,11 @@ def linked_document_tab(token, link, kind, current_id):
         "title": link["title"],
         "kind": kind,
         "url": link["url"],
-        "html": render_tab(data, notes_url(match[1])),
+        "html": "" if steps_only else render_tab(data, notes_url(match[1])),
     }, list(text_runs(data.get("body", {}).get("content", [])))
 
 
-def read_notes_document(token, document_id):
+def read_notes_document(token, document_id, *, steps_only=False):
     document = fetch_document(token, document_id)
     url = notes_url(document_id)
     original_url = url
@@ -316,7 +323,7 @@ def read_notes_document(token, document_id):
     sections = []
     if not all_tabs:
         all_tabs = [{"tabProperties": {"title": "Full notes"}, "documentTab": document}]
-    for index, tab in enumerate(all_tabs):
+    for index, tab in enumerate([] if steps_only else all_tabs):
         props = tab.get("tabProperties", {})
         tab_id = props.get("tabId")
         title = props.get("title") or f"Document tab {index + 1}"
@@ -336,7 +343,7 @@ def read_notes_document(token, document_id):
             "url": f"{url}?{urlencode({'tab': tab_id})}" if tab_id else url,
             "html": render_tab(data, url),
         })
-    for kind in ("full", "transcript"):
+    for kind in (("full",) if steps_only else ("full", "transcript")):
         if (kind == "full" and full_tab is not None) or (
             kind == "transcript" and any(section["kind"] == kind for section in sections)
         ):
@@ -346,7 +353,7 @@ def read_notes_document(token, document_id):
         ))
         link = next(matches, None)
         if link:
-            linked = linked_document_tab(token, link, kind, document_id)
+            linked = linked_document_tab(token, link, kind, document_id, steps_only=steps_only)
             if not linked:
                 continue
             section, linked_runs = linked
@@ -357,6 +364,8 @@ def read_notes_document(token, document_id):
                 original_url = section["url"]
                 text = "".join(run.get("content", "") for run in linked_runs).strip()
             sections.append(section)
+    if steps_only:
+        return {"suggested_steps": suggested_steps(text)}
     return {
         "document_id": document_id,
         "tabs": sections,
