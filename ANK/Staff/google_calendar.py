@@ -32,6 +32,12 @@ from Staff.google_calendar_service import (
     token_request,
     valid_client_id,
 )
+from Staff.google_meeting_notes import (
+    NOTES_SCOPES,
+    can_lookup_event,
+    can_preview_notes,
+    preview_meeting_notes,
+)
 from Staff.models import (
     GoogleCalendarConnection,
     GoogleCalendarMeeting,
@@ -86,6 +92,8 @@ def google_calendar_connection(request):
         "connected": saved is not None,
         "can_connect": is_admin(request.user),
         "can_schedule": can_schedule(request.user),
+        "can_connect_notes": can_preview_notes(request.user) and saved is not None,
+        "notes_connected": bool(can_preview_notes(request.user) and saved and saved.notes_refresh_token),
         "account_email": saved.account_email if saved and is_admin(request.user) else None,
     })
 
@@ -99,6 +107,12 @@ def google_calendar_start(request):
         raise CalendarError("The backend Google Calendar client ID is invalid.")
     if not configured():
         raise CalendarError("Google Calendar setup is incomplete.")
+    notes_only = isinstance(request.data, dict) and request.data.get("notes") is True
+    if notes_only and not can_preview_notes(request.user):
+        raise PermissionDenied()
+    if notes_only and not connection():
+        raise CalendarError("Connect the team calendar before enabling Gemini notes.", 409)
+    scopes = NOTES_SCOPES if notes_only else (EVENT_SCOPE,)
     origin = request.headers.get("Origin")
     if origin and origin != settings.GOOGLE_CALENDAR_APP_ORIGIN:
         raise CalendarError("Open Team Calendar on the configured ANK site to connect Google.", 400)
@@ -110,12 +124,13 @@ def google_calendar_start(request):
         user=request.user,
         state=secrets.token_urlsafe(32),
         challenge=pkce_challenge(verifier),
+        notes_only=notes_only,
     )
     query = urlencode({
         "client_id": settings.GOOGLE_CALENDAR_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_CALENDAR_REDIRECT_URI,
         "response_type": "code",
-        "scope": f"openid email {EVENT_SCOPE}",
+        "scope": " ".join(("openid", "email", *scopes)),
         "access_type": "offline",
         "prompt": "consent select_account",
         "login_hint": settings.GOOGLE_CALENDAR_ACCOUNT_EMAIL,
@@ -185,6 +200,8 @@ def google_calendar_complete(request):
             attempt.challenge, pkce_challenge(verifier)
         ):
             raise CalendarError("Start a new connection from ANK.", 400)
+        if attempt.notes_only and not can_preview_notes(request.user):
+            raise PermissionDenied()
         encrypted_code = attempt.authorization_code
         # Claim the callback before contacting Google. A second request cannot
         # exchange the same code, and disconnect can still invalidate the claim.
@@ -203,19 +220,34 @@ def google_calendar_complete(request):
         redirect_uri=settings.GOOGLE_CALENDAR_REDIRECT_URI,
     )
     refresh, token = tokens.get("refresh_token"), tokens.get("access_token")
-    if not refresh or not token or EVENT_SCOPE not in tokens.get("scope", "").split():
-        raise CalendarError("Approve calendar access again to finish connecting.", 409)
+    scopes = NOTES_SCOPES if attempt.notes_only else (EVENT_SCOPE,)
+    if not refresh or not token or not set(scopes).issubset(
+        tokens.get("scope", "").split()
+    ):
+        raise CalendarError("Approve the requested Google permissions to finish connecting.", 409)
     identity = google_request("GET", USERINFO_URL, token=token)
     email = identity.get("email", "")
     if not identity.get("email_verified") or email.lower() != settings.GOOGLE_CALENDAR_ACCOUNT_EMAIL.lower():
         raise CalendarError("Connect with the designated Workspace calendar account.", 403)
-    calendar = calendar_request("GET", token, params={"maxResults": 1, "fields": "accessRole"})
-    if calendar.get("accessRole") not in {"owner", "writer"}:
-        raise CalendarError("Give the Google account permission to edit the shared calendar.", 424)
+    if not attempt.notes_only:
+        calendar = calendar_request("GET", token, params={"maxResults": 1, "fields": "accessRole"})
+        if calendar.get("accessRole") not in {"owner", "writer"}:
+            raise CalendarError("Give the Google account permission to edit the shared calendar.", 424)
     with transaction.atomic():
         deleted, _ = active_attempts().filter(state=attempt.state, claimed=True).delete()
         if not deleted:
             raise CalendarError("Start a new connection from ANK.", 409)
+        if attempt.notes_only:
+            existing = connection()
+            if not existing or not GoogleCalendarConnection.objects.filter(
+                pk=existing.pk,
+                calendar_id=existing.calendar_id,
+                client_id=existing.client_id,
+                account_email=existing.account_email,
+            ).update(notes_refresh_token=cipher().encrypt(refresh.encode()).decode()):
+                raise CalendarError("Reconnect the team calendar first.", 409)
+            return Response({"connected": True})
+        previous = connection()
         GoogleCalendarConnection.objects.update_or_create(
             pk=1,
             defaults={
@@ -223,6 +255,7 @@ def google_calendar_complete(request):
                 "account_email": email,
                 "client_id": settings.GOOGLE_CALENDAR_CLIENT_ID,
                 "refresh_token": cipher().encrypt(refresh.encode()).decode(),
+                **({} if previous else {"notes_refresh_token": ""}),
             },
         )
     return Response({"connected": True})
@@ -318,6 +351,7 @@ def event_data(event, meeting, user):
         "html_link": "" if private else link,
         "source": "ank" if is_ank_event(event, meeting) else "google",
         "can_manage": can_manage,
+        "can_preview_notes": can_preview_notes(user) and can_lookup_event(event),
         "etag": event.get("etag") if can_manage else None,
     }
 
@@ -424,3 +458,22 @@ def google_calendar_event(request, event_id):
                 guest["responseStatus"] = response
     result = calendar_request("PATCH", token, event_id, json=data, **options)
     return Response(event_data(result, meeting, request.user))
+
+
+@never_cache
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def google_calendar_meeting_notes(request, event_id):
+    if not can_preview_notes(request.user):
+        raise PermissionDenied()
+    try:
+        return Response(preview_meeting_notes(
+            access_token(notes=True), event_id, calendar_token=access_token(),
+        ))
+    except CalendarError as error:
+        if error.status_code == 424:
+            raise CalendarError(
+                "Reconnect with Meet and Docs permissions, and check access to the original notes.",
+                424,
+            ) from None
+        raise

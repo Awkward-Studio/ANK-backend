@@ -73,6 +73,7 @@ jobs:
           CALENDAR_ACCOUNT: ${{ vars.GOOGLE_CALENDAR_ACCOUNT_EMAIL }}
           CALENDAR_APP_ORIGIN: ${{ vars.GOOGLE_CALENDAR_APP_ORIGIN }}
           GOOGLE_LOGIN_DOMAIN: ${{ vars.GOOGLE_LOGIN_DOMAIN }}
+          GOOGLE_MEETING_NOTES_PILOT: ${{ vars.GOOGLE_MEETING_NOTES_PILOT }}
         run: |
           set -euo pipefail
           if [[ -z "$CALENDAR_ID" && -z "$GOOGLE_LOGIN_DOMAIN" ]]; then
@@ -89,13 +90,15 @@ jobs:
             --arg id "$CALENDAR_ID" \
             --arg account "$CALENDAR_ACCOUNT" \
             --arg loginDomain "$GOOGLE_LOGIN_DOMAIN" \
+            --arg notesPilot "$GOOGLE_MEETING_NOTES_PILOT" \
             --arg origin "$CALENDAR_APP_ORIGIN" '
               (.containerDefinitions[] | select(.name == $container)) |= (
                 .environment += [
                   {name: "GOOGLE_CALENDAR_ID", value: $id},
                   {name: "GOOGLE_CALENDAR_ACCOUNT_EMAIL", value: $account},
                   {name: "GOOGLE_CALENDAR_APP_ORIGIN", value: $origin},
-                  {name: "GOOGLE_LOGIN_DOMAIN", value: $loginDomain}
+                  {name: "GOOGLE_LOGIN_DOMAIN", value: $loginDomain},
+                  {name: "GOOGLE_MEETING_NOTES_PILOT", value: $notesPilot}
                 ]
                 | if $arn != "" then
                     .secrets |= (map(select(

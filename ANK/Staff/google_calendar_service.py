@@ -94,14 +94,17 @@ def token_request(**grant):
     })
 
 
-def access_token():
+def access_token(*, notes=False):
     if not configured():
         raise CalendarError("Google Calendar setup is incomplete.")
     saved = connection()
     if not saved:
         raise CalendarError("Ask an ANK admin to connect the team calendar.")
+    encrypted = saved.notes_refresh_token if notes else saved.refresh_token
+    if notes and not encrypted:
+        raise CalendarError("Connect Gemini notes from Team Calendar first.", 409)
     try:
-        refresh_token = cipher().decrypt(saved.refresh_token.encode()).decode()
+        refresh_token = cipher().decrypt(encrypted.encode()).decode()
     except InvalidToken:
         raise CalendarError("Ask an ANK admin to reconnect the team calendar.") from None
     tokens = token_request(grant_type="refresh_token", refresh_token=refresh_token)

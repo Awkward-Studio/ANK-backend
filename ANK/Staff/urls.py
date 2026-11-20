@@ -6,6 +6,7 @@ from Staff.google_calendar import (
     google_calendar_connection,
     google_calendar_event,
     google_calendar_events,
+    google_calendar_meeting_notes,
     google_calendar_start,
 )
 from Staff.views import (
@@ -36,6 +37,7 @@ urlpatterns = [
     path("team-calendar/connect/", google_calendar_start),
     path("team-calendar/connect/complete/", google_calendar_complete),
     path("team-calendar/events/", google_calendar_events),
+    path("team-calendar/events/<str:event_id>/notes/", google_calendar_meeting_notes),
     path("team-calendar/events/<str:event_id>/", google_calendar_event),
     # ─── User CRUD ────────────────────────────────────────────────────
     # GET list, POST create

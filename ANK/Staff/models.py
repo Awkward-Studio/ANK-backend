@@ -74,6 +74,7 @@ class GoogleCalendarConnection(models.Model):
     account_email = models.EmailField()
     client_id = models.CharField(max_length=255)
     refresh_token = models.TextField()
+    notes_refresh_token = models.TextField(blank=True)
     connected_at = models.DateTimeField(auto_now=True)
 
 
@@ -84,6 +85,7 @@ class GoogleCalendarOAuthAttempt(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     authorization_code = models.TextField(blank=True)
     claimed = models.BooleanField(default=False)
+    notes_only = models.BooleanField(default=False)
 
 
 class GoogleCalendarMeeting(models.Model):
