@@ -119,9 +119,22 @@ class TeamTask(models.Model):
     assignee = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="team_tasks")
     created_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="created_team_tasks")
     source_key = models.CharField(max_length=64, unique=True)
+    meeting_link = models.ForeignKey("MeetingEventLink", null=True, blank=True, on_delete=models.SET_NULL)
     meeting_title = models.CharField(max_length=500, blank=True)
     notes_url = models.URLField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at", "id"]
+
+
+class MeetingEventLink(models.Model):
+    calendar_id = models.CharField(max_length=255)
+    meeting_id = models.CharField(max_length=1024)
+    event = models.ForeignKey("Events.Event", null=True, blank=True, on_delete=models.SET_NULL)
+    automatic_disabled = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["calendar_id", "meeting_id"], name="staff_meeting_event_link_unique"),
+        ]

@@ -324,3 +324,66 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(transcript["url"], target_url)
         self.assertIn("00:01:18 Speaker: Project details.", transcript["html"])
         self.assertEqual(payload["suggested_steps"], [])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_calendar.calendar_request")
+    def test_explicit_links_attach_and_move_the_meeting_tasks(self, google, _token):
+        from Events.models import Event
+        from Staff.models import MeetingEventLink
+
+        target = Event.objects.create(name="Partner Festival")
+        other = Event.objects.create(name="Other Festival")
+        google.return_value = {
+            **self.event,
+            "summary": "Partner Festival X Sponsor",
+            "description": f'<a href="https://rsvp.anewknot.com/events/{target.pk}">ANK event</a>',
+        }
+        endpoint = BASE + "events/event-1/attachment/"
+        response = self.client.get(endpoint)
+        self.assertTrue(response.data["automatic_match"])
+        self.assertEqual(response.data["suggestions"][0]["id"], str(target.pk))
+        self.assertEqual(self.client.post(endpoint, {"automatic": True}, format="json").data["event"]["id"], str(target.pk))
+        link = MeetingEventLink.objects.get()
+        task = TeamTask.objects.create(
+            source_key="test", title="Follow up", status=TeamTask.Status.TODO, meeting_link=link,
+        )
+        target_url = BASE + f"ank-events/{target.pk}/meetings/"
+        other_url = BASE + f"ank-events/{other.pk}/meetings/"
+        self.assertEqual(self.client.get(target_url).data["meetings"][0]["id"], "event-1")
+        self.assertEqual(self.client.get(target_url).data["tasks"][0]["id"], task.pk)
+        self.assertEqual(self.client.post(endpoint, {"event_id": str(other.pk)}, format="json").status_code, 200)
+        self.assertEqual(self.client.get(target_url).data["tasks"], [])
+        self.assertEqual(self.client.get(other_url).data["tasks"][0]["id"], task.pk)
+        self.assertEqual(self.client.get("/api/team-tasks/").data["tasks"][0]["ank_event"]["id"], str(other.pk))
+        self.assertEqual(self.client.post(endpoint, {"event_id": None}, format="json").status_code, 200)
+        self.assertFalse(self.client.get(endpoint).data["automatic_match"])
+        self.assertIsNone(self.client.get("/api/team-tasks/").data["tasks"][0]["ank_event"])
+        self.assertEqual(TeamTask.objects.count(), 1)
+
+        staff = User.objects.create_user("staff@example.com", role="staff")
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(target_url).status_code, 404)
+        self.assertEqual(self.client.post(endpoint, {"event_id": str(target.pk)}, format="json").status_code, 403)
+        google.return_value["visibility"] = "private"
+        self.assertEqual(self.client.get(endpoint).status_code, 404)
+
+    def test_manual_tasks_are_idempotent_and_admin_only(self):
+        from uuid import uuid4
+
+        staff = User.objects.create_user("assignee@example.com", role="staff")
+        body = {
+            "request_id": str(uuid4()),
+            "title": "Review the venue proposal",
+            "assignee": str(staff.pk),
+            "status": "in_progress",
+        }
+        response = self.client.post("/api/team-tasks/", body, format="json")
+        self.assertEqual(response.status_code, 201)
+        retry = self.client.post("/api/team-tasks/", body, format="json")
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.data["id"], response.data["id"])
+        task = TeamTask.objects.get()
+        self.assertIsNone(task.meeting_link_id)
+        self.assertEqual(task.assignee, staff)
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.post("/api/team-tasks/", body, format="json").status_code, 403)

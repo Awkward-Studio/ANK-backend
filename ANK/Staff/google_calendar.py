@@ -45,6 +45,12 @@ from Staff.models import (
 )
 
 
+from Departments.permissions import PermissionChecker
+from django.shortcuts import get_object_or_404
+from Staff.meeting_event_links import (
+    available_meeting, candidates, change_link, event_option, find_explicit_event, meeting_link, visible_event,
+)
+from Staff.models import MeetingEventLink, TeamTask
 from Staff.team_tasks import ImportSerializer, mark_saved_steps, save_meeting_steps
 
 
@@ -294,6 +300,7 @@ class MeetingSerializer(serializers.Serializer):
 
 class CreateMeetingSerializer(MeetingSerializer):
     request_id = serializers.UUIDField()
+    ank_event_id = serializers.UUIDField(required=False)
 
 
 def meeting_payload(data):
@@ -398,6 +405,9 @@ def google_calendar_events(request):
     form = CreateMeetingSerializer(data=request.data)
     form.is_valid(raise_exception=True)
     data = form.validated_data
+    target = data.get("ank_event_id")
+    if target:
+        get_object_or_404(PermissionChecker.get_user_accessible_events(request.user), pk=target)
     token = access_token()
     event_id = data["request_id"].hex
     meeting, _ = GoogleCalendarMeeting.objects.get_or_create(
@@ -421,16 +431,24 @@ def google_calendar_events(request):
         event = calendar_request("GET", token, event_id)
         if not is_ank_event(event, meeting) or event.get("status") == "cancelled":
             raise CalendarError("Create a new meeting and try again.", 409) from None
+    attachment = target or find_explicit_event(event)
+    if attachment and PermissionChecker.get_user_accessible_events(request.user).filter(pk=attachment).exists():
+        change_link(request.user, event, attachment, automatic=True)
     return Response(event_data(event, meeting, request.user), status=status.HTTP_201_CREATED)
 
 
 @never_cache
-@api_view(["PATCH", "DELETE"])
+@api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsAuthenticated])
 def google_calendar_event(request, event_id):
     meeting = GoogleCalendarMeeting.objects.filter(
         calendar_id=settings.GOOGLE_CALENDAR_ID, event_id=event_id
     ).first()
+    if request.method == "GET":
+        event = calendar_request("GET", access_token(), event_id)
+        if not available_meeting(event):
+            raise CalendarError("This meeting is private or no longer available.", 404)
+        return Response(event_data(event, meeting, request.user))
     if not meeting or not (is_admin(request.user) or meeting.created_by_id == request.user.pk):
         raise PermissionDenied()
     etag = request.headers.get("If-Match", "")
@@ -490,3 +508,86 @@ def google_calendar_meeting_notes(request, event_id):
                 424,
             ) from None
         raise
+
+
+class MeetingLinkSerializer(serializers.Serializer):
+    event_id = serializers.UUIDField(required=False, allow_null=True)
+    automatic = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        if attrs["automatic"] == ("event_id" in attrs):
+            raise ValidationError("Choose an event or request an automatic match.")
+        return attrs
+
+
+@never_cache
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def google_meeting_event_link(request, event_id):
+    user = request.user
+    meeting = calendar_request("GET", access_token(), event_id)
+    if not available_meeting(meeting):
+        raise CalendarError("This meeting is private or no longer available.", 404)
+    link = meeting_link(event_id)
+    events = PermissionChecker.get_user_accessible_events(user)
+    can_manage = can_schedule(user)
+    explicit = None
+    if can_manage and not (link and (link.event_id or link.automatic_disabled)):
+        candidate = find_explicit_event(meeting)
+        if candidate and events.filter(pk=candidate).exists():
+            explicit = candidate
+    if request.method == "POST":
+        if not can_manage:
+            raise PermissionDenied()
+        serializer = MeetingLinkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if data["automatic"] and not explicit:
+            return Response({"event": visible_event(user, link.event) if link else None})
+        return Response({"event": change_link(
+            user, meeting, explicit if data["automatic"] else data["event_id"], automatic=data["automatic"],
+        )})
+    term = request.query_params.get("q", "").strip()[:200]
+    return Response({
+        "event": visible_event(user, link.event) if link else None,
+        "can_manage": can_manage,
+        "automatic_match": bool(explicit),
+        "suggestions": candidates(meeting, events, term) if can_manage and (term or not (link and link.event_id)) else [],
+    })
+
+
+@never_cache
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def ank_event_meetings(request, event_id):
+    user = request.user
+    event = get_object_or_404(PermissionChecker.get_user_accessible_events(user), pk=event_id)
+    links = MeetingEventLink.objects.filter(event=event, calendar_id=settings.GOOGLE_CALENDAR_ID)
+    meetings = []
+    if links.exists():
+        token = access_token()
+        for link in links:
+            try:
+                meeting = calendar_request("GET", token, link.meeting_id)
+            except CalendarError as error:
+                if error.status_code in {404, 410}:
+                    continue
+                raise
+            if available_meeting(meeting):
+                start = meeting.get("start", {})
+                meetings.append({
+                    "id": link.meeting_id,
+                    "summary": meeting.get("summary") or "Untitled meeting",
+                    "start": start.get("dateTime") or start.get("date"),
+                    "has_notes": can_preview_notes(user) and can_lookup_event(meeting),
+                })
+    meetings.sort(key=lambda meeting: meeting["start"] or "")
+    tasks = TeamTask.objects.filter(meeting_link__in=links).exclude(status=TeamTask.Status.DRAFT)
+    if not is_admin(user):
+        tasks = tasks.filter(assignee=user)
+    return Response({
+        "event": event_option(event),
+        "can_schedule": can_schedule(user),
+        "meetings": meetings,
+        "tasks": list(tasks.values("id", "title", "status")),
+    })
