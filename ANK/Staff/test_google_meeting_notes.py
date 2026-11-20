@@ -304,6 +304,8 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(self.client.get("/api/team-tasks/").json()["tasks"][0]["title"], step["title"])
         self.assertEqual(self.client.patch(endpoint, {"title": "Edited"}, format="json").status_code, 403)
         self.assertEqual(self.client.patch(endpoint, {"status": "done"}, format="json").status_code, 200)
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES).json()["suggested_steps"][0]["task_status"], "done")
 
     @patch("Staff.google_meeting_notes.google_request")
     def test_reads_transcript_document_linked_from_meeting_records(self, google):
@@ -341,6 +343,7 @@ class GoogleMeetingNotesTests(TestCase):
         endpoint = BASE + "events/event-1/attachment/"
         response = self.client.get(endpoint)
         self.assertTrue(response.data["automatic_match"])
+        self.assertTrue(response.data["suggestions"][0]["suggested"])
         self.assertEqual(response.data["suggestions"][0]["id"], str(target.pk))
         self.assertEqual(self.client.post(endpoint, {"automatic": True}, format="json").data["event"]["id"], str(target.pk))
         link = MeetingEventLink.objects.get()
@@ -387,3 +390,19 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(task.assignee, staff)
         self.client.force_authenticate(staff)
         self.assertEqual(self.client.post("/api/team-tasks/", body, format="json").status_code, 403)
+
+    def test_meeting_suggestions_rank_partial_and_client_matches_and_offer_browse_fallback(self):
+        from Events.models import Event
+        from Staff.meeting_event_links import candidates
+
+        Event.objects.create(name="Antrah Wellness Festival, Mumbai", client_name="Antrah")
+        Event.objects.create(name="Product Launch", client_name="HydRo365")
+        Event.objects.create(name="Festival Planning")
+        result = candidates({"summary": "Antrah Wellness Festival X HydRo365"}, Event.objects.all(), "")
+        self.assertEqual([event["name"] for event in result], [
+            "Antrah Wellness Festival, Mumbai", "Product Launch",
+        ])
+        self.assertTrue(all(event["suggested"] for event in result))
+        fallback = candidates({"summary": "Daily sync"}, Event.objects.all(), "")
+        self.assertEqual(len(fallback), 3)
+        self.assertFalse(any(event["suggested"] for event in fallback))

@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urlsplit
 
+from django.utils.dateparse import parse_date
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
@@ -51,16 +53,30 @@ def candidates(meeting, events, term):
             event_option(event)
             for event in events.filter(Q(name__icontains=term) | Q(client_name__icontains=term)).order_by("name", "id")[:12]
         ]
-    title = f" {normalized(meeting.get('summary'))} "
-    scored = []
+    title = normalized(meeting.get("summary"))
+    ignored = {"a", "an", "and", "for", "the", "with", "event", "festival", "meeting", "call", "review", "planning", "wedding", "sync"}
+    title_words = set(title.split()) - ignored
+    start = meeting.get("start", {})
+    day = parse_date((start.get("dateTime") or start.get("date") or "")[:10])
+    ranked = []
     for event in events.only("id", "name", "client_name", "start_date").iterator():
         name = normalized(event.name)
         client = normalized(event.client_name)
-        if not name or len(name) < 5 or f" {name} " not in title:
-            continue
-        scored.append((int(title.strip() == name), len(name), int(bool(client and f" {client} " in title)), event))
-    scored.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3].name.casefold(), str(item[3].pk)))
-    return [event_option(item[3]) for item in scored[:5]]
+        words = set(name.split()) - ignored
+        shared = words & title_words
+        exact = bool(name and name == title)
+        full_name = bool(words and f" {name} " in f" {title} ")
+        client_match = bool(set(client.split()) - ignored and f" {client} " in f" {title} ")
+        partial = bool(shared and (len(shared) >= 2 or any(len(word) >= 5 for word in shared)))
+        tier = 4 if exact else 3 if full_name else 2 if partial else 1 if client_match else 0
+        distance = abs((event.start_date - day).days) if day and event.start_date else float("inf")
+        ranked.append((-tier, -len(shared), distance, event.name.casefold(), str(event.pk), event))
+    ranked.sort(key=lambda item: item[:5])
+    matches = [item for item in ranked if item[0] < 0]
+    return [
+        {**event_option(item[-1]), "suggested": item[0] < 0}
+        for item in (matches or ranked)[:5]
+    ]
 
 
 def meeting_link(event_id):

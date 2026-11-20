@@ -81,10 +81,11 @@ def source_key(calendar_id, event_id, key):
 
 def mark_saved_steps(calendar_id, event_id, steps):
     keys = {step_key(step): source_key(calendar_id, event_id, step_key(step)) for step in steps}
-    saved = set(TeamTask.objects.filter(source_key__in=keys.values(), meeting_link__isnull=False).values_list("source_key", flat=True))
+    saved = dict(TeamTask.objects.filter(source_key__in=keys.values(), meeting_link__isnull=False).values_list("source_key", "status"))
     for step in steps:
         step["id"] = step_key(step)
-        step["saved"] = keys[step["id"]] in saved
+        step["task_status"] = saved.get(keys[step["id"]])
+        step["saved"] = step["task_status"] is not None
 
 
 class ImportSerializer(serializers.Serializer):
