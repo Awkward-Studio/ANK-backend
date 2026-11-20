@@ -9,6 +9,7 @@ Django settings for ANK project.
 
 from pathlib import Path
 from datetime import timedelta
+import json
 import os
 import warnings
 from django.core.exceptions import ImproperlyConfigured
@@ -301,6 +302,7 @@ CORS_ALLOW_HEADERS = [
     "accept",
     "origin",
     "x-csrftoken",
+    "if-match",
 ]
 
 CORS_ALLOW_METHODS = ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"]
@@ -427,3 +429,38 @@ if USE_S3_STORAGE:
             "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         },
     }
+
+
+def calendar_oauth_setting(name, google_key):
+    value = os.getenv(name, "").strip()
+    if not value.startswith(("{", "[", '"')):
+        return value
+    try:
+        decoded = json.loads(value)
+    except ValueError:
+        return ""
+    if isinstance(decoded, dict):
+        web = decoded.get("web")
+        decoded = decoded.get(name) if name in decoded else (
+            web.get(google_key) if isinstance(web, dict) else decoded.get(google_key)
+        )
+    return decoded.strip() if isinstance(decoded, str) else ""
+
+
+GOOGLE_CALENDAR_CLIENT_ID = calendar_oauth_setting("GOOGLE_CALENDAR_CLIENT_ID", "client_id")
+GOOGLE_CALENDAR_CLIENT_SECRET = calendar_oauth_setting(
+    "GOOGLE_CALENDAR_CLIENT_SECRET", "client_secret"
+)
+GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
+GOOGLE_CALENDAR_ACCOUNT_EMAIL = os.getenv("GOOGLE_CALENDAR_ACCOUNT_EMAIL", "")
+GOOGLE_CALENDAR_APP_ORIGIN = os.getenv("GOOGLE_CALENDAR_APP_ORIGIN", "").rstrip("/")
+if GOOGLE_CALENDAR_APP_ORIGIN and GOOGLE_CALENDAR_APP_ORIGIN not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(GOOGLE_CALENDAR_APP_ORIGIN)
+GOOGLE_CALENDAR_REDIRECT_URI = os.getenv(
+    "GOOGLE_CALENDAR_REDIRECT_URI",
+    "https://api.anewknot.com/api/auth/google/calendar/callback/",
+)
+
+GOOGLE_LOGIN_DOMAIN = os.getenv("GOOGLE_LOGIN_DOMAIN", "").strip().lower()
+
+GOOGLE_MEETING_NOTES_PILOT = get_bool_env("GOOGLE_MEETING_NOTES_PILOT", False)

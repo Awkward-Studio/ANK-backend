@@ -63,6 +63,9 @@ class MetaIdentityVerificationTests(SimpleTestCase):
                 "data": {
                     "is_valid": True,
                     "app_id": "app-1",
+                    "user_id": "system-user-1",
+                    "type": "SYSTEM_USER",
+                    "access_token": "never-return-this-token",
                     "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
                     "granular_scopes": [{"scope": "whatsapp_business_management", "target_ids": ["waba-1"]}],
                 }
@@ -73,9 +76,31 @@ class MetaIdentityVerificationTests(SimpleTestCase):
         result = _token_audit("never-return-this-token", "waba-1")
 
         self.assertEqual(result["status"], "valid")
+        self.assertEqual(result["user_id"], "system-user-1")
+        self.assertEqual(result["type"], "SYSTEM_USER")
         self.assertTrue(result["app_matches"])
         self.assertTrue(result["required_scopes_granted"])
         self.assertTrue(result["waba_in_granular_targets"])
+        self.assertNotIn("never-return-this-token", str(result))
+
+    @patch("MessageTemplates.services.meta_reconciliation._meta_get")
+    def test_token_audit_keeps_missing_identity_unknown(self, meta_get):
+        meta_get.return_value = ({"data": {"is_valid": True}}, {})
+
+        result = _token_audit("never-return-this-token", "waba-1")
+
+        self.assertIsNone(result["user_id"])
+        self.assertIsNone(result["type"])
+
+    @patch("MessageTemplates.services.meta_reconciliation._meta_get")
+    def test_token_audit_failure_does_not_invent_identity(self, meta_get):
+        meta_get.return_value = ({}, {"message": "Token inspection failed"})
+
+        result = _token_audit("never-return-this-token", "waba-1")
+
+        self.assertEqual(result["status"], "error")
+        self.assertIsNone(result["user_id"])
+        self.assertIsNone(result["type"])
         self.assertNotIn("never-return-this-token", str(result))
 
     @patch.dict("os.environ", {"META_APP_ID": "app-1"}, clear=False)

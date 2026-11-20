@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueTogetherValidator
 from django.utils import timezone
 from Departments.models import EventDepartment
 from .models import (
@@ -156,6 +157,13 @@ class FreelancerAllocationSerializer(EventDepartmentModelSerializer):
 
     class Meta:
         model = FreelancerAllocation
+        validators = [
+            UniqueTogetherValidator(
+                queryset=FreelancerAllocation.objects.all(),
+                fields=("freelancer", "event_department", "requirement"),
+                message="This freelancer is already assigned to this requirement.",
+            )
+        ]
         fields = [
             "id",
             "freelancer",

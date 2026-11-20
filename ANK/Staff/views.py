@@ -137,6 +137,19 @@ class SessionLoginResponseSerializer(serializers.Serializer):
     user = UserSerializer()
 
 
+def login_response(request, user):
+    user_data = UserSerializer(user).data
+    if settings.USE_JWT:
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "user": user_data,
+            "tokens": {"refresh": str(refresh), "access": str(refresh.access_token)},
+        })
+
+    login(request, user)
+    return Response({"detail": "Login successful", "user": user_data})
+
+
 @extend_schema(
     request=EmailSessionLoginSerializer,
     responses={
@@ -162,33 +175,10 @@ class LoginView(GenericAPIView):
 
         user = authenticate(request, email=email, password=password)
         if user is not None:
-            user_data = UserSerializer(user).data
-            if settings.USE_JWT:
-                refresh = RefreshToken.for_user(user)
-                tokens = {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                }
-                return Response(
-                    {
-                        "user": user_data,
-                        "tokens": tokens,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-            else:
-                login(request, user)
-                return Response(
-                    {
-                        "detail": "Login successful",
-                        "user": user_data,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-        else:
-            return Response(
-                {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return login_response(request, user)
+        return Response(
+            {"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
 
 # ─── Token Refresh (JWT only) ────────────────────────────────────────────────
