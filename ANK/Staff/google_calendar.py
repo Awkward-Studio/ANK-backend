@@ -30,6 +30,7 @@ from Staff.google_calendar_service import (
     connection,
     google_request,
     token_request,
+    valid_client_id,
 )
 from Staff.models import (
     GoogleCalendarConnection,
@@ -94,6 +95,8 @@ def google_calendar_connection(request):
 @permission_classes([IsAuthenticated])
 def google_calendar_start(request):
     require_admin(request.user)
+    if settings.GOOGLE_CALENDAR_CLIENT_ID and not valid_client_id():
+        raise CalendarError("The backend Google Calendar client ID is invalid.")
     if not configured():
         raise CalendarError("Google Calendar setup is incomplete.")
     origin = request.headers.get("Origin")

@@ -9,6 +9,7 @@ Django settings for ANK project.
 
 from pathlib import Path
 from datetime import timedelta
+import json
 import os
 import warnings
 from django.core.exceptions import ImproperlyConfigured
@@ -430,8 +431,26 @@ if USE_S3_STORAGE:
     }
 
 
-GOOGLE_CALENDAR_CLIENT_ID = os.getenv("GOOGLE_CALENDAR_CLIENT_ID", "")
-GOOGLE_CALENDAR_CLIENT_SECRET = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET", "")
+def calendar_oauth_setting(name, google_key):
+    value = os.getenv(name, "").strip()
+    if not value.startswith(("{", "[", '"')):
+        return value
+    try:
+        decoded = json.loads(value)
+    except ValueError:
+        return ""
+    if isinstance(decoded, dict):
+        web = decoded.get("web")
+        decoded = decoded.get(name) if name in decoded else (
+            web.get(google_key) if isinstance(web, dict) else decoded.get(google_key)
+        )
+    return decoded.strip() if isinstance(decoded, str) else ""
+
+
+GOOGLE_CALENDAR_CLIENT_ID = calendar_oauth_setting("GOOGLE_CALENDAR_CLIENT_ID", "client_id")
+GOOGLE_CALENDAR_CLIENT_SECRET = calendar_oauth_setting(
+    "GOOGLE_CALENDAR_CLIENT_SECRET", "client_secret"
+)
 GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 GOOGLE_CALENDAR_ACCOUNT_EMAIL = os.getenv("GOOGLE_CALENDAR_ACCOUNT_EMAIL", "")
 GOOGLE_CALENDAR_APP_ORIGIN = os.getenv("GOOGLE_CALENDAR_APP_ORIGIN", "").rstrip("/")

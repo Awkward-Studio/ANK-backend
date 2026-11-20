@@ -1,4 +1,5 @@
 import base64
+import re
 from urllib.parse import quote
 
 import requests
@@ -22,9 +23,15 @@ class CalendarError(APIException):
         super().__init__(detail)
 
 
-def configured():
-    return all((
+def valid_client_id():
+    return re.fullmatch(
+        r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com",
         settings.GOOGLE_CALENDAR_CLIENT_ID,
+    ) is not None
+
+
+def configured():
+    return valid_client_id() and all((
         settings.GOOGLE_CALENDAR_CLIENT_SECRET,
         settings.GOOGLE_CALENDAR_ACCOUNT_EMAIL,
         settings.GOOGLE_CALENDAR_APP_ORIGIN,

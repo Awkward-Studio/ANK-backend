@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -5,6 +6,7 @@ from uuid import uuid4
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
+from ANK.settings import calendar_oauth_setting
 from Staff.google_calendar_service import EVENT_SCOPE, CalendarError, cipher
 from Staff.models import (
     GoogleCalendarConnection,
@@ -22,7 +24,7 @@ APP = "https://ank.example.com"
 
 
 @override_settings(
-    GOOGLE_CALENDAR_CLIENT_ID="test-client",
+    GOOGLE_CALENDAR_CLIENT_ID="test-client.apps.googleusercontent.com",
     GOOGLE_CALENDAR_CLIENT_SECRET="test-secret",
     GOOGLE_CALENDAR_ID=CALENDAR,
     GOOGLE_CALENDAR_ACCOUNT_EMAIL=ACCOUNT,
@@ -196,3 +198,23 @@ class GoogleCalendarTests(TestCase):
             BASE + f"events/{event_id.hex}/", HTTP_IF_MATCH='"v1"'
         ).status_code, 403)
         self.assertEqual(calendar.call_count, 3)
+
+
+    def test_ecs_oauth_settings_accept_raw_values_and_json_wrappers(self):
+        key = "GOOGLE_CALENDAR_CLIENT_ID"
+        client_id = "test-client.apps.googleusercontent.com"
+        for value in (
+            client_id, f'"{client_id}"',
+            f'{{"{key}":"{client_id}","GOOGLE_CALENDAR_CLIENT_SECRET":"test-secret"}}',
+            f'{{"web":{{"client_id":"{client_id}"}}}}',
+        ):
+            with self.subTest(value=value), patch.dict(os.environ, {key: value}):
+                self.assertEqual(calendar_oauth_setting(key, "client_id"), client_id)
+
+    @override_settings(GOOGLE_CALENDAR_CLIENT_ID='{"client_secret":"test-secret"}')
+    def test_invalid_client_id_never_leaves_backend(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(BASE + "connect/")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotContains(response, "test-secret", status_code=503)
+        self.assertFalse(GoogleCalendarOAuthAttempt.objects.exists())
