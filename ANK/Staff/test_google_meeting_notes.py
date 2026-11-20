@@ -485,3 +485,26 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {})
         exact = User.objects.create_user("shoeb.khan@example.com", name="Shoeb Khan", role="staff")
         self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {"shoeb khan": exact.pk})
+
+    def test_staff_can_view_the_full_active_board_but_only_move_their_own_tasks(self):
+        viewer = User.objects.create_user("viewer@example.com", role="staff", name="Viewer")
+        teammate = User.objects.create_user("teammate@example.com", role="staff", name="Teammate")
+        own = TeamTask.objects.create(source_key="own", title="Own", status="todo", assignee=viewer)
+        other = TeamTask.objects.create(
+            source_key="other", title="Other", status="todo", assignee=teammate,
+            notes_url="https://docs.google.com/document/d/private/edit",
+        )
+        unassigned = TeamTask.objects.create(source_key="unassigned", title="Unassigned", status="todo")
+        TeamTask.objects.create(source_key="draft", title="Draft", assignee=viewer)
+        self.client.force_authenticate(viewer)
+        queue = self.client.get("/api/team-tasks/").json()
+        tasks = {task["id"]: task for task in queue["tasks"]}
+        self.assertEqual(set(tasks), {str(own.pk), str(other.pk), str(unassigned.pk)})
+        self.assertTrue(tasks[str(own.pk)]["can_update_status"])
+        self.assertFalse(tasks[str(other.pk)]["can_update_status"])
+        self.assertEqual(tasks[str(other.pk)]["assignee_name"], "Teammate")
+        self.assertEqual(tasks[str(other.pk)]["notes_url"], "")
+        self.assertEqual(queue["users"], [])
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{other.pk}/", {"status": "done"}, format="json").status_code, 404)
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"status": "done"}, format="json").status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"title": "Changed"}, format="json").status_code, 403)

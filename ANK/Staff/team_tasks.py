@@ -66,6 +66,29 @@ class TaskSerializer(serializers.ModelSerializer):
 
     ank_event = serializers.SerializerMethodField()
     suggested_assignee = serializers.SerializerMethodField()
+    assignee_name = serializers.SerializerMethodField()
+    can_update_status = serializers.SerializerMethodField()
+
+    def get_assignee_name(self, task):
+        if not task.assignee_id:
+            return None
+        return task.assignee.name or "Assigned user"
+
+    def get_can_update_status(self, task):
+        user = self.context.get("user")
+        return bool(user and (can_manage_tasks(user) or (
+            task.status != TeamTask.Status.DRAFT and task.assignee_id == user.pk
+        )))
+
+    def to_representation(self, task):
+        data = super().to_representation(task)
+        user = self.context.get("user")
+        if user and not can_manage_tasks(user):
+            data["notes_url"] = ""
+            data["suggested_owner"] = ""
+            if task.assignee_id != user.pk:
+                data["meeting_title"] = ""
+        return data
 
     def get_suggested_assignee(self, task):
         if task.status != TeamTask.Status.DRAFT or task.assignee_id:
@@ -85,6 +108,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "description", "suggested_owner", "status", "due_date",
             "assignee", "meeting_title", "notes_url", "ank_event", "suggested_assignee",
+            "assignee_name", "can_update_status",
         ]
         read_only_fields = ["suggested_owner", "meeting_title", "notes_url"]
 
@@ -183,9 +207,9 @@ def team_tasks(request):
         serializer.is_valid(raise_exception=True)
         task = serializer.save(status=serializer.validated_data.get("status", TeamTask.Status.TODO))
         return Response(
-            TaskSerializer(task).data, status=status.HTTP_201_CREATED if serializer.created else status.HTTP_200_OK,
+            TaskSerializer(task, context={"user": request.user}).data, status=status.HTTP_201_CREATED if serializer.created else status.HTTP_200_OK,
         )
-    tasks = TeamTask.objects.select_related("meeting_link__event")
+    tasks = TeamTask.objects.select_related("meeting_link__event", "assignee")
     staff = []
     if manager:
         staff = [
@@ -193,7 +217,7 @@ def team_tasks(request):
             for user in User.objects.filter(is_active=True).order_by("name", "email")
         ]
     else:
-        tasks = tasks.filter(assignee=request.user).exclude(status=TeamTask.Status.DRAFT)
+        tasks = tasks.exclude(status=TeamTask.Status.DRAFT)
     tasks = list(tasks)
     event_ids = {task.meeting_link.event_id for task in tasks if task.meeting_link_id}
     accessible_ids = set(PermissionChecker.get_user_accessible_events(request.user).filter(pk__in=event_ids).values_list("pk", flat=True))
@@ -203,7 +227,7 @@ def team_tasks(request):
     return Response({
         "can_manage": manager,
         "users": staff,
-        "tasks": TaskSerializer(tasks, many=True, context={"accessible_ids": accessible_ids, "suggested_assignees": suggestions}).data,
+        "tasks": TaskSerializer(tasks, many=True, context={"user": request.user, "accessible_ids": accessible_ids, "suggested_assignees": suggestions}).data,
     })
 
 
@@ -225,4 +249,4 @@ def team_task(request, pk):
         serializer.save()
     event_id = task.meeting_link.event_id if task.meeting_link_id else None
     visible_ids = set(PermissionChecker.get_user_accessible_events(request.user).filter(pk=event_id).values_list("pk", flat=True)) if event_id else set()
-    return Response(TaskSerializer(task, context={"accessible_ids": visible_ids}).data)
+    return Response(TaskSerializer(task, context={"user": request.user, "accessible_ids": visible_ids}).data)
