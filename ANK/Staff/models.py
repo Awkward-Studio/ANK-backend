@@ -65,3 +65,36 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.name} ({self.get_role_display()})"
+
+
+class GoogleCalendarConnection(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    calendar_id = models.CharField(max_length=255)
+    account_email = models.EmailField()
+    client_id = models.CharField(max_length=255)
+    refresh_token = models.TextField()
+    connected_at = models.DateTimeField(auto_now=True)
+
+
+class GoogleCalendarOAuthAttempt(models.Model):
+    state = models.CharField(max_length=64, primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    challenge = models.CharField(max_length=43)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    authorization_code = models.TextField(blank=True)
+    claimed = models.BooleanField(default=False)
+
+
+class GoogleCalendarMeeting(models.Model):
+    calendar_id = models.CharField(max_length=255)
+    event_id = models.CharField(max_length=64)
+    marker = models.UUIDField(default=uuid.uuid4, editable=False)
+    created_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["calendar_id", "event_id"],
+                name="staff_google_calendar_event_unique",
+            )
+        ]

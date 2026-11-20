@@ -64,12 +64,55 @@ jobs:
           container-name: ${{ env.ECS_CONTAINER_NAME }}
           image: ${{ env.IMAGE_URI }}
 
+      - name: Configure shared Google Calendar
+        id: calendar
+        env:
+          TASK_DEFINITION: ${{ steps.render.outputs.task-definition }}
+          CALENDAR_SECRET_ARN: ${{ vars.GOOGLE_CALENDAR_OAUTH_SECRET_ARN }}
+          CALENDAR_ID: ${{ vars.GOOGLE_CALENDAR_ID }}
+          CALENDAR_ACCOUNT: ${{ vars.GOOGLE_CALENDAR_ACCOUNT_EMAIL }}
+          CALENDAR_APP_ORIGIN: ${{ vars.GOOGLE_CALENDAR_APP_ORIGIN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CALENDAR_ID" ]]; then
+            echo "task-definition=$TASK_DEFINITION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$CALENDAR_ACCOUNT" || ! "$CALENDAR_APP_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
+            echo "::error::Set GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCOUNT_EMAIL and GOOGLE_CALENDAR_APP_ORIGIN before enabling Calendar."
+            exit 1
+          fi
+          calendar_task="$RUNNER_TEMP/ank-calendar-task-definition.json"
+          jq --arg container "$ECS_CONTAINER_NAME" \
+            --arg arn "$CALENDAR_SECRET_ARN" \
+            --arg id "$CALENDAR_ID" \
+            --arg account "$CALENDAR_ACCOUNT" \
+            --arg origin "$CALENDAR_APP_ORIGIN" '
+              (.containerDefinitions[] | select(.name == $container)) |= (
+                .environment += [
+                  {name: "GOOGLE_CALENDAR_ID", value: $id},
+                  {name: "GOOGLE_CALENDAR_ACCOUNT_EMAIL", value: $account},
+                  {name: "GOOGLE_CALENDAR_APP_ORIGIN", value: $origin}
+                ]
+                | if $arn != "" then
+                    .secrets |= (map(select(
+                      .name != "GOOGLE_CALENDAR_CLIENT_ID" and .name != "GOOGLE_CALENDAR_CLIENT_SECRET"
+                    )) + [
+                  {name: "GOOGLE_CALENDAR_CLIENT_ID", valueFrom: ($arn + ":GOOGLE_CALENDAR_CLIENT_ID::")},
+                  {name: "GOOGLE_CALENDAR_CLIENT_SECRET", valueFrom: ($arn + ":GOOGLE_CALENDAR_CLIENT_SECRET::")}
+                    ])
+                  else .
+                  end
+              )
+            ' "$TASK_DEFINITION" > "$calendar_task"
+          echo "task-definition=$calendar_task" >> "$GITHUB_OUTPUT"
+
       # Registers the new revision and updates the service. Waits for stability.
       - name: Deploy to Amazon ECS
         id: deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.render.outputs.task-definition }}
+          task-definition: ${{ steps.calendar.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true

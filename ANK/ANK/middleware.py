@@ -1,3 +1,5 @@
+from urllib.parse import urldefrag
+
 from django.http import JsonResponse
 from django.conf import settings
 from django.urls import resolve, Resolver404
@@ -46,7 +48,7 @@ class JsonErrorMiddleware:
                 "API redirect still occurring: %s %s -> %s (status=%s)",
                 request.method,
                 request.path,
-                response.get('Location', 'Unknown'),
+                urldefrag(response.get('Location', 'Unknown'))[0],
                 response.status_code,
             )
 
