@@ -1,4 +1,5 @@
 from django.urls import path
+from Staff.google_calendar import google_calendar_callback
 from Staff.views import (
     UserAssignedEventsAPIView,
     UserAssignedSessionsAPIView,
@@ -16,6 +17,11 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view(), name="token_obtain_pair"),
     path("auth/refresh/", RefreshView.as_view(), name="token_refresh"),
     path("auth/logout/", LogoutView.as_view(), name="token_logout"),
+    path(
+        "auth/google/calendar/callback/",
+        google_calendar_callback,
+        name="google-calendar-callback",
+    ),
     # ─── User CRUD ────────────────────────────────────────────────────
     # GET list, POST create
     path("users/", UserList.as_view(), name="user-list"),
