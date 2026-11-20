@@ -72,14 +72,15 @@ jobs:
           CALENDAR_ID: ${{ vars.GOOGLE_CALENDAR_ID }}
           CALENDAR_ACCOUNT: ${{ vars.GOOGLE_CALENDAR_ACCOUNT_EMAIL }}
           CALENDAR_APP_ORIGIN: ${{ vars.GOOGLE_CALENDAR_APP_ORIGIN }}
+          GOOGLE_LOGIN_DOMAIN: ${{ vars.GOOGLE_LOGIN_DOMAIN }}
         run: |
           set -euo pipefail
-          if [[ -z "$CALENDAR_ID" ]]; then
+          if [[ -z "$CALENDAR_ID" && -z "$GOOGLE_LOGIN_DOMAIN" ]]; then
             echo "task-definition=$TASK_DEFINITION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [[ -z "$CALENDAR_ACCOUNT" || ! "$CALENDAR_APP_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
-            echo "::error::Set GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCOUNT_EMAIL and GOOGLE_CALENDAR_APP_ORIGIN before enabling Calendar."
+          if [[ ( -n "$CALENDAR_ID" && -z "$CALENDAR_ACCOUNT" ) || ! "$CALENDAR_APP_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
+            echo "::error::Set GOOGLE_CALENDAR_APP_ORIGIN and, when enabling Calendar, GOOGLE_CALENDAR_ACCOUNT_EMAIL."
             exit 1
           fi
           calendar_task="$RUNNER_TEMP/ank-calendar-task-definition.json"
@@ -87,12 +88,14 @@ jobs:
             --arg arn "$CALENDAR_SECRET_ARN" \
             --arg id "$CALENDAR_ID" \
             --arg account "$CALENDAR_ACCOUNT" \
+            --arg loginDomain "$GOOGLE_LOGIN_DOMAIN" \
             --arg origin "$CALENDAR_APP_ORIGIN" '
               (.containerDefinitions[] | select(.name == $container)) |= (
                 .environment += [
                   {name: "GOOGLE_CALENDAR_ID", value: $id},
                   {name: "GOOGLE_CALENDAR_ACCOUNT_EMAIL", value: $account},
-                  {name: "GOOGLE_CALENDAR_APP_ORIGIN", value: $origin}
+                  {name: "GOOGLE_CALENDAR_APP_ORIGIN", value: $origin},
+                  {name: "GOOGLE_LOGIN_DOMAIN", value: $loginDomain}
                 ]
                 | if $arn != "" then
                     .secrets |= (map(select(

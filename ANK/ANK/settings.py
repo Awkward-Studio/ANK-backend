@@ -460,3 +460,5 @@ GOOGLE_CALENDAR_REDIRECT_URI = os.getenv(
     "GOOGLE_CALENDAR_REDIRECT_URI",
     "https://api.anewknot.com/api/auth/google/calendar/callback/",
 )
+
+GOOGLE_LOGIN_DOMAIN = os.getenv("GOOGLE_LOGIN_DOMAIN", "").strip().lower()

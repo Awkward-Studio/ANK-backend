@@ -1,4 +1,5 @@
 from django.urls import path
+from Staff.google_login import GoogleLoginCompleteView, GoogleLoginStartView
 from Staff.google_calendar import (
     google_calendar_callback,
     google_calendar_complete,
@@ -22,6 +23,8 @@ urlpatterns = [
     # ─── Authentication endpoints ──────────────────────────────────────
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
     path("auth/login/", LoginView.as_view(), name="token_obtain_pair"),
+    path("auth/google/login/start/", GoogleLoginStartView.as_view(), name="google-login-start"),
+    path("auth/google/login/complete/", GoogleLoginCompleteView.as_view(), name="google-login-complete"),
     path("auth/refresh/", RefreshView.as_view(), name="token_refresh"),
     path("auth/logout/", LogoutView.as_view(), name="token_logout"),
     path(

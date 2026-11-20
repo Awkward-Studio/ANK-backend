@@ -38,6 +38,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=200, blank=True)
     email = models.EmailField(unique=True, blank=True)
     contact_phone = models.CharField(max_length=20, blank=True)
+    google_login_subject = models.CharField(max_length=255, unique=True, null=True, editable=False)
 
     ROLE_CHOICES = [
         ("admin", "Admin"),  # can assign staff
