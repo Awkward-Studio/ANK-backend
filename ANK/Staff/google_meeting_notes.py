@@ -1,5 +1,6 @@
 import re
 from datetime import timedelta
+from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -46,13 +47,55 @@ def event_times(event):
     return (start, end) if start and end and start.tzinfo and end.tzinfo else (None, None)
 
 
+class NotesLinks(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self.href = None
+        self.label = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.href = dict(attrs).get("href")
+            self.label = []
+
+    def handle_data(self, data):
+        if self.href:
+            self.label.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.href:
+            self.links.append(("".join(self.label), self.href))
+            self.href = None
+
+
+def attached_notes_documents(event):
+    links = NotesLinks()
+    links.feed(event.get("description") or "")
+    candidates = links.links + [
+        (attachment.get("title", ""), attachment.get("fileUrl", ""))
+        for attachment in event.get("attachments", [])
+    ]
+    document_ids = set()
+    for title, url in candidates:
+        if not re.search(r"\b(gemini|notes?)\b", title or "", re.IGNORECASE):
+            continue
+        match = re.fullmatch(
+            r"https://docs\.google\.com/document/d/([A-Za-z0-9_-]+)(?:[/?#].*)?",
+            url or "",
+        )
+        if match:
+            document_ids.add(match[1])
+    return document_ids
+
+
 def can_lookup_event(event):
     start, end = event_times(event)
     return bool(
         start and end and end <= timezone.now()
         and event.get("status") != "cancelled"
         and event.get("visibility") not in {"private", "confidential"}
-        and meeting_code(event)
+        and (meeting_code(event) or attached_notes_documents(event))
     )
 
 
@@ -71,7 +114,13 @@ def text_runs(value):
 def preview_meeting_notes(token, event_id, *, calendar_token):
     event = calendar_request("GET", calendar_token, event_id)
     if not can_lookup_event(event):
-        raise CalendarError("Choose a past Team Calendar event with a Google Meet link.", 404)
+        raise CalendarError("Choose a past Team Calendar event with Gemini notes or a Google Meet link.", 404)
+
+    attached = attached_notes_documents(event)
+    if len(attached) == 1:
+        return read_notes_document(token, attached.pop())
+    if len(attached) > 1 and not meeting_code(event):
+        raise CalendarError("This event has multiple notes documents. Open them in Google Calendar.", 409)
 
     start, end = event_times(event)
     if end < timezone.now() - timedelta(days=30):
@@ -111,7 +160,10 @@ def preview_meeting_notes(token, event_id, *, calendar_token):
     if response.get("nextPageToken") or len(document_ids) != 1:
         raise CalendarError("This call has multiple notes documents. Open them in Google Meet.", 409)
 
-    document_id = document_ids[0]
+    return read_notes_document(token, document_ids[0])
+
+
+def read_notes_document(token, document_id):
     document = google_request(
         "GET", f"{DOCS_API}/documents/{document_id}", token=token,
         params={"includeTabsContent": "true"},

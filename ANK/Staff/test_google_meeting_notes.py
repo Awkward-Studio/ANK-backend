@@ -130,3 +130,26 @@ class GoogleMeetingNotesTests(TestCase):
         ]}
         self.assertEqual(self.client.get(NOTES).status_code, 409)
         self.assertEqual(google.call_count, 1)
+
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_copied_event_reads_attached_notes_without_meet_link(self, google, calendar, _token):
+        event = dict(self.event)
+        del event["hangoutLink"]
+        event["start"] = {"dateTime": (self.start - timedelta(days=60)).isoformat()}
+        event["end"] = {"dateTime": (self.end - timedelta(days=60)).isoformat()}
+        event["attachments"] = [
+            {"title": "Recording", "fileUrl": "https://drive.google.com/file/d/recording/view"},
+            {"title": "Client call - Notes by Gemini", "fileUrl": "https://docs.google.com/document/d/notes-id/edit"},
+        ]
+        calendar.return_value = event
+        google.return_value = {"title": "Client notes"}
+        response = self.client.get(NOTES)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["url"], "https://docs.google.com/document/d/notes-id/edit")
+        google.assert_called_once_with(
+            "GET", "https://docs.googleapis.com/v1/documents/notes-id",
+            token="access", params={"includeTabsContent": "true"},
+        )
