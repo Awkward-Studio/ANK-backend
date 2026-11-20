@@ -210,3 +210,31 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual([doc["id"] for doc in response.json()["documents"]], ["first", "second"])
         self.assertEqual(google.call_count, 3)
         self.assertEqual(google.call_args.kwargs["params"]["pageToken"], "next")
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_preview_follows_full_notes_link_to_nested_tab(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        def tab(tab_id, title, runs, child_tabs=()):
+            return {
+                "tabProperties": {"tabId": tab_id, "title": title},
+                "documentTab": {"body": {"content": [
+                    {"paragraph": {"elements": [{"textRun": run} for run in runs]}},
+                ]}},
+                "childTabs": list(child_tabs),
+            }
+
+        details = tab("t.details", "Details", [{"content": "Suggested next steps\nReview the schedule."}])
+        google.return_value = {"tabs": [
+            tab("t.summary", "Notes by Gemini", [
+                {"content": "Want to see more? "},
+                {"content": "View the full notes", "textStyle": {"link": {"tabId": "t.details"}}},
+            ], [details]),
+            tab("t.transcript", "Transcript", [{"content": "Private transcript"}]),
+        ]}
+
+        preview = read_notes_document("access", "meeting")
+        full_url = "https://docs.google.com/document/d/meeting/edit?tab=t.details"
+        self.assertEqual(preview["text"], "Suggested next steps\nReview the schedule.")
+        self.assertEqual(preview["url"], full_url)
+        self.assertEqual(preview["links"], [{"title": "View the full notes", "url": full_url}])

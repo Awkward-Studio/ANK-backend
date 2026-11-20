@@ -1,7 +1,7 @@
 import re
 from datetime import timedelta
 from html.parser import HTMLParser
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from django.conf import settings
 from django.utils import timezone
@@ -207,27 +207,75 @@ def notes_links(runs, document_url):
     ]
 
 
+def document_tabs(tabs):
+    for tab in tabs:
+        yield tab
+        yield from document_tabs(tab.get("childTabs", []))
+
+
+def tab_title(tab):
+    return tab.get("tabProperties", {}).get("title", "").casefold()
+
+
+def tab_runs(tab):
+    body = tab.get("documentTab", {}).get("body", {})
+    return list(text_runs(body.get("content", [])))
+
+
+def full_notes_label(title):
+    return re.search(r"\bfull (?:meeting )?notes\b", title, re.IGNORECASE)
+
+
 def read_notes_document(token, document_id):
     document = google_request(
         "GET", f"{DOCS_API}/documents/{document_id}", token=token,
         params={"includeTabsContent": "true"},
     )
-    body = document.get("body", {})
-    tabs = document.get("tabs", [])
-    if tabs:
-        notes_tab = next(
-            (tab for tab in tabs if "notes" in tab.get("tabProperties", {}).get("title", "").lower()),
-            tabs[0],
-        )
-        title = notes_tab.get("tabProperties", {}).get("title", "").lower()
-        body = {} if "transcript" in title else notes_tab.get("documentTab", {}).get("body", {})
-    runs = list(text_runs(body.get("content", [])))
-    text = "".join(run.get("content", "") for run in runs).strip()
     url = notes_url(document_id)
+    original_url = url
+    tabs = [
+        tab for tab in document_tabs(document.get("tabs", []))
+        if "transcript" not in tab_title(tab)
+    ]
+    links = []
+    if tabs:
+        notes_tab = next((tab for tab in tabs if "notes" in tab_title(tab)), tabs[0])
+        runs = tab_runs(notes_tab)
+        links = notes_links(runs, url)
+        tabs_by_id = {
+            tab["tabProperties"]["tabId"]: tab
+            for tab in tabs if tab.get("tabProperties", {}).get("tabId")
+        }
+        full_tab = next((tab for tab in tabs if full_notes_label(tab_title(tab))), None)
+        full_url = None
+        for link in links:
+            if not full_notes_label(link["title"]):
+                continue
+            target = urlsplit(link["url"])
+            if target._replace(query="", fragment="").geturl() != url:
+                continue
+            tab_id = parse_qs(target.query).get("tab", [None])[0]
+            if tab_id in tabs_by_id:
+                full_tab = tabs_by_id[tab_id]
+                full_url = link["url"]
+                break
+        if full_tab is not None:
+            full_runs = tab_runs(full_tab)
+            if full_runs:
+                runs = full_runs
+                tab_id = full_tab.get("tabProperties", {}).get("tabId")
+                original_url = full_url or (f"{url}?{urlencode({'tab': tab_id})}" if tab_id else url)
+    elif document.get("tabs"):
+        runs = []
+    else:
+        runs = list(text_runs(document.get("body", {}).get("content", [])))
+
+    links_by_url = {link["url"]: link for link in links + notes_links(runs, url)}
+    text = "".join(run.get("content", "") for run in runs).strip()
     return {
         "title": document.get("title", "Gemini notes"),
         "text": text[:24000],
         "truncated": len(text) > 24000,
-        "url": url,
-        "links": notes_links(runs, url),
+        "url": original_url,
+        "links": list(links_by_url.values()),
     }
