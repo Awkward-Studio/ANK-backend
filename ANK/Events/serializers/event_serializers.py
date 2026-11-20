@@ -58,10 +58,14 @@ class EventRegistrationSerializer(PermissionAwareSerializer, CustomFieldMixin, s
         model = EventRegistration
         fields = [
             "id",
+            "uid",
             "guest",
             "guest_id",
             "event",
             "rsvp_status",
+            "is_checked_in",
+            "checked_in_at",
+            "checked_in_by",
             "logistics_status",
             "initiated_on",
             "responded_on",
@@ -76,7 +80,7 @@ class EventRegistrationSerializer(PermissionAwareSerializer, CustomFieldMixin, s
             "additional_guest_count",
             "custom_fields",
         ]
-        read_only_fields = ["initiated_on"]
+        read_only_fields = ["initiated_on", "checked_in_at", "checked_in_by"]
 
     def validate_rsvp_status(self, value):
         """

@@ -160,6 +160,8 @@ class EventRegistrationWithCustomFieldsSerializer(serializers.Serializer):
     event_id = serializers.UUIDField(source="event.id", read_only=True)
     event_name = serializers.CharField(source="event.name", read_only=True)
     rsvp_status = serializers.CharField(read_only=True)
+    is_checked_in = serializers.BooleanField(read_only=True)
+    checked_in_at = serializers.DateTimeField(read_only=True)
     custom_fields = serializers.SerializerMethodField()
 
     def get_custom_fields(self, obj):

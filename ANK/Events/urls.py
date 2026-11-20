@@ -1,4 +1,8 @@
 from django.urls import path
+from Events.views.security_checkin_views import (
+    SecurityVerifyPassAPIView,
+    SecurityCheckInAPIView,
+)
 from Events.views.event_views import (
     EventAccommodationsAPIView,
     EventListCreateView,
@@ -98,6 +102,16 @@ urlpatterns = [
     ),
 
     # ─── Events ────────────────────────────────────────────────────────────
+    path(
+        "events/security/verify-pass/",
+        SecurityVerifyPassAPIView.as_view(),
+        name="security-verify-pass",
+    ),
+    path(
+        "events/security/check-in/",
+        SecurityCheckInAPIView.as_view(),
+        name="security-check-in",
+    ),
     path("events/", EventListCreateView.as_view(), name="event-list"),
     path("events/<uuid:pk>/", EventDetailView.as_view(), name="event-detail"),
     path(

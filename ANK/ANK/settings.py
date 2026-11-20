@@ -61,12 +61,12 @@ def hosts_env(name: str, default: str = "") -> list[str]:
 # ---------------------------
 # Core toggles
 # ---------------------------
-SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = get_bool_env("DEBUG", True)
+SECRET_KEY = os.getenv("SECRET_KEY") or ("django-insecure-ank-dev-secret-key-change-in-prod" if DEBUG else None)
 USE_JWT = get_bool_env("USE_JWT", True)
 APPEND_SLASH = False # Handled by custom ApiSlashMiddleware to prevent token-stripping redirects
 
-if not DEBUG and not SECRET_KEY:
+if not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG=False")
 
 # WhatsApp Multi-Number Support
