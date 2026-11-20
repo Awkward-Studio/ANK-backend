@@ -406,3 +406,61 @@ class GoogleMeetingNotesTests(TestCase):
         fallback = candidates({"summary": "Daily sync"}, Event.objects.all(), "")
         self.assertEqual(len(fallback), 3)
         self.assertFalse(any(event["suggested"] for event in fallback))
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_notes_and_task_queue_agree_on_mixed_draft_and_active_steps(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event,
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes/edit"}],
+        }
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": (
+            "Next steps\n"
+            "[Staff] Send Partnership Details: Send the project details.\n"
+            "[Contact] Check Celebrity Availability: Check the schedule.\n"
+            "[Contact] Review Event Proposal: Provide feedback.\n"
+            "Details\n"
+        )}}]}}]}}
+        steps = self.client.get(NOTES).json()["suggested_steps"]
+        saved = self.client.post(NOTES, {"steps": [step["id"] for step in steps]}, format="json")
+        self.assertEqual(saved.status_code, 200)
+        converted_id = saved.json()[1]["id"]
+        response = self.client.patch(f"/api/team-tasks/{converted_id}/", {"status": "todo"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        notes = self.client.get(NOTES).json()["suggested_steps"]
+        queue = self.client.get("/api/team-tasks/").json()
+        drafts = {task["title"] for task in queue["tasks"] if task["status"] == "draft"}
+        self.assertTrue(queue["can_manage"])
+        self.assertEqual([step["task_status"] for step in notes], ["draft", "todo", "draft"])
+        self.assertEqual(drafts, {"Send Partnership Details", "Review Event Proposal"})
+
+    def test_import_preassigns_only_unique_active_owners_and_keeps_reviewed_assignment(self):
+        from Staff.team_tasks import save_meeting_steps, step_key
+
+        shoeb = User.objects.create_user("shoeb@example.com", name="Shoeb Khan", role="staff")
+        reviewer = User.objects.create_user("reviewer@example.com", name="Reviewer", role="staff")
+        User.objects.create_user("inactive@example.com", name="Shoeb Khan", role="staff", is_active=False)
+        User.objects.create_user("one@example.com", name="Duplicate Name", role="staff")
+        User.objects.create_user("two@example.com", name="Duplicate Name", role="staff")
+        steps = [
+            {"owner": "SHOEB  KHAN", "title": "Send details", "description": ""},
+            {"owner": "Duplicate Name", "title": "Review details", "description": ""},
+        ]
+        document = {"title": "Meeting", "url": "", "suggested_steps": steps}
+        selected = [step_key(step) for step in steps]
+        save_meeting_steps(self.owner, "calendar", "meeting", document, selected)
+        task = TeamTask.objects.get(title="Send details")
+        self.assertEqual(task.assignee, shoeb)
+        self.assertIsNone(TeamTask.objects.get(title="Review details").assignee)
+        task.assignee = reviewer
+        task.save(update_fields=["assignee"])
+        save_meeting_steps(self.owner, "calendar", "meeting", document, selected)
+        task.refresh_from_db()
+        self.assertEqual(task.assignee, reviewer)
+
+        legacy = TeamTask.objects.create(source_key="legacy", title="Legacy draft", suggested_owner="shoeb@example.com")
+        queue = self.client.get("/api/team-tasks/").json()["tasks"]
+        suggestion = next(item for item in queue if item["id"] == str(legacy.pk))
+        self.assertEqual(suggestion["suggested_assignee"], str(shoeb.pk))

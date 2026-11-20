@@ -15,6 +15,20 @@ from Staff.models import MeetingEventLink, TeamTask, User
 from Departments.permissions import PermissionChecker
 
 
+def owner_key(value):
+    return " ".join(value.split()).casefold()
+
+
+def unique_active_assignees(owners):
+    owner_keys = {owner_key(owner) for owner in owners if owner.strip()}
+    matches = {}
+    if owner_keys:
+        for user_id, name, email in User.objects.filter(is_active=True).values_list("pk", "name", "email"):
+            for key in {owner_key(name), owner_key(email)} & owner_keys:
+                matches.setdefault(key, set()).add(user_id)
+    return {key: next(iter(ids)) for key, ids in matches.items() if len(ids) == 1}
+
+
 def can_manage_tasks(user):
     return user.is_superuser or user.role in {"admin", "super_admin"}
 
@@ -25,6 +39,13 @@ class TaskSerializer(serializers.ModelSerializer):
     )
 
     ank_event = serializers.SerializerMethodField()
+    suggested_assignee = serializers.SerializerMethodField()
+
+    def get_suggested_assignee(self, task):
+        if task.status != TeamTask.Status.DRAFT or task.assignee_id:
+            return None
+        user_id = self.context.get("suggested_assignees", {}).get(owner_key(task.suggested_owner))
+        return str(user_id) if user_id else None
 
     def get_ank_event(self, task):
         link = task.meeting_link
@@ -37,7 +58,7 @@ class TaskSerializer(serializers.ModelSerializer):
         model = TeamTask
         fields = [
             "id", "title", "description", "suggested_owner", "status", "due_date",
-            "assignee", "meeting_title", "notes_url", "ank_event",
+            "assignee", "meeting_title", "notes_url", "ank_event", "suggested_assignee",
         ]
         read_only_fields = ["suggested_owner", "meeting_title", "notes_url"]
 
@@ -98,6 +119,7 @@ def save_meeting_steps(user, calendar_id, event_id, document, selected):
     candidates = {step_key(step): step for step in document.get("suggested_steps", [])}
     if not set(selected) <= candidates.keys():
         raise ValidationError("The notes have changed. Reload the document and select the steps again.")
+    assignees = unique_active_assignees(candidates[key]["owner"] for key in selected)
     with transaction.atomic():
         link, _ = MeetingEventLink.objects.get_or_create(calendar_id=calendar_id, meeting_id=event_id)
         tasks = []
@@ -110,6 +132,7 @@ def save_meeting_steps(user, calendar_id, event_id, document, selected):
                     "title": step["title"][:255],
                     "description": step["description"],
                     "suggested_owner": step["owner"][:255],
+                    "assignee_id": assignees.get(owner_key(step["owner"])),
                     "created_by": user,
                     "meeting_title": (document.get("meeting_title") or document["title"])[:500],
                     "notes_url": document["url"][:500],
@@ -148,10 +171,13 @@ def team_tasks(request):
     tasks = list(tasks)
     event_ids = {task.meeting_link.event_id for task in tasks if task.meeting_link_id}
     accessible_ids = set(PermissionChecker.get_user_accessible_events(request.user).filter(pk__in=event_ids).values_list("pk", flat=True))
+    suggestions = unique_active_assignees(
+        task.suggested_owner for task in tasks if task.status == TeamTask.Status.DRAFT and not task.assignee_id
+    )
     return Response({
         "can_manage": manager,
         "users": staff,
-        "tasks": TaskSerializer(tasks, many=True, context={"accessible_ids": accessible_ids}).data,
+        "tasks": TaskSerializer(tasks, many=True, context={"accessible_ids": accessible_ids, "suggested_assignees": suggestions}).data,
     })
 
 
