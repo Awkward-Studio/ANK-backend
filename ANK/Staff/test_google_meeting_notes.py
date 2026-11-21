@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 
 from Staff.google_calendar_service import CalendarError, EVENT_SCOPE, cipher
 from Staff.google_meeting_notes import NOTES_SCOPES
-from Staff.models import GoogleCalendarConnection, TeamTask, User
+from Staff.models import GoogleCalendarConnection, MeetingNotesOverview, TeamTask, User
 
 
 BASE = "/api/team-calendar/"
@@ -43,6 +43,130 @@ class GoogleMeetingNotesTests(TestCase):
             "start": {"dateTime": self.start.isoformat()},
             "end": {"dateTime": self.end.isoformat()},
         }
+
+    @patch("Staff.meeting_notes_overview.access_token", return_value="access")
+    @patch("Staff.meeting_notes_overview.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_saves_overview_and_shares_it_only_with_verified_invitees(self, docs, calendar, token):
+        self.connection.notes_refresh_token = "notes-token"
+        self.connection.save(update_fields=["notes_refresh_token"])
+        invitee = User.objects.create_user("invitee@example.com")
+        invitee.google_login_subject = "verified-identity"
+        invitee.save(update_fields=["google_login_subject"])
+        event = {
+            **self.event,
+            "attendees": [{"email": invitee.email.upper()}],
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes-id/edit"}],
+        }
+        calendar.return_value = event
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nMarketing planning.\nNext steps\n[Staff] Follow-up: Review the item."
+        }}]}}]}}
+        view = {"view": "overview"}
+        with patch("Staff.google_meeting_notes.render_tab") as render:
+            overview = self.client.get(NOTES, view)
+            self.assertEqual(overview.status_code, 200, overview.data)
+            render.assert_not_called()
+        self.assertEqual(overview.data["summary_text"], "Marketing planning.")
+        step = overview.data["suggested_steps"][0]
+        snapshot = MeetingNotesOverview.objects.get()
+        self.assertNotIn("tabs", snapshot.payload)
+        self.assertEqual(snapshot.payload["text"], "")
+        docs.assert_called_once()
+        self.assertEqual(self.client.get(NOTES, view).data, overview.data)
+        token.assert_called_with()
+        docs.assert_called_once()
+
+        with (
+            patch("Staff.google_calendar.access_token", return_value="access"),
+            patch("Staff.google_calendar.calendar_request", return_value={"items": [event]}),
+        ):
+            self.client.force_authenticate(invitee)
+            agenda = self.client.get(BASE + "events/", {"start": self.start.isoformat(), "end": timezone.now().isoformat()})
+            self.assertEqual(agenda.status_code, 200, agenda.data)
+            self.assertEqual(agenda.data["events"][0]["notes_overview"]["total"], 1)
+            self.assertEqual(agenda.data["events"][0]["notes_overview"]["saved"], 0)
+            docs.assert_called_once()
+
+        self.assertEqual(self.client.get(NOTES, view).data, overview.data)
+        self.assertEqual(self.client.get(NOTES, {**view, "refresh": "1"}).status_code, 403)
+        self.assertEqual(self.client.get(NOTES, {"view": "document"}).status_code, 403)
+        self.assertEqual(self.client.post(NOTES + "?view=overview", {"steps": [step["id"]]}, format="json").status_code, 403)
+        event["attendees"] = []
+        self.assertEqual(self.client.get(NOTES, view).status_code, 403)
+        event["visibility"] = "private"
+        self.assertEqual(self.client.get(NOTES, view).status_code, 404)
+        docs.assert_called_once()
+
+        del event["visibility"]
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES, {"view": "document", "document": "notes-id"}).status_code, 200)
+        self.assertEqual(docs.call_count, 2)
+        saved = self.client.post(NOTES + "?view=overview&document=notes-id", {"steps": [step["id"]]}, format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertEqual(self.client.get(NOTES, view).data["suggested_steps"][0]["task_status"], "draft")
+        self.assertEqual(docs.call_count, 3)
+
+        with (
+            patch("Staff.google_calendar.access_token", return_value="access"),
+            patch("Staff.google_calendar.calendar_request", return_value=event),
+        ):
+            meeting = self.client.get(BASE + "events/event-1/")
+            self.assertEqual(meeting.data["notes_overview"]["saved"], 1)
+
+        event["attachments"] = [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/new-id/edit"}]
+        self.assertEqual(self.client.get(NOTES, view).data["document_id"], "new-id")
+        self.assertEqual(docs.call_count, 4)
+        self.assertEqual(MeetingNotesOverview.objects.count(), 1)
+
+    @patch("Staff.meeting_notes_overview.access_token", return_value="access")
+    @patch("Staff.meeting_notes_overview.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_picker_counts_only_imported_documents_and_deduplicates_shared_steps(self, docs, calendar, _token):
+        from Staff.meeting_notes_overview import picker_overviews
+
+        self.connection.notes_refresh_token = "notes-token"
+        self.connection.save(update_fields=["notes_refresh_token"])
+        event = {
+            **self.event,
+            "attachments": [
+                {"title": f"Notes {doc}", "fileUrl": f"https://docs.google.com/document/d/{doc}/edit"}
+                for doc in ("quick", "full")
+            ],
+        }
+        calendar.return_value = event
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nInitial summary.\nNext steps\n[Staff] Follow-up: Review the item."
+        }}]}}]}}
+        view = {"view": "overview"}
+        self.assertEqual(len(self.client.get(NOTES, view).data["documents"]), 2)
+        self.assertEqual(picker_overviews(self.owner, [event]), {})
+        docs.assert_not_called()
+        first = {**view, "document": "quick"}
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Initial summary.")
+        self.assertTrue(picker_overviews(self.owner, [event])["event-1"]["partial"])
+
+        invitee = User.objects.create_user("team@example.com")
+        invitee.google_login_subject = "team-identity"
+        event["attendees"] = [{"email": invitee.email}]
+        self.client.force_authenticate(invitee)
+        self.assertEqual([doc["id"] for doc in self.client.get(NOTES, view).data["documents"]], ["quick"])
+        self.assertEqual(self.client.get(NOTES, {**view, "document": "full"}).status_code, 404)
+        docs.assert_called_once()
+
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES, {**view, "document": "full"}).status_code, 200)
+        summary = picker_overviews(self.owner, [event])["event-1"]
+        self.assertFalse(summary["partial"])
+        self.assertEqual(summary["total"], 1)
+
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nUpdated summary."
+        }}]}}]}}
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Initial summary.")
+        self.assertEqual(self.client.get(NOTES, {**first, "refresh": "1"}).data["summary_text"], "Updated summary.")
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Updated summary.")
+        self.assertEqual(docs.call_count, 3)
 
     @patch("Staff.google_calendar.access_token")
     def test_other_admin_cannot_read_owners_notes(self, token):

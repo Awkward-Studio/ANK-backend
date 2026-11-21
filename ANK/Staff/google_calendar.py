@@ -55,6 +55,7 @@ from django.shortcuts import get_object_or_404
 from Staff.meeting_event_links import (
     available_meeting, candidates, change_link, event_option, find_explicit_event, meeting_link, visible_event,
 )
+from Staff.meeting_notes_overview import meeting_notes, picker_overviews
 from Staff.models import MeetingEventLink, TeamTask
 from Staff.team_tasks import ImportSerializer, mark_saved_steps, save_meeting_steps
 
@@ -413,8 +414,15 @@ def list_events(request):
             event_id__in=[event["id"] for event in events],
         )
     }
+    overviews = picker_overviews(request.user, events)
     return Response({
-        "events": [event_data(event, meetings.get(event["id"]), request.user) for event in events],
+        "events": [
+            {
+                **event_data(event, meetings.get(event["id"]), request.user),
+                "notes_overview": overviews.get(event["id"]),
+            }
+            for event in events
+        ],
         "next_page": result.get("nextPageToken"),
     })
 
@@ -473,7 +481,10 @@ def google_calendar_event(request, event_id):
         event = calendar_request("GET", access_token(), event_id)
         if not available_meeting(event):
             raise CalendarError("This meeting is private or no longer available.", 404)
-        return Response(event_data(event, meeting, request.user))
+        return Response({
+            **event_data(event, meeting, request.user),
+            "notes_overview": picker_overviews(request.user, [event]).get(event_id),
+        })
     if not meeting or not (is_admin(request.user) or meeting.created_by_id == request.user.pk):
         raise PermissionDenied()
     etag = request.headers.get("If-Match", "")
@@ -510,17 +521,29 @@ def google_calendar_event(request, event_id):
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def google_calendar_meeting_notes(request, event_id):
-    if not can_preview_notes(request.user):
-        raise PermissionDenied()
     summary = request.method == "GET" and request.query_params.get("summary") == "steps"
+    importing = request.method == "POST"
+    view = request.query_params.get("view")
+    if not can_preview_notes(request.user) and (importing or summary or view != "overview"):
+        raise PermissionDenied()
+    if importing:
+        serializer = ImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+    document_id = request.query_params.get("document")
     try:
-        document = preview_meeting_notes(
-            access_token(notes=True), event_id, calendar_token=access_token(),
-            document_id=request.query_params.get("document"), steps_only=summary,
-        )
-        if request.method == "POST":
-            serializer = ImportSerializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
+        if not summary and view in {"overview", "document"}:
+            if document_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", document_id):
+                raise ValidationError("Invalid notes document.")
+            document = meeting_notes(
+                request.user, event_id, document_id, overview=view == "overview",
+                refresh=request.query_params.get("refresh") == "1", importing=importing,
+            )
+        else:
+            document = preview_meeting_notes(
+                access_token(notes=True), event_id, calendar_token=access_token(),
+                document_id=document_id, steps_only=summary,
+            )
+        if importing:
             return Response(save_meeting_steps(
                 request.user, settings.GOOGLE_CALENDAR_ID, event_id,
                 document, serializer.validated_data["steps"],

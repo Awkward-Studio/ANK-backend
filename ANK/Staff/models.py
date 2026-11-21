@@ -138,3 +138,21 @@ class MeetingEventLink(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["calendar_id", "meeting_id"], name="staff_meeting_event_link_unique"),
         ]
+
+
+class MeetingNotesOverview(models.Model):
+    calendar_id = models.CharField(max_length=255)
+    account_email = models.EmailField()
+    event_id = models.CharField(max_length=1024)
+    document_selector = models.CharField(max_length=255, blank=True)
+    source_revision = models.CharField(max_length=64)
+    payload = models.JSONField()
+    picker_data = models.JSONField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["calendar_id", "account_email", "event_id", "document_selector"],
+                name="staff_meeting_notes_overview_unique",
+            )
+        ]
