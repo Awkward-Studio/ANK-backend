@@ -122,7 +122,7 @@ def suggested_steps(text):
             continue
         if not active:
             continue
-        if SECTION_HEADING.fullmatch(line):
+        if SECTION_HEADING.fullmatch(line) or DECISION_GROUP.fullmatch(line):
             break
         match = STEP.match(line)
         if match:
@@ -137,9 +137,64 @@ def suggested_steps(text):
 
 DECISIONS_HEADING = re.compile(r"(?:key\s+)?decisions(?:\s+(?:made|taken))?\s*:?", re.IGNORECASE)
 DECISION_GROUP = re.compile(
-    r"(?:confirmed|agreed|decided|finalized|decisions made|needs further discussion|pending|deferred|open questions)\s*:?",
+    r"(?:confirmed|aligned|agreed|decided|finalized|decisions made|needs further discussions?|disagreed|shelved|pending|deferred|open questions|discussion points|items for discussion|unresolved(?: items)?)\s*:?",
     re.IGNORECASE,
 )
+
+
+DISCUSSION_LABEL = re.compile(r"discussion|disagreed|shelved|pending|deferred|open questions|unresolved", re.IGNORECASE)
+
+
+def is_discussion_group(label):
+    return bool(DISCUSSION_LABEL.search(label))
+
+
+SUMMARY_HEADING = re.compile(
+    r"(?:meeting summary|summary|overview|quick notes|(?:key |main )?takeaways|(?:meeting )?highlights)\s*:?",
+    re.IGNORECASE,
+)
+DETAILS_HEADING = re.compile(r"(?:details|discussion topics|discussion details)\s*:?", re.IGNORECASE)
+NOTES_FOOTER = re.compile(r"^(?:you should review gemini|how is the quality|want to see more)", re.IGNORECASE)
+
+
+def meeting_summary(text, *, quick=False):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    has_heading = any(SUMMARY_HEADING.fullmatch(line) for line in lines)
+    paragraphs = []
+    active = quick and not has_heading
+    for line in lines:
+        if SUMMARY_HEADING.fullmatch(line):
+            active = True
+            continue
+        if not active:
+            continue
+        if (SECTION_HEADING.fullmatch(line) or DECISIONS_HEADING.fullmatch(line)
+                or STEP_HEADING.fullmatch(line) or DECISION_GROUP.fullmatch(line)
+                or DETAILS_HEADING.fullmatch(line) or NOTES_FOOTER.match(line)):
+            break
+        if quick and re.match(r"^(?:invited|attachments|meeting records)\b", line, re.IGNORECASE):
+            continue
+        paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
+def discussion_topics(text):
+    active = False
+    titles = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if DETAILS_HEADING.fullmatch(line):
+            active = True
+            continue
+        if not active or not line:
+            continue
+        if (NOTES_FOOTER.match(line) or SUMMARY_HEADING.fullmatch(line)
+                or DECISIONS_HEADING.fullmatch(line) or STEP_HEADING.fullmatch(line)):
+            break
+        title, colon, _ = line.partition(":")
+        if colon and 5 <= len(title) <= 140 and not re.search(r"[.!?]\s", title):
+            titles.append(title.strip())
+    return list(dict.fromkeys(titles))
 
 
 def decision_groups(text):
@@ -152,12 +207,17 @@ def decision_groups(text):
             continue
         if DECISIONS_HEADING.fullmatch(line):
             active = True
-            continue
-        if not active:
+            group = None
             continue
         if SECTION_HEADING.fullmatch(line) or STEP_HEADING.fullmatch(line):
-            break
-        if DECISION_GROUP.fullmatch(line):
+            active = False
+            group = None
+            continue
+        is_group = bool(DECISION_GROUP.fullmatch(line))
+        if not active and not (is_group and is_discussion_group(line)):
+            continue
+        if is_group:
+            active = True
             group = {"label": line.rstrip(":"), "items": []}
             groups.append(group)
             continue

@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from Staff.google_calendar_service import CalendarError, calendar_request, google_request
-from Staff.google_docs_content import decision_groups, render_content, suggested_steps
+from Staff.google_docs_content import decision_groups, discussion_topics, meeting_summary, render_content, suggested_steps
 
 
 NOTES_SCOPES = (
@@ -122,9 +122,12 @@ def notes_url(document_id):
 def select_notes_document(token, documents, document_id, *, steps_only=False):
     if steps_only:
         steps = []
+        decisions = []
         for key in documents:
-            steps.extend(read_notes_document(token, key, steps_only=True)["suggested_steps"])
-        return {"suggested_steps": steps}
+            document = read_notes_document(token, key, steps_only=True)
+            steps.extend(document["suggested_steps"])
+            decisions.extend(document["decisions"])
+        return {"suggested_steps": steps, "decisions": decisions}
     if document_id is not None:
         if document_id not in documents:
             raise CalendarError("This notes document is not linked to the event.", 404)
@@ -321,6 +324,7 @@ def read_notes_document(token, document_id, *, steps_only=False):
     links_by_url = {link["url"]: link for link in links + notes_links(runs, url)}
     text = "".join(run.get("content", "") for run in runs).strip()
     sections = []
+    quick_summaries = []
     if not all_tabs:
         all_tabs = [{"tabProperties": {"title": "Full notes"}, "documentTab": document}]
     for index, tab in enumerate([] if steps_only else all_tabs):
@@ -329,13 +333,22 @@ def read_notes_document(token, document_id, *, steps_only=False):
         title = props.get("title") or f"Document tab {index + 1}"
         if "transcript" in title.casefold():
             kind = "transcript"
-        elif tab is full_tab or (tab is notes_tab and full_tab is None) or not document.get("tabs"):
+        elif tab is full_tab or not document.get("tabs"):
             kind = "full"
-        elif tab is notes_tab or re.search(r"quick|summary", title, re.IGNORECASE):
+        elif re.search(r"quick|summary", title, re.IGNORECASE):
+            kind = "quick"
+        elif tab is notes_tab and full_tab is None:
+            kind = "full"
+        elif tab is notes_tab:
             kind = "quick"
         else:
             kind = "other"
         data = tab.get("documentTab", {})
+        if kind == "quick":
+            quick_text = "".join(run.get("content", "") for run in tab_runs(tab))
+            quick_summary = meeting_summary(quick_text, quick=True)
+            if quick_summary:
+                quick_summaries.append(quick_summary)
         sections.append({
             "id": tab_id or f"tab-{index}",
             "title": title,
@@ -361,15 +374,27 @@ def read_notes_document(token, document_id, *, steps_only=False):
                 for existing in sections:
                     if existing["kind"] == "full":
                         existing["kind"] = "quick"
+                if not steps_only:
+                    quick_summary = meeting_summary(text, quick=True)
+                    if quick_summary:
+                        quick_summaries.append(quick_summary)
                 original_url = section["url"]
                 text = "".join(run.get("content", "") for run in linked_runs).strip()
             sections.append(section)
+    decisions = decision_groups(text)
     if steps_only:
-        return {"suggested_steps": suggested_steps(text)}
+        return {"suggested_steps": suggested_steps(text), "decisions": decisions}
+    full_summary = meeting_summary(text)
     return {
         "document_id": document_id,
         "tabs": sections,
-        "decisions": decision_groups(text),
+        "decisions": decisions,
+        "summary_text": full_summary,
+        "overview": {
+            "quick_summaries": list(dict.fromkeys(quick_summaries)),
+            "full_summary": full_summary,
+            "discussion_topics": discussion_topics(text),
+        },
         "suggested_steps": suggested_steps(text),
         "title": document.get("title", "Gemini notes"),
         "text": text[:24000],

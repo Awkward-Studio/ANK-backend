@@ -423,7 +423,7 @@ class GoogleMeetingNotesTests(TestCase):
             "Details\n"
         )}}]}}]}}
         steps = self.client.get(NOTES).json()["suggested_steps"]
-        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 0})
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 0, "decisions": 0, "discussion": 0})
         saved = self.client.post(NOTES, {"steps": [step["id"] for step in steps]}, format="json")
         self.assertEqual(saved.status_code, 200)
         converted_id = saved.json()[1]["id"]
@@ -435,7 +435,7 @@ class GoogleMeetingNotesTests(TestCase):
         drafts = {task["title"] for task in queue["tasks"] if task["status"] == "draft"}
         self.assertTrue(queue["can_manage"])
         self.assertEqual([step["task_status"] for step in notes], ["draft", "todo", "draft"])
-        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 3})
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 3, "decisions": 0, "discussion": 0})
         self.assertEqual(drafts, {"Send Partnership Details", "Review Event Proposal"})
 
     def test_import_preassigns_only_unique_active_owners_and_keeps_reviewed_assignment(self):
@@ -514,12 +514,13 @@ class GoogleMeetingNotesTests(TestCase):
         from Staff.google_meeting_notes import read_notes_document
 
         body = "Summary\nFestival planning\nDecisions\nConfirmed\nBook the venue.\n"
-        body += "Needs Further Discussion\nReview partnership terms.\nNext steps\nSend the proposal.\nDetails\nMore discussion.\n"
+        body += "Needs Further Discussion\nReview partnership terms.\nNext steps\nSend the proposal.\nDiscussion points\nConfirm the approval timeline.\nDetails\nMore discussion.\n"
         google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": body}}]}}]}}
         response = read_notes_document("access", "meeting")
         self.assertEqual(response["decisions"], [
             {"label": "Confirmed", "items": ["Book the venue."]},
             {"label": "Needs Further Discussion", "items": ["Review partnership terms."]},
+            {"label": "Discussion points", "items": ["Confirm the approval timeline."]},
         ])
 
     def test_private_event_keeps_notes_and_meeting_metadata_restricted(self):
@@ -537,3 +538,55 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(payload["meet_url"], "")
         self.assertEqual(payload["description_text"], "")
         self.assertEqual(payload["attendees"], [])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_agenda_counts_aligned_decisions_and_pending_discussion_separately(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event,
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/review/edit"}],
+        }
+        action_items = "\n".join(f"[Staff] Follow-up {number}: Review the item." for number in range(1, 10))
+        body = (
+            "Summary\nMarketing and ticketing planning.\n"
+            "Decisions\nNeeds Further Discussion\nFestival ticketing still needs internal review.\n"
+            "Aligned\nFocus on digital marketing.\nSplit the budget into two parts.\n"
+            f"Next steps\n{action_items}\nDetails\nOperational planning."
+        )
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": body}}]}}]}}
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {
+            "total": 9, "saved": 0, "decisions": 2, "discussion": 1,
+        })
+        meeting_notes = self.client.get(NOTES).json()
+        self.assertEqual(meeting_notes["summary_text"], "Marketing and ticketing planning.")
+        self.assertEqual([group["label"] for group in meeting_notes["decisions"]], ["Needs Further Discussion", "Aligned"])
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_overview_reads_quick_and_full_summaries_without_including_transcript(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        def tab(title, text):
+            return {
+                "tabProperties": {"title": title, "tabId": title.lower().replace(" ", "-")},
+                "documentTab": {"body": {"content": [{"paragraph": {"elements": [
+                    {"textRun": {"content": text}},
+                ]}}]}},
+            }
+
+        google.return_value = {"tabs": [
+            tab("Quick notes", "Key takeaways\nMarketing priorities and ticketing.\nNext steps\nSend the deck."),
+            tab("Full notes", "Summary\nReview the budget split.\nDecisions\nAligned\nPrioritize digital.\n"
+                "Disagreed\nPass pricing.\nShelved\nReserved seats.\nNext steps\n[Staff] Send deck: Share slides.\n"
+                "Details\nTicketing and Access: The group reviewed the passes.\n"
+                "You should review Gemini's notes to make sure they're accurate."),
+            tab("Transcript", "Summary\nPrivate transcript content."),
+        ]}
+        response = read_notes_document("access", "meeting")
+        self.assertEqual(response["overview"], {
+            "quick_summaries": ["Marketing priorities and ticketing."],
+            "full_summary": "Review the budget split.",
+            "discussion_topics": ["Ticketing and Access"],
+        })
+        self.assertEqual([group["label"] for group in response["decisions"]], ["Aligned", "Disagreed", "Shelved"])
+        self.assertEqual([tab["kind"] for tab in response["tabs"]], ["quick", "full", "transcript"])

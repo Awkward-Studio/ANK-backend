@@ -34,6 +34,7 @@ from Staff.google_calendar_service import (
     token_request,
     valid_client_id,
 )
+from Staff.google_docs_content import is_discussion_group
 from Staff.google_meeting_notes import (
     NOTES_SCOPES,
     can_lookup_event,
@@ -528,9 +529,15 @@ def google_calendar_meeting_notes(request, event_id):
         mark_saved_steps(settings.GOOGLE_CALENDAR_ID, event_id, steps)
         if summary:
             unique = {step["id"]: step for step in steps}
+            decisions, discussion = set(), set()
+            for group in document["decisions"]:
+                bucket = discussion if is_discussion_group(group["label"]) else decisions
+                bucket.update(item.casefold() for item in group["items"])
             return Response({
                 "total": len(unique),
                 "saved": sum(step["saved"] for step in unique.values()),
+                "decisions": len(decisions),
+                "discussion": len(discussion),
             })
         return Response(document)
     except CalendarError as error:
