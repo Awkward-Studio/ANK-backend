@@ -508,3 +508,32 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(self.client.patch(f"/api/team-tasks/{other.pk}/", {"status": "done"}, format="json").status_code, 404)
         self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"status": "done"}, format="json").status_code, 200)
         self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"title": "Changed"}, format="json").status_code, 403)
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_decisions_keep_recorded_status_and_stop_before_next_steps(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        body = "Summary\nFestival planning\nDecisions\nConfirmed\nBook the venue.\n"
+        body += "Needs Further Discussion\nReview partnership terms.\nNext steps\nSend the proposal.\nDetails\nMore discussion.\n"
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": body}}]}}]}}
+        response = read_notes_document("access", "meeting")
+        self.assertEqual(response["decisions"], [
+            {"label": "Confirmed", "items": ["Book the venue."]},
+            {"label": "Needs Further Discussion", "items": ["Review partnership terms."]},
+        ])
+
+    def test_private_event_keeps_notes_and_meeting_metadata_restricted(self):
+        from Staff.google_calendar import event_data
+
+        event = {
+            **self.event, "visibility": "private",
+            "organizer": {"displayName": "Private organizer", "email": "private@example.com"},
+            "description": "Private description", "attendees": [{"email": "guest@example.com"}],
+        }
+        payload = event_data(event, None, self.owner)
+        self.assertEqual(payload["notes_availability"], "restricted")
+        self.assertFalse(payload["can_preview_notes"])
+        self.assertIsNone(payload["organizer"])
+        self.assertEqual(payload["meet_url"], "")
+        self.assertEqual(payload["description_text"], "")
+        self.assertEqual(payload["attendees"], [])

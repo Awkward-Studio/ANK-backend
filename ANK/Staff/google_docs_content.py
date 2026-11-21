@@ -133,3 +133,36 @@ def suggested_steps(text):
         else:
             steps.append({"owner": "", "title": line, "description": ""})
     return steps
+
+
+DECISIONS_HEADING = re.compile(r"(?:key\s+)?decisions(?:\s+(?:made|taken))?\s*:?", re.IGNORECASE)
+DECISION_GROUP = re.compile(
+    r"(?:confirmed|agreed|decided|finalized|decisions made|needs further discussion|pending|deferred|open questions)\s*:?",
+    re.IGNORECASE,
+)
+
+
+def decision_groups(text):
+    groups = []
+    active = False
+    group = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if DECISIONS_HEADING.fullmatch(line):
+            active = True
+            continue
+        if not active:
+            continue
+        if SECTION_HEADING.fullmatch(line) or STEP_HEADING.fullmatch(line):
+            break
+        if DECISION_GROUP.fullmatch(line):
+            group = {"label": line.rstrip(":"), "items": []}
+            groups.append(group)
+            continue
+        if group is None:
+            group = {"label": "", "items": []}
+            groups.append(group)
+        group["items"].append(line)
+    return [group for group in groups if group["items"]]

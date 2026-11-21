@@ -3,6 +3,7 @@ import hashlib
 import re
 import secrets
 from datetime import timedelta
+from html import unescape
 from urllib.parse import urlencode, urlsplit
 
 from cryptography.fernet import InvalidToken
@@ -10,6 +11,7 @@ from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponseRedirect, JsonResponse
 from django.utils import timezone
+from django.utils.html import strip_tags
 from django.utils.crypto import constant_time_compare
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
@@ -36,6 +38,8 @@ from Staff.google_meeting_notes import (
     NOTES_SCOPES,
     can_lookup_event,
     can_preview_notes,
+    event_times,
+    meeting_code,
     preview_meeting_notes,
 )
 from Staff.models import (
@@ -346,13 +350,32 @@ def event_data(event, meeting, user):
     )
     if target.scheme != "https" or not google_calendar_link:
         link = ""
+    can_read_notes = can_preview_notes(user)
+    has_notes_source = not private and can_lookup_event(event)
+    _, end = event_times(event)
+    if private or not can_read_notes:
+        notes_availability = "restricted"
+    elif end and end > timezone.now():
+        notes_availability = "upcoming"
+    else:
+        notes_availability = "available" if has_notes_source else "missing"
+    description = "" if private else event.get("description") or ""
+    description_text = unescape(strip_tags(re.sub(r"<(?:br\s*/?|/p|/div|/li)>", "\n", description, flags=re.I))).strip()
+    organizer = event.get("organizer", {}) if not private else {}
+    code = meeting_code(event) if not private else ""
     return {
         "id": event["id"],
         "summary": "Busy" if private else event.get("summary") or "Untitled meeting",
         "start": event.get("start", {}).get("dateTime") or event.get("start", {}).get("date"),
         "end": event.get("end", {}).get("dateTime") or event.get("end", {}).get("date"),
         "all_day": "date" in event.get("start", {}),
-        "description": "" if private else event.get("description", ""),
+        "description": description,
+        "description_text": description_text,
+        "organizer": {
+            "name": organizer.get("displayName") or "",
+            "email": organizer.get("email") or "",
+        } if organizer.get("displayName") or organizer.get("email") else None,
+        "meet_url": f"https://meet.google.com/{code}" if code else "",
         "location": "" if private else event.get("location", ""),
         "attendees": [] if private else [
             {"email": guest["email"], "name": guest.get("displayName", ""), "response": guest.get("responseStatus")}
@@ -361,7 +384,8 @@ def event_data(event, meeting, user):
         "html_link": "" if private else link,
         "source": "ank" if is_ank_event(event, meeting) else "google",
         "can_manage": can_manage,
-        "can_preview_notes": can_preview_notes(user) and can_lookup_event(event),
+        "can_preview_notes": can_read_notes and has_notes_source,
+        "notes_availability": notes_availability,
         "etag": event.get("etag") if can_manage else None,
     }
 

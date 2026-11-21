@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from Staff.google_calendar_service import CalendarError, calendar_request, google_request
-from Staff.google_docs_content import render_content, suggested_steps
+from Staff.google_docs_content import decision_groups, render_content, suggested_steps
 
 
 NOTES_SCOPES = (
@@ -369,6 +369,7 @@ def read_notes_document(token, document_id, *, steps_only=False):
     return {
         "document_id": document_id,
         "tabs": sections,
+        "decisions": decision_groups(text),
         "suggested_steps": suggested_steps(text),
         "title": document.get("title", "Gemini notes"),
         "text": text[:24000],
