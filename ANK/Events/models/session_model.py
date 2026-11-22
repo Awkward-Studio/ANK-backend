@@ -15,6 +15,10 @@ class Session(models.Model):
     pax = models.PositiveIntegerField(
         default=0, help_text="Expected number of attendees in this session"
     )
+    check_in_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of unique guest check-ins recorded for this function.",
+    )
     date = models.DateField(db_index=True, blank=True, null=True)
     venue = models.ForeignKey(
         Hotel,

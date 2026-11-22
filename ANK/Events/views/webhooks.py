@@ -381,6 +381,7 @@ def track_send(request):
     campaign_id = body.get("campaign_id")
     guest_name = body.get("guest_name")
     template_name = body.get("template_name")
+    qr_ticket_id = body.get("qr_ticket_id")
     message_type = body.get("message_type") or (template_name and "template") or "custom"
     content = body.get("body") or body.get("text") or body.get("content") or body.get("message")
 
@@ -435,6 +436,10 @@ def track_send(request):
                     "campaign_id": campaign_id,
                 }
             )
+
+        if qr_ticket_id and template_wamid:
+            from MessageTemplates.models import QrTicket
+            QrTicket.objects.filter(pk=qr_ticket_id).update(message_wamid=template_wamid)
 
         # A second durable path repairs a missing attempt completion after Meta
         # accepted, without changing an already-recorded delivery webhook status.

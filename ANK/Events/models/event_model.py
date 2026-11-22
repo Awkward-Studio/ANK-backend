@@ -35,6 +35,10 @@ class Event(models.Model):
     pax = models.PositiveIntegerField(
         default=0, help_text="Expected number of attendees"
     )
+    check_in_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of unique guest event check-ins recorded by security.",
+    )
     bride_name = models.CharField(max_length=200, blank=True, null=True)
     groom_name = models.CharField(max_length=200, blank=True, null=True)
 

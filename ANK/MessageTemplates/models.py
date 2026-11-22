@@ -5,6 +5,7 @@ from django.db import models
 from django.utils import timezone
 from django.conf import settings
 from Events.models.event_registration_model import EventRegistration
+from Events.models.session_registration import SessionRegistration
 from Events.models.event_model import Event
 from cryptography.fernet import Fernet
 
@@ -31,6 +32,10 @@ class MessageTemplate(models.Model):
     )
 
     is_rsvp_message = models.BooleanField(default=False)
+    is_qr_template = models.BooleanField(
+        default=False,
+        help_text="Generate a unique encrypted security QR image for each recipient.",
+    )
 
     # Media attachment fields for template messages
     MEDIA_TYPE_CHOICES = [
@@ -532,6 +537,79 @@ class BroadcastRecipient(models.Model):
     class Meta:
         ordering = ["created_at", "id"]
         constraints = [models.UniqueConstraint(fields=["campaign", "client_id"], name="broadcast_unique_recipient")]
+
+
+class QrTemplateConfig(models.Model):
+    """Local metadata for Meta templates that are allowed to carry dynamic QR tickets."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    phone_number_id = models.CharField(max_length=100, db_index=True)
+    template_name = models.CharField(max_length=255)
+    language = models.CharField(max_length=20, default="en_US")
+    is_qr_template = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["phone_number_id", "template_name", "language"],
+                name="qr_template_config_unique",
+            )
+        ]
+
+
+class QrTicket(models.Model):
+    """An issued encrypted QR pass and its send/scan linkage."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    template_name = models.CharField(max_length=255, db_index=True)
+    template_language = models.CharField(max_length=20, default="en_US")
+    sender_phone_number_id = models.CharField(max_length=100, db_index=True)
+    recipient_phone = models.CharField(max_length=50, db_index=True)
+    recipient_name = models.CharField(max_length=255, blank=True)
+    media_id = models.CharField(max_length=255, blank=True)
+    token_digest = models.CharField(max_length=64, unique=True)
+    event = models.ForeignKey(Event, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_tickets")
+    event_registration = models.ForeignKey(EventRegistration, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_tickets")
+    session_registration = models.ForeignKey(SessionRegistration, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_tickets")
+    campaign = models.ForeignKey("MessageTemplates.BroadcastCampaign", null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_tickets")
+    campaign_recipient = models.ForeignKey("MessageTemplates.BroadcastRecipient", null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_tickets")
+    message_wamid = models.CharField(max_length=255, blank=True, db_index=True)
+    generated_at = models.DateTimeField(default=timezone.now, editable=False)
+    last_scanned_at = models.DateTimeField(null=True, blank=True)
+    scan_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["event", "template_name"]),
+            models.Index(fields=["event_registration", "generated_at"]),
+            models.Index(fields=["campaign_recipient", "generated_at"]),
+        ]
+
+
+class QrScanEvent(models.Model):
+    """Audit trail for QR verification and check-in attempts."""
+
+    ACTION_CHOICES = [
+        ("verified", "Verified"),
+        ("checked_in", "Checked In"),
+        ("duplicate", "Duplicate Check-in"),
+        ("rejected", "Rejected"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ticket = models.ForeignKey(QrTicket, null=True, blank=True, on_delete=models.SET_NULL, related_name="scans")
+    token_digest = models.CharField(max_length=64, db_index=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    event = models.ForeignKey(Event, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_scans")
+    session_registration = models.ForeignKey(SessionRegistration, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_scans")
+    security_user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="qr_scan_events")
+    error_message = models.TextField(blank=True)
+    scanned_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-scanned_at"]
 
 
 class FlowBlueprint(models.Model):
