@@ -54,5 +54,14 @@ class SessionRegistrationSerializer(PermissionAwareSerializer, CustomFieldMixin,
 
     class Meta:
         model = SessionRegistration
-        fields = ["id", "guest", "session", "registered_on", "custom_fields"]
-        read_only_fields = ["registered_on"]
+        fields = [
+            "id",
+            "guest",
+            "session",
+            "registered_on",
+            "is_checked_in",
+            "checked_in_at",
+            "checked_in_by",
+            "custom_fields",
+        ]
+        read_only_fields = ["registered_on", "checked_in_at", "checked_in_by"]

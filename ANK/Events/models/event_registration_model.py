@@ -1,4 +1,5 @@
 import uuid
+from django.conf import settings
 from django.db import models
 from django.contrib.contenttypes.fields import GenericRelation
 from Guest.models import Guest
@@ -50,6 +51,27 @@ class EventRegistration(models.Model):
     )
     initiated_on = models.DateTimeField(auto_now_add=True)
     responded_on = models.DateTimeField(null=True, blank=True)
+
+    # Attendance / Check-in tracking
+    is_checked_in = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Whether the guest has entered/checked-in to the event",
+    )
+    checked_in_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Timestamp when the guest checked in to the event",
+    )
+    checked_in_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="event_checkins",
+        help_text="Staff or security user who verified and checked the guest in",
+    )
 
     # Field to track how many extra attendees
     additional_guest_count = models.PositiveIntegerField(

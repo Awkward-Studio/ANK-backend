@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import hmac
 import io
 import json
@@ -8,6 +10,8 @@ import uuid
 
 import qrcode
 import requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from django.conf import settings
 from django.http import HttpResponseForbidden, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -22,10 +26,57 @@ GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 QR_TEMPLATE_NAME = "qr_image_bulksend_test"
 QR_TEST_SENDER_SUFFIX = "00792"
+SECURITY_TOKEN_PREFIX = "ANKSEC1:"
 SENSITIVE_DETAIL_KEY = re.compile(
     r"password|secret|token|bank|account|ifsc|aadhaar|aadhar|pan(?:_|\s)*(?:number|no)?|passport|photo(?:_|\s)*id",
     re.IGNORECASE,
 )
+
+
+def _get_encryption_key(secret_override=None):
+    secret = (
+        secret_override
+        or os.getenv("SECURITY_QR_SECRET")
+        or os.getenv("DJANGO_RSVP_SECRET")
+        or getattr(settings, "SECRET_KEY", "ank-security-qr-secret-key-32b")
+    )
+    return hashlib.sha256(secret.encode("utf-8")).digest()
+
+
+def encrypt_security_qr_payload(payload: dict, secret_override=None) -> str:
+    """Encrypt dynamic QR payload with AES-256-GCM so only the security module can view it."""
+    key = _get_encryption_key(secret_override)
+    aesgcm = AESGCM(key)
+    iv = os.urandom(12)
+    plaintext = json.dumps(payload, separators=(",", ":"), ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ct_with_tag = aesgcm.encrypt(iv, plaintext, None)
+    iv_b64 = base64.urlsafe_b64encode(iv).decode("ascii").rstrip("=")
+    ct_b64 = base64.urlsafe_b64encode(ct_with_tag).decode("ascii").rstrip("=")
+    return f"{SECURITY_TOKEN_PREFIX}{iv_b64}.{ct_b64}"
+
+
+def decrypt_security_qr_payload(token: str, secret_override=None) -> dict:
+    """Decrypt and verify an AES-256-GCM security QR token."""
+    token = str(token or "").strip()
+    if not token.startswith(SECURITY_TOKEN_PREFIX):
+        raise ValueError("Invalid security QR code prefix: must start with ANKSEC1:")
+    body = token[len(SECURITY_TOKEN_PREFIX):]
+    parts = body.split(".")
+    if len(parts) != 2:
+        raise ValueError("Malformed security QR token structure")
+    iv_b64, ct_b64 = parts
+
+    def _pad_b64(s: str) -> str:
+        return s + "=" * (-len(s) % 4)
+
+    iv = base64.urlsafe_b64decode(_pad_b64(iv_b64))
+    ct_with_tag = base64.urlsafe_b64decode(_pad_b64(ct_b64))
+    if len(iv) != 12:
+        raise ValueError("Invalid IV length for AES-GCM")
+    key = _get_encryption_key(secret_override)
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(iv, ct_with_tag, None)
+    return json.loads(plaintext.decode("utf-8"))
 
 
 def _has_internal_access(request):
@@ -147,11 +198,14 @@ def issue_qr_test_media(request):
         "data": _clean_details(body.get("details") or {}),
         "random_code": uuid.uuid4().hex[:12],
     }
-    encoded_payload = json.dumps(payload, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    for field in ("registration_id", "event_registration_id", "session_registration_id", "event_id", "session_id", "guest_id", "uid"):
+        if body.get(field):
+            payload[field] = str(body[field])
+    encrypted_token = encrypt_security_qr_payload(payload)
 
     try:
         access_token, resolved_sender_id = _get_credentials(sender_phone_number_id)
-        media_id = _upload_qr_to_meta(_qr_png(encoded_payload), access_token, resolved_sender_id)
+        media_id = _upload_qr_to_meta(_qr_png(encrypted_token), access_token, resolved_sender_id)
     except (WhatsAppError, requests.RequestException) as exc:
         logger.exception("Could not generate QR test media for %s", recipient_phone)
         return JsonResponse({"ok": False, "error": str(exc)}, status=502)
@@ -161,7 +215,46 @@ def issue_qr_test_media(request):
             "ok": True,
             "media_id": media_id,
             "test_id": str(test_id),
+            "qr_token": encrypted_token,
             "qr_payload": payload,
         },
         status=201,
     )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def verify_qr_test_media(request):
+    """Decrypt and verify security QR payload. Accessible internally by the security module."""
+    if not _has_internal_access(request):
+        return HttpResponseForbidden("invalid token")
+
+    body = _json_body(request)
+    if body is None:
+        return JsonResponse({"ok": False, "error": "invalid json"}, status=400)
+
+    token = str(body.get("token") or body.get("qr_text") or "").strip()
+    if not token:
+        return JsonResponse({"ok": False, "valid": False, "error": "token is required"}, status=400)
+
+    try:
+        payload = decrypt_security_qr_payload(token)
+        return JsonResponse(
+            {
+                "ok": True,
+                "valid": True,
+                "payload": payload,
+                "verified_at": timezone.now().isoformat(),
+            },
+            status=200,
+        )
+    except Exception as exc:
+        logger.warning("Failed to decrypt security QR pass: %s", exc)
+        return JsonResponse(
+            {
+                "ok": True,
+                "valid": False,
+                "error": "This QR code is not a valid security pass or has been altered",
+            },
+            status=200,
+        )
