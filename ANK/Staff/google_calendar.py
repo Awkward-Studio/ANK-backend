@@ -3,6 +3,7 @@ import hashlib
 import re
 import secrets
 from datetime import timedelta
+from html import unescape
 from urllib.parse import urlencode, urlsplit
 
 from cryptography.fernet import InvalidToken
@@ -10,6 +11,7 @@ from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponseRedirect, JsonResponse
 from django.utils import timezone
+from django.utils.html import strip_tags
 from django.utils.crypto import constant_time_compare
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
@@ -32,10 +34,13 @@ from Staff.google_calendar_service import (
     token_request,
     valid_client_id,
 )
+from Staff.google_docs_content import is_discussion_group
 from Staff.google_meeting_notes import (
     NOTES_SCOPES,
     can_lookup_event,
     can_preview_notes,
+    event_times,
+    meeting_code,
     preview_meeting_notes,
 )
 from Staff.models import (
@@ -43,6 +48,16 @@ from Staff.models import (
     GoogleCalendarMeeting,
     GoogleCalendarOAuthAttempt,
 )
+
+
+from Departments.permissions import PermissionChecker
+from django.shortcuts import get_object_or_404
+from Staff.meeting_event_links import (
+    available_meeting, candidates, change_link, event_option, find_explicit_event, meeting_link, visible_event,
+)
+from Staff.meeting_notes_overview import meeting_notes, picker_overviews
+from Staff.models import MeetingEventLink, TeamTask
+from Staff.team_tasks import ImportSerializer, mark_saved_steps, save_meeting_steps
 
 
 ATTEMPT_LIFETIME = timedelta(minutes=10)
@@ -291,6 +306,7 @@ class MeetingSerializer(serializers.Serializer):
 
 class CreateMeetingSerializer(MeetingSerializer):
     request_id = serializers.UUIDField()
+    ank_event_id = serializers.UUIDField(required=False)
 
 
 def meeting_payload(data):
@@ -336,22 +352,42 @@ def event_data(event, meeting, user):
     )
     if target.scheme != "https" or not google_calendar_link:
         link = ""
+    can_read_notes = can_preview_notes(user)
+    has_notes_source = not private and can_lookup_event(event)
+    _, end = event_times(event)
+    if private or not can_read_notes:
+        notes_availability = "restricted"
+    elif end and end > timezone.now():
+        notes_availability = "upcoming"
+    else:
+        notes_availability = "available" if has_notes_source else "missing"
+    description = "" if private else event.get("description") or ""
+    description_text = unescape(strip_tags(re.sub(r"<(?:br\s*/?|/p|/div|/li)>", "\n", description, flags=re.I))).strip()
+    organizer = event.get("organizer", {}) if not private else {}
+    code = meeting_code(event) if not private else ""
     return {
         "id": event["id"],
         "summary": "Busy" if private else event.get("summary") or "Untitled meeting",
         "start": event.get("start", {}).get("dateTime") or event.get("start", {}).get("date"),
         "end": event.get("end", {}).get("dateTime") or event.get("end", {}).get("date"),
         "all_day": "date" in event.get("start", {}),
-        "description": "" if private else event.get("description", ""),
+        "description": description,
+        "description_text": description_text,
+        "organizer": {
+            "name": organizer.get("displayName") or "",
+            "email": organizer.get("email") or "",
+        } if organizer.get("displayName") or organizer.get("email") else None,
+        "meet_url": f"https://meet.google.com/{code}" if code else "",
         "location": "" if private else event.get("location", ""),
         "attendees": [] if private else [
-            {"email": guest["email"], "response": guest.get("responseStatus")}
+            {"email": guest["email"], "name": guest.get("displayName", ""), "response": guest.get("responseStatus")}
             for guest in event.get("attendees", []) if guest.get("email")
         ],
         "html_link": "" if private else link,
         "source": "ank" if is_ank_event(event, meeting) else "google",
         "can_manage": can_manage,
-        "can_preview_notes": can_preview_notes(user) and can_lookup_event(event),
+        "can_preview_notes": can_read_notes and has_notes_source,
+        "notes_availability": notes_availability,
         "etag": event.get("etag") if can_manage else None,
     }
 
@@ -378,8 +414,15 @@ def list_events(request):
             event_id__in=[event["id"] for event in events],
         )
     }
+    overviews = picker_overviews(request.user, events)
     return Response({
-        "events": [event_data(event, meetings.get(event["id"]), request.user) for event in events],
+        "events": [
+            {
+                **event_data(event, meetings.get(event["id"]), request.user),
+                "notes_overview": overviews.get(event["id"]),
+            }
+            for event in events
+        ],
         "next_page": result.get("nextPageToken"),
     })
 
@@ -395,6 +438,9 @@ def google_calendar_events(request):
     form = CreateMeetingSerializer(data=request.data)
     form.is_valid(raise_exception=True)
     data = form.validated_data
+    target = data.get("ank_event_id")
+    if target:
+        get_object_or_404(PermissionChecker.get_user_accessible_events(request.user), pk=target)
     token = access_token()
     event_id = data["request_id"].hex
     meeting, _ = GoogleCalendarMeeting.objects.get_or_create(
@@ -418,16 +464,27 @@ def google_calendar_events(request):
         event = calendar_request("GET", token, event_id)
         if not is_ank_event(event, meeting) or event.get("status") == "cancelled":
             raise CalendarError("Create a new meeting and try again.", 409) from None
+    attachment = target or find_explicit_event(event)
+    if attachment and PermissionChecker.get_user_accessible_events(request.user).filter(pk=attachment).exists():
+        change_link(request.user, event, attachment, automatic=True)
     return Response(event_data(event, meeting, request.user), status=status.HTTP_201_CREATED)
 
 
 @never_cache
-@api_view(["PATCH", "DELETE"])
+@api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsAuthenticated])
 def google_calendar_event(request, event_id):
     meeting = GoogleCalendarMeeting.objects.filter(
         calendar_id=settings.GOOGLE_CALENDAR_ID, event_id=event_id
     ).first()
+    if request.method == "GET":
+        event = calendar_request("GET", access_token(), event_id)
+        if not available_meeting(event):
+            raise CalendarError("This meeting is private or no longer available.", 404)
+        return Response({
+            **event_data(event, meeting, request.user),
+            "notes_overview": picker_overviews(request.user, [event]).get(event_id),
+        })
     if not meeting or not (is_admin(request.user) or meeting.created_by_id == request.user.pk):
         raise PermissionDenied()
     etag = request.headers.get("If-Match", "")
@@ -461,16 +518,51 @@ def google_calendar_event(request, event_id):
 
 
 @never_cache
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def google_calendar_meeting_notes(request, event_id):
-    if not can_preview_notes(request.user):
+    summary = request.method == "GET" and request.query_params.get("summary") == "steps"
+    importing = request.method == "POST"
+    view = request.query_params.get("view")
+    if not can_preview_notes(request.user) and (importing or summary or view != "overview"):
         raise PermissionDenied()
+    if importing:
+        serializer = ImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+    document_id = request.query_params.get("document")
     try:
-        return Response(preview_meeting_notes(
-            access_token(notes=True), event_id, calendar_token=access_token(),
-            document_id=request.query_params.get("document"),
-        ))
+        if not summary and view in {"overview", "document"}:
+            if document_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", document_id):
+                raise ValidationError("Invalid notes document.")
+            document = meeting_notes(
+                request.user, event_id, document_id, overview=view == "overview",
+                refresh=request.query_params.get("refresh") == "1", importing=importing,
+            )
+        else:
+            document = preview_meeting_notes(
+                access_token(notes=True), event_id, calendar_token=access_token(),
+                document_id=document_id, steps_only=summary,
+            )
+        if importing:
+            return Response(save_meeting_steps(
+                request.user, settings.GOOGLE_CALENDAR_ID, event_id,
+                document, serializer.validated_data["steps"],
+            ))
+        steps = document.get("suggested_steps", [])
+        mark_saved_steps(settings.GOOGLE_CALENDAR_ID, event_id, steps)
+        if summary:
+            unique = {step["id"]: step for step in steps}
+            decisions, discussion = set(), set()
+            for group in document["decisions"]:
+                bucket = discussion if is_discussion_group(group["label"]) else decisions
+                bucket.update(item.casefold() for item in group["items"])
+            return Response({
+                "total": len(unique),
+                "saved": sum(step["saved"] for step in unique.values()),
+                "decisions": len(decisions),
+                "discussion": len(discussion),
+            })
+        return Response(document)
     except CalendarError as error:
         if error.status_code == 424:
             raise CalendarError(
@@ -478,3 +570,86 @@ def google_calendar_meeting_notes(request, event_id):
                 424,
             ) from None
         raise
+
+
+class MeetingLinkSerializer(serializers.Serializer):
+    event_id = serializers.UUIDField(required=False, allow_null=True)
+    automatic = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        if attrs["automatic"] == ("event_id" in attrs):
+            raise ValidationError("Choose an event or request an automatic match.")
+        return attrs
+
+
+@never_cache
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def google_meeting_event_link(request, event_id):
+    user = request.user
+    meeting = calendar_request("GET", access_token(), event_id)
+    if not available_meeting(meeting):
+        raise CalendarError("This meeting is private or no longer available.", 404)
+    link = meeting_link(event_id)
+    events = PermissionChecker.get_user_accessible_events(user)
+    can_manage = can_schedule(user)
+    explicit = None
+    if can_manage and not (link and (link.event_id or link.automatic_disabled)):
+        candidate = find_explicit_event(meeting)
+        if candidate and events.filter(pk=candidate).exists():
+            explicit = candidate
+    if request.method == "POST":
+        if not can_manage:
+            raise PermissionDenied()
+        serializer = MeetingLinkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if data["automatic"] and not explicit:
+            return Response({"event": visible_event(user, link.event) if link else None})
+        return Response({"event": change_link(
+            user, meeting, explicit if data["automatic"] else data["event_id"], automatic=data["automatic"],
+        )})
+    term = request.query_params.get("q", "").strip()[:200]
+    return Response({
+        "event": visible_event(user, link.event) if link else None,
+        "can_manage": can_manage,
+        "automatic_match": bool(explicit),
+        "suggestions": candidates(meeting, events, term) if can_manage and (term or not (link and link.event_id)) else [],
+    })
+
+
+@never_cache
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def ank_event_meetings(request, event_id):
+    user = request.user
+    event = get_object_or_404(PermissionChecker.get_user_accessible_events(user), pk=event_id)
+    links = MeetingEventLink.objects.filter(event=event, calendar_id=settings.GOOGLE_CALENDAR_ID)
+    meetings = []
+    if links.exists():
+        token = access_token()
+        for link in links:
+            try:
+                meeting = calendar_request("GET", token, link.meeting_id)
+            except CalendarError as error:
+                if error.status_code in {404, 410}:
+                    continue
+                raise
+            if available_meeting(meeting):
+                start = meeting.get("start", {})
+                meetings.append({
+                    "id": link.meeting_id,
+                    "summary": meeting.get("summary") or "Untitled meeting",
+                    "start": start.get("dateTime") or start.get("date"),
+                    "has_notes": can_preview_notes(user) and can_lookup_event(meeting),
+                })
+    meetings.sort(key=lambda meeting: meeting["start"] or "")
+    tasks = TeamTask.objects.filter(meeting_link__in=links).exclude(status=TeamTask.Status.DRAFT)
+    if not is_admin(user):
+        tasks = tasks.filter(assignee=user)
+    return Response({
+        "event": event_option(event),
+        "can_schedule": can_schedule(user),
+        "meetings": meetings,
+        "tasks": list(tasks.values("id", "title", "status")),
+    })

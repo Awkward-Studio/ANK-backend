@@ -1,6 +1,8 @@
 from django.urls import path
 from Staff.google_login import GoogleLoginCompleteView, GoogleLoginStartView
 from Staff.google_calendar import (
+    ank_event_meetings,
+    google_meeting_event_link,
     google_calendar_callback,
     google_calendar_complete,
     google_calendar_connection,
@@ -9,6 +11,7 @@ from Staff.google_calendar import (
     google_calendar_meeting_notes,
     google_calendar_start,
 )
+from Staff.team_tasks import team_task, team_tasks
 from Staff.views import (
     UserAssignedEventsAPIView,
     UserAssignedSessionsAPIView,
@@ -37,8 +40,12 @@ urlpatterns = [
     path("team-calendar/connect/", google_calendar_start),
     path("team-calendar/connect/complete/", google_calendar_complete),
     path("team-calendar/events/", google_calendar_events),
+    path("team-calendar/ank-events/<uuid:event_id>/meetings/", ank_event_meetings),
+    path("team-calendar/events/<str:event_id>/attachment/", google_meeting_event_link),
     path("team-calendar/events/<str:event_id>/notes/", google_calendar_meeting_notes),
     path("team-calendar/events/<str:event_id>/", google_calendar_event),
+    path("team-tasks/", team_tasks),
+    path("team-tasks/<uuid:pk>/", team_task),
     # ─── User CRUD ────────────────────────────────────────────────────
     # GET list, POST create
     path("users/", UserList.as_view(), name="user-list"),

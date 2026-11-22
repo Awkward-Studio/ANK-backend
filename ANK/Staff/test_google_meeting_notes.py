@@ -6,9 +6,9 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from Staff.google_calendar_service import EVENT_SCOPE, cipher
+from Staff.google_calendar_service import CalendarError, EVENT_SCOPE, cipher
 from Staff.google_meeting_notes import NOTES_SCOPES
-from Staff.models import GoogleCalendarConnection, User
+from Staff.models import GoogleCalendarConnection, MeetingNotesOverview, TeamTask, User
 
 
 BASE = "/api/team-calendar/"
@@ -43,6 +43,130 @@ class GoogleMeetingNotesTests(TestCase):
             "start": {"dateTime": self.start.isoformat()},
             "end": {"dateTime": self.end.isoformat()},
         }
+
+    @patch("Staff.meeting_notes_overview.access_token", return_value="access")
+    @patch("Staff.meeting_notes_overview.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_saves_overview_and_shares_it_only_with_verified_invitees(self, docs, calendar, token):
+        self.connection.notes_refresh_token = "notes-token"
+        self.connection.save(update_fields=["notes_refresh_token"])
+        invitee = User.objects.create_user("invitee@example.com")
+        invitee.google_login_subject = "verified-identity"
+        invitee.save(update_fields=["google_login_subject"])
+        event = {
+            **self.event,
+            "attendees": [{"email": invitee.email.upper()}],
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes-id/edit"}],
+        }
+        calendar.return_value = event
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nMarketing planning.\nNext steps\n[Staff] Follow-up: Review the item."
+        }}]}}]}}
+        view = {"view": "overview"}
+        with patch("Staff.google_meeting_notes.render_tab") as render:
+            overview = self.client.get(NOTES, view)
+            self.assertEqual(overview.status_code, 200, overview.data)
+            render.assert_not_called()
+        self.assertEqual(overview.data["summary_text"], "Marketing planning.")
+        step = overview.data["suggested_steps"][0]
+        snapshot = MeetingNotesOverview.objects.get()
+        self.assertNotIn("tabs", snapshot.payload)
+        self.assertEqual(snapshot.payload["text"], "")
+        docs.assert_called_once()
+        self.assertEqual(self.client.get(NOTES, view).data, overview.data)
+        token.assert_called_with()
+        docs.assert_called_once()
+
+        with (
+            patch("Staff.google_calendar.access_token", return_value="access"),
+            patch("Staff.google_calendar.calendar_request", return_value={"items": [event]}),
+        ):
+            self.client.force_authenticate(invitee)
+            agenda = self.client.get(BASE + "events/", {"start": self.start.isoformat(), "end": timezone.now().isoformat()})
+            self.assertEqual(agenda.status_code, 200, agenda.data)
+            self.assertEqual(agenda.data["events"][0]["notes_overview"]["total"], 1)
+            self.assertEqual(agenda.data["events"][0]["notes_overview"]["saved"], 0)
+            docs.assert_called_once()
+
+        self.assertEqual(self.client.get(NOTES, view).data, overview.data)
+        self.assertEqual(self.client.get(NOTES, {**view, "refresh": "1"}).status_code, 403)
+        self.assertEqual(self.client.get(NOTES, {"view": "document"}).status_code, 403)
+        self.assertEqual(self.client.post(NOTES + "?view=overview", {"steps": [step["id"]]}, format="json").status_code, 403)
+        event["attendees"] = []
+        self.assertEqual(self.client.get(NOTES, view).status_code, 403)
+        event["visibility"] = "private"
+        self.assertEqual(self.client.get(NOTES, view).status_code, 404)
+        docs.assert_called_once()
+
+        del event["visibility"]
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES, {"view": "document", "document": "notes-id"}).status_code, 200)
+        self.assertEqual(docs.call_count, 2)
+        saved = self.client.post(NOTES + "?view=overview&document=notes-id", {"steps": [step["id"]]}, format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertEqual(self.client.get(NOTES, view).data["suggested_steps"][0]["task_status"], "draft")
+        self.assertEqual(docs.call_count, 3)
+
+        with (
+            patch("Staff.google_calendar.access_token", return_value="access"),
+            patch("Staff.google_calendar.calendar_request", return_value=event),
+        ):
+            meeting = self.client.get(BASE + "events/event-1/")
+            self.assertEqual(meeting.data["notes_overview"]["saved"], 1)
+
+        event["attachments"] = [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/new-id/edit"}]
+        self.assertEqual(self.client.get(NOTES, view).data["document_id"], "new-id")
+        self.assertEqual(docs.call_count, 4)
+        self.assertEqual(MeetingNotesOverview.objects.count(), 1)
+
+    @patch("Staff.meeting_notes_overview.access_token", return_value="access")
+    @patch("Staff.meeting_notes_overview.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_picker_counts_only_imported_documents_and_deduplicates_shared_steps(self, docs, calendar, _token):
+        from Staff.meeting_notes_overview import picker_overviews
+
+        self.connection.notes_refresh_token = "notes-token"
+        self.connection.save(update_fields=["notes_refresh_token"])
+        event = {
+            **self.event,
+            "attachments": [
+                {"title": f"Notes {doc}", "fileUrl": f"https://docs.google.com/document/d/{doc}/edit"}
+                for doc in ("quick", "full")
+            ],
+        }
+        calendar.return_value = event
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nInitial summary.\nNext steps\n[Staff] Follow-up: Review the item."
+        }}]}}]}}
+        view = {"view": "overview"}
+        self.assertEqual(len(self.client.get(NOTES, view).data["documents"]), 2)
+        self.assertEqual(picker_overviews(self.owner, [event]), {})
+        docs.assert_not_called()
+        first = {**view, "document": "quick"}
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Initial summary.")
+        self.assertTrue(picker_overviews(self.owner, [event])["event-1"]["partial"])
+
+        invitee = User.objects.create_user("team@example.com")
+        invitee.google_login_subject = "team-identity"
+        event["attendees"] = [{"email": invitee.email}]
+        self.client.force_authenticate(invitee)
+        self.assertEqual([doc["id"] for doc in self.client.get(NOTES, view).data["documents"]], ["quick"])
+        self.assertEqual(self.client.get(NOTES, {**view, "document": "full"}).status_code, 404)
+        docs.assert_called_once()
+
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES, {**view, "document": "full"}).status_code, 200)
+        summary = picker_overviews(self.owner, [event])["event-1"]
+        self.assertFalse(summary["partial"])
+        self.assertEqual(summary["total"], 1)
+
+        docs.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {
+            "content": "Summary\nUpdated summary."
+        }}]}}]}}
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Initial summary.")
+        self.assertEqual(self.client.get(NOTES, {**first, "refresh": "1"}).data["summary_text"], "Updated summary.")
+        self.assertEqual(self.client.get(NOTES, first).data["summary_text"], "Updated summary.")
+        self.assertEqual(docs.call_count, 3)
 
     @patch("Staff.google_calendar.access_token")
     def test_other_admin_cannot_read_owners_notes(self, token):
@@ -177,11 +301,11 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual(self.client.get(NOTES, {"document": "unrelated"}).status_code, 404)
         google.assert_not_called()
 
-        google.return_value = {"body": {"content": [{"paragraph": {"elements": [
+        google.side_effect = [{"body": {"content": [{"paragraph": {"elements": [
             {"textRun": {"content": "Open full ", "textStyle": {"link": {"url": first_url}}}},
             {"textRun": {"content": "notes", "textStyle": {"link": {"url": first_url}}}},
             {"textRun": {"content": "\nSuggested next steps\nReview the schedule.\n"}},
-        ]}}]}}
+        ]}}]}}, CalendarError("Document inaccessible", 424)]
         response = self.client.get(NOTES, {"document": "second"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["url"], second_url)
@@ -210,3 +334,383 @@ class GoogleMeetingNotesTests(TestCase):
         self.assertEqual([doc["id"] for doc in response.json()["documents"]], ["first", "second"])
         self.assertEqual(google.call_count, 3)
         self.assertEqual(google.call_args.kwargs["params"]["pageToken"], "next")
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_preview_follows_full_notes_link_to_nested_tab(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        def tab(tab_id, title, runs, child_tabs=()):
+            return {
+                "tabProperties": {"tabId": tab_id, "title": title},
+                "documentTab": {"body": {"content": [
+                    {"paragraph": {"elements": [{"textRun": run} for run in runs]}},
+                ]}},
+                "childTabs": list(child_tabs),
+            }
+
+        details = tab("t.details", "Details", [{"content": "Suggested next steps\nReview the schedule."}])
+        google.return_value = {"tabs": [
+            tab("t.summary", "Notes by Gemini", [
+                {"content": "Want to see more? "},
+                {"content": "View the full notes", "textStyle": {"link": {"tabId": "t.details"}}},
+            ], [details]),
+            tab("t.transcript", "Transcript", [{"content": "Private transcript"}]),
+        ]}
+
+        preview = read_notes_document("access", "meeting")
+        full_url = "https://docs.google.com/document/d/meeting/edit?tab=t.details"
+        self.assertEqual(preview["text"], "Suggested next steps\nReview the schedule.")
+        self.assertEqual(preview["url"], full_url)
+        self.assertEqual(preview["links"], [{"title": "View the full notes", "url": full_url}])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_full_notes_drafts_are_idempotent_and_assignable_without_an_ank_event(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event, "summary": "Partner meeting",
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes/edit"}],
+        }
+
+        def tab(tab_id, title, paragraphs):
+            return {
+                "tabProperties": {"tabId": tab_id, "title": title},
+                "documentTab": {"body": {"content": [{"paragraph": {
+                    "elements": [{"textRun": {"content": line + "\n", "textStyle": {"bold": True}}}],
+                }} for line in paragraphs]}},
+            }
+
+        google.return_value = {"tabs": [
+            tab("quick", "Quick notes", ["Summary", "<script>unsafe markup</script>"]),
+            tab("full", "Full notes", [
+                "Decisions",
+                "Partnership tiers",
+                "Next steps",
+                "[Internal Staff] Send Partnership Details: Send project details for review.",
+                "[External Contact] Check Celebrity Availability: Verify scheduling.",
+                "[External Contact] Review Event Proposal: Provide feedback on commercials.",
+                "Details",
+                "Partnership Next Steps: Narrative discussion outside the list.",
+            ]),
+            tab("transcript", "Transcript", ["(00:01:18) Internal Staff: Have you seen the proposal?"]),
+        ]}
+        payload = self.client.get(NOTES).json()
+        tabs = {tab["kind"]: tab["html"] for tab in payload["tabs"]}
+        self.assertIn("&lt;script&gt;", tabs["quick"])
+        self.assertIn("<strong>Next steps</strong>", tabs["full"])
+        self.assertIn("(00:01:18)", tabs["transcript"])
+        self.assertEqual([step["title"] for step in payload["suggested_steps"]], [
+            "Send Partnership Details", "Check Celebrity Availability", "Review Event Proposal",
+        ])
+        step = payload["suggested_steps"][0]
+        self.assertFalse(step["saved"])
+        self.assertEqual(self.client.post(NOTES, {"steps": ["0" * 64]}, format="json").status_code, 400)
+        for _ in range(2):
+            self.assertEqual(self.client.post(NOTES, {"steps": [step["id"]]}, format="json").status_code, 200)
+        self.assertEqual(TeamTask.objects.count(), 1)
+        self.assertTrue(self.client.get(NOTES).json()["suggested_steps"][0]["saved"])
+        task = TeamTask.objects.get()
+        self.assertEqual(task.status, TeamTask.Status.DRAFT)
+        self.assertIsNone(task.due_date)
+        self.assertIsNone(task.assignee)
+        self.assertEqual(task.meeting_title, "Partner meeting")
+        self.assertTrue(task.notes_url.endswith("?tab=full"))
+
+        assignee = User.objects.create_user("staff@example.com", role="staff")
+        endpoint = f"/api/team-tasks/{task.pk}/"
+        self.client.force_authenticate(assignee)
+        self.assertEqual(self.client.get("/api/team-tasks/").json()["tasks"], [])
+        self.assertEqual(self.client.patch(endpoint, {"status": "todo"}, format="json").status_code, 404)
+        self.client.force_authenticate(self.owner)
+        response = self.client.patch(endpoint, {"assignee": str(assignee.pk), "status": "todo"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.client.force_authenticate(assignee)
+        self.assertEqual(self.client.get("/api/team-tasks/").json()["tasks"][0]["title"], step["title"])
+        self.assertEqual(self.client.patch(endpoint, {"title": "Edited"}, format="json").status_code, 403)
+        self.assertEqual(self.client.patch(endpoint, {"status": "done"}, format="json").status_code, 200)
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.get(NOTES).json()["suggested_steps"][0]["task_status"], "done")
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_reads_transcript_document_linked_from_meeting_records(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        target_url = "https://docs.google.com/document/d/recording-transcript/edit"
+        google.side_effect = [
+            {"body": {"content": [{"paragraph": {"elements": [
+                {"textRun": {"content": "Meeting records "}},
+                {"textRun": {"content": "Transcript", "textStyle": {"link": {"url": target_url}}}},
+            ]}}]}},
+            {"body": {"content": [{"paragraph": {"elements": [
+                {"textRun": {"content": "00:01:18 Speaker: Project details."}},
+            ]}}]}},
+        ]
+        payload = read_notes_document("access", "notes")
+        transcript = next(tab for tab in payload["tabs"] if tab["kind"] == "transcript")
+        self.assertEqual(transcript["url"], target_url)
+        self.assertIn("00:01:18 Speaker: Project details.", transcript["html"])
+        self.assertEqual(payload["suggested_steps"], [])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_calendar.calendar_request")
+    def test_explicit_links_attach_and_move_the_meeting_tasks(self, google, _token):
+        from Events.models import Event
+        from Staff.models import MeetingEventLink
+
+        target = Event.objects.create(name="Partner Festival")
+        other = Event.objects.create(name="Other Festival")
+        google.return_value = {
+            **self.event,
+            "summary": "Partner Festival X Sponsor",
+            "description": f'<a href="https://rsvp.anewknot.com/events/{target.pk}">ANK event</a>',
+        }
+        endpoint = BASE + "events/event-1/attachment/"
+        response = self.client.get(endpoint)
+        self.assertTrue(response.data["automatic_match"])
+        self.assertTrue(response.data["suggestions"][0]["suggested"])
+        self.assertEqual(response.data["suggestions"][0]["id"], str(target.pk))
+        self.assertEqual(self.client.post(endpoint, {"automatic": True}, format="json").data["event"]["id"], str(target.pk))
+        link = MeetingEventLink.objects.get()
+        task = TeamTask.objects.create(
+            source_key="test", title="Follow up", status=TeamTask.Status.TODO, meeting_link=link,
+        )
+        target_url = BASE + f"ank-events/{target.pk}/meetings/"
+        other_url = BASE + f"ank-events/{other.pk}/meetings/"
+        self.assertEqual(self.client.get(target_url).data["meetings"][0]["id"], "event-1")
+        self.assertEqual(self.client.get(target_url).data["tasks"][0]["id"], task.pk)
+        self.assertEqual(self.client.post(endpoint, {"event_id": str(other.pk)}, format="json").status_code, 200)
+        self.assertEqual(self.client.get(target_url).data["tasks"], [])
+        self.assertEqual(self.client.get(other_url).data["tasks"][0]["id"], task.pk)
+        self.assertEqual(self.client.get("/api/team-tasks/").data["tasks"][0]["ank_event"]["id"], str(other.pk))
+        self.assertEqual(self.client.post(endpoint, {"event_id": None}, format="json").status_code, 200)
+        self.assertFalse(self.client.get(endpoint).data["automatic_match"])
+        self.assertIsNone(self.client.get("/api/team-tasks/").data["tasks"][0]["ank_event"])
+        self.assertEqual(TeamTask.objects.count(), 1)
+
+        staff = User.objects.create_user("staff@example.com", role="staff")
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(target_url).status_code, 404)
+        self.assertEqual(self.client.post(endpoint, {"event_id": str(target.pk)}, format="json").status_code, 403)
+        google.return_value["visibility"] = "private"
+        self.assertEqual(self.client.get(endpoint).status_code, 404)
+
+    def test_manual_tasks_are_idempotent_and_admin_only(self):
+        from uuid import uuid4
+
+        staff = User.objects.create_user("assignee@example.com", role="staff")
+        body = {
+            "request_id": str(uuid4()),
+            "title": "Review the venue proposal",
+            "assignee": str(staff.pk),
+            "status": "in_progress",
+        }
+        response = self.client.post("/api/team-tasks/", body, format="json")
+        self.assertEqual(response.status_code, 201)
+        retry = self.client.post("/api/team-tasks/", body, format="json")
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.data["id"], response.data["id"])
+        task = TeamTask.objects.get()
+        self.assertIsNone(task.meeting_link_id)
+        self.assertEqual(task.assignee, staff)
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.post("/api/team-tasks/", body, format="json").status_code, 403)
+
+    def test_meeting_suggestions_rank_partial_and_client_matches_and_offer_browse_fallback(self):
+        from Events.models import Event
+        from Staff.meeting_event_links import candidates
+
+        Event.objects.create(name="Antrah Wellness Festival, Mumbai", client_name="Antrah")
+        Event.objects.create(name="Product Launch", client_name="HydRo365")
+        Event.objects.create(name="Festival Planning")
+        result = candidates({"summary": "Antrah Wellness Festival X HydRo365"}, Event.objects.all(), "")
+        self.assertEqual([event["name"] for event in result], [
+            "Antrah Wellness Festival, Mumbai", "Product Launch",
+        ])
+        self.assertTrue(all(event["suggested"] for event in result))
+        fallback = candidates({"summary": "Daily sync"}, Event.objects.all(), "")
+        self.assertEqual(len(fallback), 3)
+        self.assertFalse(any(event["suggested"] for event in fallback))
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_notes_and_task_queue_agree_on_mixed_draft_and_active_steps(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event,
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/notes/edit"}],
+        }
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": (
+            "Next steps\n"
+            "[Staff] Send Partnership Details: Send the project details.\n"
+            "[Contact] Check Celebrity Availability: Check the schedule.\n"
+            "[Contact] Review Event Proposal: Provide feedback.\n"
+            "Details\n"
+        )}}]}}]}}
+        steps = self.client.get(NOTES).json()["suggested_steps"]
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 0, "decisions": 0, "discussion": 0})
+        saved = self.client.post(NOTES, {"steps": [step["id"] for step in steps]}, format="json")
+        self.assertEqual(saved.status_code, 200)
+        converted_id = saved.json()[1]["id"]
+        response = self.client.patch(f"/api/team-tasks/{converted_id}/", {"status": "todo"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        notes = self.client.get(NOTES).json()["suggested_steps"]
+        queue = self.client.get("/api/team-tasks/").json()
+        drafts = {task["title"] for task in queue["tasks"] if task["status"] == "draft"}
+        self.assertTrue(queue["can_manage"])
+        self.assertEqual([step["task_status"] for step in notes], ["draft", "todo", "draft"])
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {"total": 3, "saved": 3, "decisions": 0, "discussion": 0})
+        self.assertEqual(drafts, {"Send Partnership Details", "Review Event Proposal"})
+
+    def test_import_preassigns_only_unique_active_owners_and_keeps_reviewed_assignment(self):
+        from Staff.team_tasks import save_meeting_steps, step_key
+
+        shoeb = User.objects.create_user("shoeb@example.com", name="Shoeb Khan", role="staff")
+        reviewer = User.objects.create_user("reviewer@example.com", name="Reviewer", role="staff")
+        User.objects.create_user("inactive@example.com", name="Shoeb Khan", role="staff", is_active=False)
+        User.objects.create_user("one@example.com", name="Duplicate Name", role="staff")
+        User.objects.create_user("two@example.com", name="Duplicate Name", role="staff")
+        steps = [
+            {"owner": "SHOEB  KHAN", "title": "Send details", "description": ""},
+            {"owner": "Duplicate Name", "title": "Review details", "description": ""},
+        ]
+        document = {"title": "Meeting", "url": "", "suggested_steps": steps}
+        selected = [step_key(step) for step in steps]
+        save_meeting_steps(self.owner, "calendar", "meeting", document, selected)
+        task = TeamTask.objects.get(title="Send details")
+        self.assertEqual(task.assignee, shoeb)
+        self.assertIsNone(TeamTask.objects.get(title="Review details").assignee)
+        task.assignee = reviewer
+        task.save(update_fields=["assignee"])
+        save_meeting_steps(self.owner, "calendar", "meeting", document, selected)
+        task.refresh_from_db()
+        self.assertEqual(task.assignee, reviewer)
+
+        legacy = TeamTask.objects.create(source_key="legacy", title="Legacy draft", suggested_owner="shoeb@example.com")
+        queue = self.client.get("/api/team-tasks/").json()["tasks"]
+        suggestion = next(item for item in queue if item["id"] == str(legacy.pk))
+        self.assertEqual(suggestion["suggested_assignee"], str(shoeb.pk))
+
+    def test_full_suggested_name_prefills_unique_short_account(self):
+        from Staff.team_tasks import save_meeting_steps, step_key, unique_active_assignees
+
+        shoeb = User.objects.create_user("shoeb@example.com", name="shoeb", role="staff")
+        legacy = TeamTask.objects.create(source_key="short-owner", title="Legacy draft", suggested_owner="Shoeb Khan")
+        tasks = self.client.get("/api/team-tasks/").json()["tasks"]
+        self.assertEqual(next(task for task in tasks if task["id"] == str(legacy.pk))["suggested_assignee"], str(shoeb.pk))
+
+        step = {"owner": "Shoeb Khan", "title": "Send partnership details", "description": ""}
+        save_meeting_steps(self.owner, "calendar", "meeting", {
+            "title": "Partner meeting", "url": "", "suggested_steps": [step],
+        }, [step_key(step)])
+        self.assertEqual(TeamTask.objects.get(title=step["title"]).assignee, shoeb)
+
+        User.objects.create_user("shoeb.patel@example.com", name="Shoeb Patel", role="staff")
+        self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {})
+        exact = User.objects.create_user("shoeb.khan@example.com", name="Shoeb Khan", role="staff")
+        self.assertEqual(unique_active_assignees(["Shoeb Khan"]), {"shoeb khan": exact.pk})
+
+    def test_staff_can_view_the_full_active_board_but_only_move_their_own_tasks(self):
+        viewer = User.objects.create_user("viewer@example.com", role="staff", name="Viewer")
+        teammate = User.objects.create_user("teammate@example.com", role="staff", name="Teammate")
+        own = TeamTask.objects.create(source_key="own", title="Own", status="todo", assignee=viewer)
+        other = TeamTask.objects.create(
+            source_key="other", title="Other", status="todo", assignee=teammate,
+            notes_url="https://docs.google.com/document/d/private/edit",
+        )
+        unassigned = TeamTask.objects.create(source_key="unassigned", title="Unassigned", status="todo")
+        TeamTask.objects.create(source_key="draft", title="Draft", assignee=viewer)
+        self.client.force_authenticate(viewer)
+        queue = self.client.get("/api/team-tasks/").json()
+        tasks = {task["id"]: task for task in queue["tasks"]}
+        self.assertEqual(set(tasks), {str(own.pk), str(other.pk), str(unassigned.pk)})
+        self.assertTrue(tasks[str(own.pk)]["can_update_status"])
+        self.assertFalse(tasks[str(other.pk)]["can_update_status"])
+        self.assertEqual(tasks[str(other.pk)]["assignee_name"], "Teammate")
+        self.assertEqual(tasks[str(other.pk)]["notes_url"], "")
+        self.assertEqual(queue["users"], [])
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{other.pk}/", {"status": "done"}, format="json").status_code, 404)
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"status": "done"}, format="json").status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/team-tasks/{own.pk}/", {"title": "Changed"}, format="json").status_code, 403)
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_decisions_keep_recorded_status_and_stop_before_next_steps(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        body = "Summary\nFestival planning\nDecisions\nConfirmed\nBook the venue.\n"
+        body += "Needs Further Discussion\nReview partnership terms.\nNext steps\nSend the proposal.\nDiscussion points\nConfirm the approval timeline.\nDetails\nMore discussion.\n"
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": body}}]}}]}}
+        response = read_notes_document("access", "meeting")
+        self.assertEqual(response["decisions"], [
+            {"label": "Confirmed", "items": ["Book the venue."]},
+            {"label": "Needs Further Discussion", "items": ["Review partnership terms."]},
+            {"label": "Discussion points", "items": ["Confirm the approval timeline."]},
+        ])
+
+    def test_private_event_keeps_notes_and_meeting_metadata_restricted(self):
+        from Staff.google_calendar import event_data
+
+        event = {
+            **self.event, "visibility": "private",
+            "organizer": {"displayName": "Private organizer", "email": "private@example.com"},
+            "description": "Private description", "attendees": [{"email": "guest@example.com"}],
+        }
+        payload = event_data(event, None, self.owner)
+        self.assertEqual(payload["notes_availability"], "restricted")
+        self.assertFalse(payload["can_preview_notes"])
+        self.assertIsNone(payload["organizer"])
+        self.assertEqual(payload["meet_url"], "")
+        self.assertEqual(payload["description_text"], "")
+        self.assertEqual(payload["attendees"], [])
+
+    @patch("Staff.google_calendar.access_token", return_value="access")
+    @patch("Staff.google_meeting_notes.calendar_request")
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_agenda_counts_aligned_decisions_and_pending_discussion_separately(self, google, calendar, _token):
+        calendar.return_value = {
+            **self.event,
+            "attachments": [{"title": "Gemini notes", "fileUrl": "https://docs.google.com/document/d/review/edit"}],
+        }
+        action_items = "\n".join(f"[Staff] Follow-up {number}: Review the item." for number in range(1, 10))
+        body = (
+            "Summary\nMarketing and ticketing planning.\n"
+            "Decisions\nNeeds Further Discussion\nFestival ticketing still needs internal review.\n"
+            "Aligned\nFocus on digital marketing.\nSplit the budget into two parts.\n"
+            f"Next steps\n{action_items}\nDetails\nOperational planning."
+        )
+        google.return_value = {"body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": body}}]}}]}}
+        self.assertEqual(self.client.get(NOTES, {"summary": "steps"}).json(), {
+            "total": 9, "saved": 0, "decisions": 2, "discussion": 1,
+        })
+        meeting_notes = self.client.get(NOTES).json()
+        self.assertEqual(meeting_notes["summary_text"], "Marketing and ticketing planning.")
+        self.assertEqual([group["label"] for group in meeting_notes["decisions"]], ["Needs Further Discussion", "Aligned"])
+
+    @patch("Staff.google_meeting_notes.google_request")
+    def test_overview_reads_quick_and_full_summaries_without_including_transcript(self, google):
+        from Staff.google_meeting_notes import read_notes_document
+
+        def tab(title, text):
+            return {
+                "tabProperties": {"title": title, "tabId": title.lower().replace(" ", "-")},
+                "documentTab": {"body": {"content": [{"paragraph": {"elements": [
+                    {"textRun": {"content": text}},
+                ]}}]}},
+            }
+
+        google.return_value = {"tabs": [
+            tab("Quick notes", "Key takeaways\nMarketing priorities and ticketing.\nNext steps\nSend the deck."),
+            tab("Full notes", "Summary\nReview the budget split.\nDecisions\nAligned\nPrioritize digital.\n"
+                "Disagreed\nPass pricing.\nShelved\nReserved seats.\nNext steps\n[Staff] Send deck: Share slides.\n"
+                "Details\nTicketing and Access: The group reviewed the passes.\n"
+                "You should review Gemini's notes to make sure they're accurate."),
+            tab("Transcript", "Summary\nPrivate transcript content."),
+        ]}
+        response = read_notes_document("access", "meeting")
+        self.assertEqual(response["overview"], {
+            "quick_summaries": ["Marketing priorities and ticketing."],
+            "full_summary": "Review the budget split.",
+            "discussion_topics": ["Ticketing and Access"],
+        })
+        self.assertEqual([group["label"] for group in response["decisions"]], ["Aligned", "Disagreed", "Shelved"])
+        self.assertEqual([tab["kind"] for tab in response["tabs"]], ["quick", "full", "transcript"])

@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("Staff", "0007_add_accounts_role_choice"),
+        ("Staff", "0013_meeting_notes_overview"),
     ]
 
     operations = [
