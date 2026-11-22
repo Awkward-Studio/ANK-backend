@@ -9,7 +9,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from MessageTemplates.models import WhatsAppBusinessAccount, WhatsAppPhoneNumber
+from MessageTemplates.models import QrTemplateConfig, WhatsAppBusinessAccount, WhatsAppPhoneNumber
 
 logger = logging.getLogger(__name__)
 WEBHOOK_SECRET = os.getenv("DJANGO_RSVP_SECRET", "")
@@ -38,6 +38,22 @@ def _meta_json(response: requests.Response) -> dict:
     except ValueError:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _sync_qr_template_config(phone_number_id: str, template_name: str, language: str, enabled: bool) -> None:
+    """Persist local QR eligibility independently of Meta's template metadata."""
+    lookup = {
+        "phone_number_id": str(phone_number_id),
+        "template_name": str(template_name),
+        "language": str(language or "en_US"),
+    }
+    if enabled:
+        QrTemplateConfig.objects.update_or_create(
+            **lookup,
+            defaults={"is_qr_template": True},
+        )
+    else:
+        QrTemplateConfig.objects.filter(**lookup).delete()
 
 
 def _meta_request(method: str, url: str, *, retry_safe: bool = False, **kwargs) -> requests.Response:
@@ -101,6 +117,16 @@ def _validate_components(components, *, require_media_handle: bool = True) -> st
             return "Every URL button requires a URL."
         if button.get("type") == "PHONE_NUMBER" and not str(button.get("phone_number") or "").strip():
             return "Every phone button requires a phone number."
+    return ""
+
+
+def _validate_qr_template_header(components, enabled) -> str:
+    """QR tickets replace the template header media, so only IMAGE is safe."""
+    if not enabled:
+        return ""
+    header = next((component for component in components if component.get("type") == "HEADER"), None)
+    if not header or str(header.get("format") or "").upper() != "IMAGE":
+        return "QR templates must have an IMAGE header for generated ticket media."
     return ""
 
 
@@ -229,10 +255,23 @@ class WhatsAppTemplateManagementView(APIView):
             return self._meta_failure("fetch templates", response, request_id)
 
         payload = _meta_json(response)
+        qr_templates = set(
+            QrTemplateConfig.objects.filter(
+                phone_number_id=resolved["phone"].phone_number_id if resolved.get("phone") else "",
+                is_qr_template=True,
+            ).values_list("template_name", "language")
+        )
+        templates = []
+        for template in payload.get("data") or []:
+            template = dict(template)
+            template["is_qr_template"] = (
+                template.get("name"), template.get("language", "en_US")
+            ) in qr_templates
+            templates.append(template)
         return Response(
             {
                 "success": True,
-                "templates": payload.get("data") or [],
+                "templates": templates,
                 "waba_id": waba.waba_id,
                 "request_id": request_id,
             },
@@ -259,6 +298,9 @@ class WhatsAppTemplateManagementView(APIView):
         component_error = _validate_components(components)
         if component_error:
             return Response({"success": False, "error": component_error}, status=status.HTTP_400_BAD_REQUEST)
+        qr_error = _validate_qr_template_header(components, request.data.get("is_qr_template"))
+        if qr_error:
+            return Response({"success": False, "error": qr_error}, status=status.HTTP_400_BAD_REQUEST)
 
         request_id = self._request_id(request)
         waba = resolved["waba"]
@@ -279,6 +321,12 @@ class WhatsAppTemplateManagementView(APIView):
         if not response.ok:
             return self._meta_failure("create template", response, request_id)
 
+        _sync_qr_template_config(
+            resolved["phone"].phone_number_id if resolved.get("phone") else request.data.get("phone_number_id", ""),
+            name,
+            str(language).strip(),
+            bool(request.data.get("is_qr_template")),
+        )
         return Response({"success": True, "data": _meta_json(response), "waba_id": waba.waba_id, "request_id": request_id}, status=status.HTTP_200_OK)
 
     def patch(self, request):
@@ -300,6 +348,9 @@ class WhatsAppTemplateManagementView(APIView):
         component_error = _validate_components(components, require_media_handle=False)
         if component_error:
             return Response({"success": False, "error": component_error}, status=status.HTTP_400_BAD_REQUEST)
+        qr_error = _validate_qr_template_header(components, request.data.get("is_qr_template"))
+        if qr_error:
+            return Response({"success": False, "error": qr_error}, status=status.HTTP_400_BAD_REQUEST)
 
         payload = {"components": components}
         if category:
@@ -318,6 +369,13 @@ class WhatsAppTemplateManagementView(APIView):
         if not response.ok:
             return self._meta_failure("update template", response, request_id)
 
+        if request.data.get("name"):
+            _sync_qr_template_config(
+                resolved["phone"].phone_number_id if resolved.get("phone") else request.data.get("phone_number_id", ""),
+                request.data.get("name"),
+                str(request.data.get("language") or "en_US").strip(),
+                bool(request.data.get("is_qr_template")),
+            )
         return Response({"success": True, "data": _meta_json(response), "waba_id": resolved["waba"].waba_id, "request_id": request_id}, status=status.HTTP_200_OK)
 
     def delete(self, request):
@@ -353,5 +411,11 @@ class WhatsAppTemplateManagementView(APIView):
             return self._transport_failure("delete template", exc, request_id)
         if not response.ok:
             return self._meta_failure("delete template", response, request_id)
+
+        if template_name:
+            QrTemplateConfig.objects.filter(
+                phone_number_id=resolved["phone"].phone_number_id if resolved.get("phone") else "",
+                template_name=template_name,
+            ).delete()
 
         return Response({"success": True, "data": _meta_json(response) if response.content else {}, "waba_id": resolved["waba"].waba_id, "request_id": request_id}, status=status.HTTP_200_OK)

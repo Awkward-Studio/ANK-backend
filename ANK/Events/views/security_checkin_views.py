@@ -1,9 +1,10 @@
 import json
 import logging
 import re
+import hashlib
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -16,10 +17,30 @@ from Events.models.session_registration import SessionRegistration
 from Events.models.wa_send_map import WaSendMap
 from Guest.models import Guest
 from MessageTemplates.temporary_tools.qr_test_media import decrypt_security_qr_payload
+from MessageTemplates.models import QrScanEvent, QrTicket
 
 logger = logging.getLogger("security_checkin")
 
 ALLOWED_SECURITY_ROLES = {"security", "admin", "super_admin"}
+
+
+def _record_qr_scan(token, action, actor=None, event=None, session_registration=None, error_message=""):
+    digest = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+    ticket = QrTicket.objects.filter(token_digest=digest).first()
+    if ticket:
+        QrTicket.objects.filter(pk=ticket.pk).update(
+            scan_count=F("scan_count") + 1,
+            last_scanned_at=timezone.now(),
+        )
+    QrScanEvent.objects.create(
+        ticket=ticket,
+        token_digest=digest,
+        action=action,
+        event=event,
+        session_registration=session_registration,
+        security_user=actor if getattr(actor, "is_authenticated", False) else None,
+        error_message=error_message,
+    )
 
 
 def check_security_access(request):
@@ -76,6 +97,23 @@ def resolve_guest_registration(payload, target_session_id=None):
         return None, None
 
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+    # First resolve the persisted ticket identity. The ticket binding is authoritative;
+    # never let an embedded registration field override it if they diverge.
+    ticket_id = payload.get("qr_ticket_id") or payload.get("ticket_id")
+    if ticket_id:
+        try:
+            ticket = QrTicket.objects.select_related(
+                "event_registration", "session_registration", "event"
+            ).filter(id=ticket_id).first()
+            if ticket:
+                # A generated ticket must be bound to a registration before it
+                # can be used for admission; do not fall back to phone matching.
+                if ticket.event_registration:
+                    return ticket.event_registration, ticket.session_registration
+                return None, None
+        except Exception:
+            pass
 
     # Strategy 1: Explicit registration_id / event_registration_id
     reg_id = (
@@ -230,6 +268,7 @@ class SecurityVerifyPassAPIView(APIView):
             payload = decrypt_security_qr_payload(token)
         except Exception as exc:
             logger.warning("[SecurityVerifyPass] Failed to decrypt token: %s", exc)
+            _record_qr_scan(token, "rejected", actor, error_message="Corrupted, tampered, or forged QR pass.")
             return Response(
                 {
                     "ok": True,
@@ -239,11 +278,14 @@ class SecurityVerifyPassAPIView(APIView):
                 status=status.HTTP_200_OK,
             )
 
+        target_session_id = target_session_id or payload.get("session_id")
+
         # 2. Resolve guest and registration in database
         event_reg, session_reg = resolve_guest_registration(payload, target_session_id)
 
         if not event_reg:
             # Valid crypto token but no matching database guest registration
+            _record_qr_scan(token, "rejected", actor, error_message="No matching guest registration found in database.")
             return Response(
                 {
                     "ok": True,
@@ -253,6 +295,8 @@ class SecurityVerifyPassAPIView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+
+        _record_qr_scan(token, "verified", actor, event=event_reg.event, session_registration=session_reg)
 
         guest = event_reg.guest
         event = event_reg.event
@@ -273,6 +317,7 @@ class SecurityVerifyPassAPIView(APIView):
                 "end_time": s.session.end_time.isoformat() if s.session.end_time else None,
                 "is_checked_in": s.is_checked_in,
                 "checked_in_at": s.checked_in_at.isoformat() if s.checked_in_at else None,
+                "check_in_count": s.session.check_in_count,
             })
 
         # 4. Determine overall attendance status
@@ -306,6 +351,7 @@ class SecurityVerifyPassAPIView(APIView):
                 "end_date": event.end_date.isoformat() if event.end_date else None,
                 "bride_name": event.bride_name or "",
                 "groom_name": event.groom_name or "",
+                "check_in_count": event.check_in_count,
             },
             "session": {
                 "id": str(session_reg.session.id),
@@ -316,6 +362,7 @@ class SecurityVerifyPassAPIView(APIView):
                 "end_time": session_reg.session.end_time.isoformat() if session_reg.session.end_time else None,
                 "is_checked_in": session_reg.is_checked_in,
                 "checked_in_at": session_reg.checked_in_at.isoformat() if session_reg.checked_in_at else None,
+                "check_in_count": session_reg.session.check_in_count,
             } if session_reg else None,
             "registration": {
                 "id": str(event_reg.id),
@@ -365,11 +412,13 @@ class SecurityCheckInAPIView(APIView):
             payload = decrypt_security_qr_payload(token)
         except Exception as exc:
             logger.warning("[SecurityCheckIn] Decryption failure: %s", exc)
+            _record_qr_scan(token, "rejected", actor, error_message="Invalid or tampered security pass.")
             return Response({"ok": False, "error": "Invalid or tampered security pass."}, status=status.HTTP_400_BAD_REQUEST)
 
         # 2. Resolve guest and event registration directly from verified QR payload
         resolved_event_reg, resolved_session_reg = resolve_guest_registration(payload, target_session_id)
         if not resolved_event_reg:
+            _record_qr_scan(token, "rejected", actor, error_message="Legitimate guest registration not found.")
             return Response({"ok": False, "error": "Legitimate guest registration not found for this pass."}, status=status.HTTP_404_NOT_FOUND)
 
         # 3. Security cross-validation: Do not trust frontend registration ID if it mismatches
@@ -382,6 +431,10 @@ class SecurityCheckInAPIView(APIView):
                 {"ok": False, "error": "Security validation failed: Registration mismatch between token and request."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        target_session_id = target_session_id or payload.get("session_id")
+        if not target_session_id and resolved_session_reg:
+            target_session_id = str(resolved_session_reg.session_id)
 
         # 4. If session_id supplied, verify session belongs to registration's event
         target_session = None
@@ -415,6 +468,11 @@ class SecurityCheckInAPIView(APIView):
 
                     # Check duplicate for function
                     if sreg.is_checked_in:
+                        _record_qr_scan(
+                            token, "duplicate", actor, event=reg.event,
+                            session_registration=sreg,
+                            error_message=f"Guest has already checked in to {target_session.title}.",
+                        )
                         return Response(
                             {
                                 "ok": False,
@@ -428,6 +486,10 @@ class SecurityCheckInAPIView(APIView):
 
                 # Check duplicate for event level (when no specific session or general check-in)
                 if not target_session and reg.is_checked_in:
+                    _record_qr_scan(
+                        token, "duplicate", actor, event=reg.event,
+                        error_message="Guest has already checked in.",
+                    )
                     return Response(
                         {
                             "ok": False,
@@ -445,6 +507,7 @@ class SecurityCheckInAPIView(APIView):
                     if officer_user:
                         reg.checked_in_by = officer_user
                     reg.save(update_fields=["is_checked_in", "checked_in_at", "checked_in_by"])
+                    Event.objects.filter(pk=reg.event_id).update(check_in_count=F("check_in_count") + 1)
 
                 # Mark session registration attended if applicable
                 if sreg:
@@ -453,10 +516,13 @@ class SecurityCheckInAPIView(APIView):
                     if officer_user:
                         sreg.checked_in_by = officer_user
                     sreg.save(update_fields=["is_checked_in", "checked_in_at", "checked_in_by"])
+                    Session.objects.filter(pk=sreg.session_id).update(check_in_count=F("check_in_count") + 1)
 
         except Exception as exc:
             logger.exception("[SecurityCheckIn] Database check-in error: %s", exc)
             return Response({"ok": False, "error": "Internal error processing check-in."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        _record_qr_scan(token, "checked_in", actor, event=reg.event, session_registration=sreg)
 
         return Response(
             {
@@ -468,6 +534,8 @@ class SecurityCheckInAPIView(APIView):
                 "event_name": reg.event.name,
                 "function_name": target_session.title if target_session else None,
                 "is_checked_in": True,
+                "event_check_in_count": Event.objects.filter(pk=reg.event_id).values_list("check_in_count", flat=True).first(),
+                "session_check_in_count": Session.objects.filter(pk=target_session.id).values_list("check_in_count", flat=True).first() if target_session else None,
             },
             status=status.HTTP_200_OK,
         )

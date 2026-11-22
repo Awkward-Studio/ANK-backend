@@ -29,6 +29,7 @@ class SessionSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers
             "start_time",
             "end_time",
             "pax",
+            "check_in_count",
             "date",
             "location",
             "entertainment",

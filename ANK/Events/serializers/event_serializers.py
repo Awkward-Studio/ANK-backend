@@ -23,6 +23,7 @@ class EventSerializer(PermissionAwareSerializer, CustomFieldMixin, serializers.M
             "start_date",
             "end_date",
             "pax",
+            "check_in_count",
             "bride_name",
             "groom_name",
             "type",

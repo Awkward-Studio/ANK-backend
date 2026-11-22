@@ -17,20 +17,37 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from MessageTemplates.models import WhatsAppPhoneNumber
+from Events.models.event_model import Event
+from Events.models.event_registration_model import EventRegistration
+from Events.models.session_registration import SessionRegistration
+from MessageTemplates.models import (
+    BroadcastCampaign,
+    BroadcastRecipient,
+    QrTemplateConfig,
+    QrTicket,
+    MessageTemplate,
+    WhatsAppPhoneNumber,
+)
 from MessageTemplates.services.whatsapp import WhatsAppError, _get_credentials
 
 
 logger = logging.getLogger("whatsapp")
 GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
-QR_TEMPLATE_NAME = "qr_image_bulksend_test"
-QR_TEST_SENDER_SUFFIX = "00792"
 SECURITY_TOKEN_PREFIX = "ANKSEC1:"
 SENSITIVE_DETAIL_KEY = re.compile(
     r"password|secret|token|bank|account|ifsc|aadhaar|aadhar|pan(?:_|\s)*(?:number|no)?|passport|photo(?:_|\s)*id",
     re.IGNORECASE,
 )
+
+
+def _existing_pk(model, value):
+    if not value:
+        return None
+    try:
+        return model.objects.filter(pk=value).values_list("pk", flat=True).first()
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_encryption_key(secret_override=None):
@@ -126,12 +143,15 @@ def _qr_png(content):
     return output
 
 
-def _is_qr_test_sender(sender_phone_number_id):
-    sender = WhatsAppPhoneNumber.objects.filter(phone_number_id=sender_phone_number_id).first()
-    if not sender:
-        return False
-    display_digits = "".join(char for char in str(sender.display_phone_number or "") if char.isdigit())
-    return display_digits.endswith(QR_TEST_SENDER_SUFFIX)
+def _is_qr_enabled_template(template_name, sender_phone_number_id):
+    return QrTemplateConfig.objects.filter(
+        phone_number_id=sender_phone_number_id,
+        template_name=template_name,
+        is_qr_template=True,
+    ).exists() or MessageTemplate.objects.filter(
+        name=template_name,
+        is_qr_template=True,
+    ).exists()
 
 
 def _upload_qr_to_meta(png, token, resolved_sender_id):
@@ -160,7 +180,7 @@ def _upload_qr_to_meta(png, token, resolved_sender_id):
 @csrf_exempt
 @require_http_methods(["POST"])
 def issue_qr_test_media(request):
-    """Generate raw-JSON QR media for the HR test sender without persisting scan state."""
+    """Generate an encrypted, recipient-bound QR ticket and persist its audit record."""
     if not _has_internal_access(request):
         return HttpResponseForbidden("invalid token")
 
@@ -172,24 +192,21 @@ def issue_qr_test_media(request):
     recipient_phone = str(body.get("recipient_phone") or body.get("phone") or "").strip()
     sender_phone_number_id = str(body.get("sender_phone_number_id") or "").strip()
     template_name = str(body.get("template_name") or "").strip()
-    if template_name != QR_TEMPLATE_NAME:
-        return JsonResponse({"ok": False, "error": f"template_name must be {QR_TEMPLATE_NAME}"}, status=400)
+    template_language = str(body.get("template_language") or "en_US").strip()
+    if not _is_qr_enabled_template(template_name, sender_phone_number_id):
+        return JsonResponse({"ok": False, "error": "The selected template is not marked as a QR template."}, status=400)
     if not recipient_phone or not sender_phone_number_id:
         return JsonResponse(
             {"ok": False, "error": "recipient_phone and sender_phone_number_id are required"},
             status=400,
         )
-    if not _is_qr_test_sender(sender_phone_number_id):
-        return JsonResponse(
-            {"ok": False, "error": f"Dynamic QR testing is limited to the sender ending in {QR_TEST_SENDER_SUFFIX}"},
-            status=403,
-        )
-
-    test_id = uuid.uuid4()
+    ticket_id = uuid.uuid4()
     payload = {
         "type": "ank_dynamic_qr_test",
-        "test_id": str(test_id),
-        "template": QR_TEMPLATE_NAME,
+        "test_id": str(ticket_id),
+        "qr_ticket_id": str(ticket_id),
+        "template": template_name,
+        "template_language": template_language,
         "generated_at": timezone.now().isoformat(),
         "recipient": {
             "name": recipient_name[:255] or "Guest",
@@ -201,6 +218,8 @@ def issue_qr_test_media(request):
     for field in ("registration_id", "event_registration_id", "session_registration_id", "event_id", "session_id", "guest_id", "uid"):
         if body.get(field):
             payload[field] = str(body[field])
+    if body.get("registration_id") and not body.get("event_registration_id"):
+        payload["event_registration_id"] = str(body["registration_id"])
     encrypted_token = encrypt_security_qr_payload(payload)
 
     try:
@@ -210,11 +229,48 @@ def issue_qr_test_media(request):
         logger.exception("Could not generate QR test media for %s", recipient_phone)
         return JsonResponse({"ok": False, "error": str(exc)}, status=502)
 
+    event_registration_id = payload.get("event_registration_id")
+    session_registration_id = payload.get("session_registration_id")
+    campaign_id = body.get("campaign_id")
+    campaign_recipient_id = body.get("campaign_recipient_id")
+    event_id = payload.get("event_id")
+    event_registration_pk = _existing_pk(EventRegistration, event_registration_id)
+    session_registration_pk = _existing_pk(SessionRegistration, session_registration_id)
+    event_pk = _existing_pk(Event, event_id)
+    campaign_pk = _existing_pk(BroadcastCampaign, campaign_id)
+    campaign_recipient_pk = _existing_pk(BroadcastRecipient, campaign_recipient_id)
+    if not event_pk and event_registration_pk:
+        event_pk = EventRegistration.objects.filter(pk=event_registration_pk).values_list("event_id", flat=True).first()
+    if not event_registration_pk and session_registration_pk:
+        session_registration = SessionRegistration.objects.select_related("session").filter(pk=session_registration_pk).first()
+        if session_registration:
+            event_registration_pk = EventRegistration.objects.filter(
+                guest_id=session_registration.guest_id,
+                event_id=session_registration.session.event_id,
+            ).values_list("id", flat=True).first()
+            event_pk = event_pk or session_registration.session.event_id
+    ticket = QrTicket.objects.create(
+        id=ticket_id,
+        template_name=template_name,
+        template_language=template_language,
+        sender_phone_number_id=sender_phone_number_id,
+        recipient_phone=recipient_phone[:50],
+        recipient_name=recipient_name[:255],
+        media_id=media_id,
+        token_digest=hashlib.sha256(encrypted_token.encode("utf-8")).hexdigest(),
+        event_id=event_pk,
+        event_registration_id=event_registration_pk,
+        session_registration_id=session_registration_pk,
+        campaign_id=campaign_pk,
+        campaign_recipient_id=campaign_recipient_pk,
+    )
+
     return JsonResponse(
         {
             "ok": True,
             "media_id": media_id,
-            "test_id": str(test_id),
+            "test_id": str(ticket.id),
+            "ticket_id": str(ticket.id),
             "qr_token": encrypted_token,
             "qr_payload": payload,
         },
