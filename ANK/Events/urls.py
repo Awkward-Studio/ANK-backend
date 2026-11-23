@@ -3,6 +3,7 @@ from Events.views.security_checkin_views import (
     SecurityVerifyPassAPIView,
     SecurityCheckInAPIView,
 )
+from Events.views.communication_recipient_views import CommunicationRecipientRegistrationAPIView
 from Events.views.event_views import (
     EventAccommodationsAPIView,
     EventListCreateView,
@@ -111,6 +112,11 @@ urlpatterns = [
         "events/security/check-in/",
         SecurityCheckInAPIView.as_view(),
         name="security-check-in",
+    ),
+    path(
+        "events/communication-recipients/",
+        CommunicationRecipientRegistrationAPIView.as_view(),
+        name="communication-recipient-registration",
     ),
     path("events/", EventListCreateView.as_view(), name="event-list"),
     path("events/<uuid:pk>/", EventDetailView.as_view(), name="event-detail"),
