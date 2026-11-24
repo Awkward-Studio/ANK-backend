@@ -23,6 +23,7 @@ class CommunicationRecipientRegistrationTests(TestCase):
         self.event = Event.objects.create(name="Wedding", type="wedding")
         self.function = Session.objects.create(event=self.event, title="Sangeet")
         self.url = "/api/events/communication-recipients/"
+        self.bulk_url = "/api/events/communication-recipients/bulk/"
 
     def test_creates_guest_event_and_function_registrations(self):
         response = self.client.post(
@@ -100,3 +101,67 @@ class CommunicationRecipientRegistrationTests(TestCase):
         self.assertIsNone(response.data["session"])
         self.assertIsNone(response.data["session_registration"])
         self.assertEqual(SessionRegistration.objects.count(), 0)
+
+    def test_bulk_csv_registration_creates_bindings_and_skips_duplicate_phones(self):
+        response = self.client.post(
+            self.bulk_url,
+            {
+                "event_id": str(self.event.id),
+                "session_id": str(self.function.id),
+                "recipients": [
+                    {"name": "Asha Rao", "phone": "+919876543210"},
+                    {"name": "Duplicate Asha", "phone": "98765 43210"},
+                    {"name": "Rohan Shah", "phone": "+919812345678"},
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["recipients"]), 2)
+        self.assertEqual(response.data["duplicates_skipped"], 1)
+        self.assertEqual(response.data["duplicate_rows"], [3])
+        self.assertEqual(Guest.objects.count(), 2)
+        self.assertEqual(EventRegistration.objects.count(), 2)
+        self.assertEqual(SessionRegistration.objects.count(), 2)
+        for recipient in response.data["recipients"]:
+            self.assertIsNotNone(recipient["event_registration"]["id"])
+            self.assertIsNotNone(recipient["session_registration"]["id"])
+
+    def test_reuploading_bulk_csv_reuses_every_database_record(self):
+        payload = {
+            "event_id": str(self.event.id),
+            "session_id": str(self.function.id),
+            "recipients": [
+                {"name": "Asha Rao", "phone": "+919876543210"},
+                {"name": "Rohan Shah", "phone": "+919812345678"},
+            ],
+        }
+        first = self.client.post(self.bulk_url, payload, format="json")
+        second = self.client.post(self.bulk_url, payload, format="json")
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(Guest.objects.count(), 2)
+        self.assertEqual(EventRegistration.objects.count(), 2)
+        self.assertEqual(SessionRegistration.objects.count(), 2)
+        first_ids = [item["event_registration"]["id"] for item in first.data["recipients"]]
+        second_ids = [item["event_registration"]["id"] for item in second.data["recipients"]]
+        self.assertEqual(first_ids, second_ids)
+
+    def test_invalid_bulk_csv_is_atomic(self):
+        response = self.client.post(
+            self.bulk_url,
+            {
+                "event_id": str(self.event.id),
+                "recipients": [
+                    {"name": "Asha Rao", "phone": "+919876543210"},
+                    {"name": "Missing Phone", "phone": ""},
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Guest.objects.count(), 0)
+        self.assertEqual(EventRegistration.objects.count(), 0)
