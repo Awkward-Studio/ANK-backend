@@ -64,6 +64,7 @@ def hosts_env(name: str, default: str = "") -> list[str]:
 # ---------------------------
 DEBUG = get_bool_env("DEBUG", True)
 SECRET_KEY = os.getenv("SECRET_KEY") or ("django-insecure-ank-dev-secret-key-change-in-prod" if DEBUG else None)
+DJANGO_RSVP_SECRET = os.getenv("DJANGO_RSVP_SECRET") or os.getenv("WEBHOOK_SECRET") or ""
 USE_JWT = get_bool_env("USE_JWT", True)
 APPEND_SLASH = False # Handled by custom ApiSlashMiddleware to prevent token-stripping redirects
 

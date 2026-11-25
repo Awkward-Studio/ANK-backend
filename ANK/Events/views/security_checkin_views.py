@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import hashlib
+import hmac
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
@@ -53,14 +54,26 @@ def check_security_access(request):
        with authorized X-User-Role header or fallback.
     """
     # 1. Server-to-server secret authentication
-    expected_secret = getattr(settings, "DJANGO_RSVP_SECRET", None) or getattr(settings, "SECRET_KEY", "")
+    expected_secret = getattr(settings, "DJANGO_RSVP_SECRET", "")
     supplied_secret = request.headers.get("X-Webhook-Token") or request.headers.get("x-webhook-token")
-    if expected_secret and supplied_secret and supplied_secret == expected_secret:
-        user_role = (
-            request.headers.get("X-User-Role")
-            or request.headers.get("x-user-role")
-            or "security"
-        ).strip().lower()
+    secret_matches = bool(
+        expected_secret
+        and supplied_secret
+        and hmac.compare_digest(str(supplied_secret), str(expected_secret))
+    )
+    user_role = (
+        request.headers.get("X-User-Role")
+        or request.headers.get("x-user-role")
+        or "security"
+    ).strip().lower()
+    logger.info(
+        "[SecurityAccess] webhook authorization configured=%s supplied=%s matches=%s role=%s",
+        bool(expected_secret),
+        bool(supplied_secret),
+        secret_matches,
+        user_role,
+    )
+    if secret_matches:
         if user_role in ALLOWED_SECURITY_ROLES:
             return True, None, user_role, status.HTTP_200_OK
 
