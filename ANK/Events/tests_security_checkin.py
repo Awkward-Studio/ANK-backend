@@ -1,5 +1,5 @@
 import uuid
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -133,6 +133,37 @@ class SecurityCheckInTestCase(TestCase):
         self.assertEqual(data["event"]["name"], "Sharma Wedding")
         self.assertEqual(data["registration"]["rsvp_status"], "yes")
         self.assertEqual(len(data["all_sessions"]), 2)
+
+    @override_settings(DJANGO_RSVP_SECRET="test-shared-secret")
+    def test_verify_pass_accepts_shared_secret_without_jwt(self):
+        self.client.force_authenticate(user=None)
+        self.client.credentials(
+            HTTP_X_WEBHOOK_TOKEN="test-shared-secret",
+            HTTP_X_USER_ROLE="security",
+            HTTP_X_USER_EMAIL="gate@example.com",
+        )
+
+        res = self.client.post("/api/events/security/verify-pass/", {"token": self.valid_token})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.json()["valid"])
+
+    @override_settings(DJANGO_RSVP_SECRET="test-shared-secret")
+    def test_check_in_accepts_shared_secret_without_jwt(self):
+        self.client.force_authenticate(user=None)
+        self.client.credentials(
+            HTTP_X_WEBHOOK_TOKEN="test-shared-secret",
+            HTTP_X_USER_ROLE="security",
+            HTTP_X_USER_EMAIL="gate@example.com",
+        )
+
+        res = self.client.post(
+            "/api/events/security/check-in/",
+            {"token": self.valid_token, "registration_id": str(self.event_reg.id)},
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.json()["ok"])
 
     def test_verify_pass_invalid_or_tampered_token(self):
         self.client.force_authenticate(user=self.security_user)

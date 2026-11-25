@@ -7,6 +7,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -252,6 +253,11 @@ class SecurityVerifyPassAPIView(APIView):
     Decrypts a security QR pass and retrieves full guest, event, session,
     and attendance verification details from the database.
     """
+    # Authentication is performed by check_security_access below. Without
+    # AllowAny, the global IsAuthenticated permission rejects webhook-token
+    # requests before this view can validate X-Webhook-Token.
+    permission_classes = [AllowAny]
+
     def post(self, request):
         is_auth, actor, err_or_role, auth_status = check_security_access(request)
         if not is_auth:
@@ -395,6 +401,8 @@ class SecurityCheckInAPIView(APIView):
     - Prevents duplicate check-in (returns 409 Conflict if already checked in).
     - Tracks check-in timestamp and verifying security officer.
     """
+    permission_classes = [AllowAny]
+
     def post(self, request):
         is_auth, actor, err_or_role, auth_status = check_security_access(request)
         if not is_auth:
